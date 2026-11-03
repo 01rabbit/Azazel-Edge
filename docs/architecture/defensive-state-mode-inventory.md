@@ -238,6 +238,7 @@ does not rename them by accident, and so each gets its #379 term.
 | O14 | `py/azazel_edge/i18n.py:124`–`:138` (`dashboard.mode_layer*`) | Beginner / Professional | Legacy dashboard display layer. | Workspace/View | — |
 | O15 | `bin/azazel-mio-shadow-replay:125`; `py/azazel_edge/mio/evaluation.py:69` | — | Replay fixtures default `current_defensive_state` to `OBSERVE` when absent. | Defensive State | Replay only; contrasts with "absence is not a state" (decision-loop.md). |
 | O16 | `docs/CONFIGURATION.md:113` | `MODE=open` | `set_dev_remote_access.sh` access mode. | Configuration | — |
+| O17 | `tests/test_knowledge_receipt_operator.py:375` | `noncurrent_model` | Model-result currentness test name; the substring is not a legacy Defensive State mode use. | AI Runtime Tier | Completeness scan matches `current_mode` within this identifier. |
 
 ## 5. Out of scope
 

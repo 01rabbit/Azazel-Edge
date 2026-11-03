@@ -5,6 +5,22 @@ from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
 from azazel_edge_ai.mio_model_lane import LiveMioModelLane
 
 
+def bound_fast(state):
+    """Return the fixture's fast envelope with its producer binding intact."""
+    event_key = 'a1b2c3d4e5f60718293a4b5c'
+    edge_trace = state['trace_id']
+    generation = state['generation']
+    frame_id = state['advisory']['frame_id']
+    frame_trace = state['advisory']['trace_id']
+    return {**state, 'edge_event': {'action': 'notify', 'mode': 'dry_run',
+            'result': 'planned_not_applied', 'trace_id': edge_trace},
+        'source_context': {'event_key': event_key},
+        'handoff_binding': {'status': 'matched', 'valid': True, 'generation': generation,
+            'event_key': event_key, 'edge_trace_id': edge_trace, 'edge_action': 'notify',
+            'edge_mode': 'dry_run', 'edge_result': 'planned_not_applied',
+            'mio_trace_id': frame_trace, 'frame_id': frame_id}}
+
+
 def wait(lane):
     until = time.monotonic() + 2
     while lane.snapshot()['status'] in {'queued', 'starting'} and time.monotonic() < until:
@@ -41,7 +57,7 @@ def test_model_runs_without_knowledge_and_has_separate_status():
     def analyze(frame, remaining):
         called.set()
         return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed', 'truncated_count': 0}
-    model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: state,
+    model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: bound_fast(state),
                              frame_snapshot=lambda g: frames[g])
     model.submit('1', 'edge-1')
     assert called.wait(1)
@@ -87,7 +103,7 @@ def test_blocked_knowledge_query_does_not_block_fast_model_path_or_overwrite_new
 
     def analyze(frame, remaining):
         return {**frame, 'generation_method': 'model', 'mio_state': 'complete', 'outcome': 'completed', 'truncated_count': 0}
-    model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: state,
+    model = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=lambda: bound_fast(state),
                              frame_snapshot=lambda g: frames.get(g))
     model.submit('1', 'edge-1')
     model_result = wait(model)
