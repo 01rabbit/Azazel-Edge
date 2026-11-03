@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from importlib.metadata import distribution
+from pathlib import Path
+import sys
 from unittest.mock import patch
 
-import azazel_mio.fast_assessment  # noqa: F401 - missing runtime pin must fail, not skip
+import azazel_mio.fast_assessment as mio_fast_assessment  # missing pin must fail, not skip
 
 from azazel_edge.tactics_engine import TacticalScorer
 from azazel_edge_ai import agent
@@ -19,6 +23,17 @@ class _DecisionLogger:
 
 
 def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
+    installed_mio = distribution("azazel-mio")
+    direct_url_text = installed_mio.read_text("direct_url.json")
+    assert direct_url_text is not None
+    direct_url = json.loads(direct_url_text)
+    assert direct_url["vcs_info"]["commit_id"] == "9fedb01bc9936531407a5181aa8fa5553ec19d55"
+    assert sys.modules.get("azazel_mio.fast_assessment") is mio_fast_assessment
+    assert mio_fast_assessment.assess_fast.__module__ == "azazel_mio.fast_assessment"
+    assert Path(mio_fast_assessment.__file__).resolve() == Path(
+        installed_mio.locate_file("azazel_mio/fast_assessment.py")
+    ).resolve()
+
     event = {
         "normalized": {
             "ts": "2026-11-04T00:00:00Z",
@@ -70,6 +85,7 @@ def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
     assert comparison["mio_score"] == comparison["edge_score"] == advisory["risk_score"]
     assert comparison["mio_score"] > 0
     assert comparison["mio_factors"] == advisory["score_factors"]
-    assert comparison["mio_factors"]
+    assert "threat_class=scan(36)" in comparison["mio_factors"]
+    assert "admin_port=22" in comparison["mio_factors"]
     assert advisory["score_engine"] == "tactical_scorer_v1"
     assert advisory["decision_pipeline"]["first_pass"]["engine"] == "tactical_scorer_v1"
