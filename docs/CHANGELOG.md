@@ -55,6 +55,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The optional MIO fast-score comparison now degrades if package initialization
+  raises a non-`ImportError` exception, while Edge's local score and factors
+  remain authoritative. A genuinely absent package keeps its existing
+  `unavailable` status. No decision or enforcement behavior changes (PR #538).
+
 - SENTINEL surfaces that showed green or a made-up value when their input was
   absent now show unknown (Edge#348): the NOC path strip's Clients and
   Azazel-Edge hops, the NOC runtime meters (`—` with no queue or LLM health),
