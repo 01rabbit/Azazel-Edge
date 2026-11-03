@@ -64,6 +64,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   raises a non-`ImportError` exception, while Edge's local score and factors
   remain authoritative. A genuinely absent package keeps its existing
   `unavailable` status. No decision or enforcement behavior changes (PR #538).
+- The optional M.I.O. model lane now requires an explicitly current, same-event
+  Edge handoff and a frame bound to that handoff before analysis. The operator
+  projection suppresses model prose when generation, frame or trace no longer
+  matches the current fast result. Edge decision and enforcement authority are
+  unchanged (PR #538).
 
 - SENTINEL surfaces that showed green or a made-up value when their input was
   absent now show unknown (Edge#348): the NOC path strip's Clients and
