@@ -108,12 +108,12 @@ def test_runtime_dependencies_cover_imports():
 
 
 def test_runtime_mio_dependency_is_pinned_to_immutable_commit():
-    # Bounded diagnostics/input validation dependency: exact merged MIO PR #40 commit.
+    # Exact immutable MIO source commit; the package local version is tracked separately.
     lines = [line.strip() for line in (ROOT / "requirements/runtime.txt").read_text().splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
     pins = [line for line in lines if line.lower().startswith("azazel-mio ")]
     assert pins == [
-        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@c31c2442899e778f1c49e5becd739c59ef8f1092"
+        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@b441d431532507387fb81f1e03e31fd1aea57b68"
     ]
     assert not any(token in pins[0] for token in ("@main", "@master", "@latest"))
 

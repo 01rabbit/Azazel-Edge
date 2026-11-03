@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: branch preparation. The shared M.I.O. source is publicly available at immutable commit `c31c2442899e778f1c49e5becd739c59ef8f1092` (MIO 0.1.0; merged PR #40). This document does not claim any release or deployment.
+Status: branch preparation. The shared M.I.O. source is publicly available at immutable commit `b441d431532507387fb81f1e03e31fd1aea57b68`. Its package version `0.1.0+git.c31c244` is a local integration build identity, not a release; the earlier source `c31c244` carried merged PR #40. This document does not claim any release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
@@ -70,7 +70,7 @@ with their own clock against `max_age_seconds` and must not treat a stored
 `is_current: true` as still fresh.
 
 The runtime dependency is declared in `requirements/runtime.txt` using an
-immutable Git commit pin. The pinned source, `c31c2442899e778f1c49e5becd739c59ef8f1092`,
+immutable Git commit pin. The pinned source, `b441d431532507387fb81f1e03e31fd1aea57b68`,
 is publicly available; this branch does not vendor the package. If the
 package is absent at runtime, the guarded adapter reports `package_unavailable`
 and Edge continues its existing behavior. The fast adapter itself supplies no
@@ -103,7 +103,7 @@ vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
 reason, and advisory authority remain unchanged. The immutable dependency pin
-is the public M.I.O. source commit `c31c2442899e778f1c49e5becd739c59ef8f1092`.
+is the public M.I.O. source commit `b441d431532507387fb81f1e03e31fd1aea57b68`.
 
 Failure isolation and audit degradation:
 

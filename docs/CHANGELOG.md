@@ -55,9 +55,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- The Edge runtime now pins the merged M.I.O. 0.1.0 source containing PR #40's
-  bounded fast-assessment validation and zero-budget handoff behavior. The
-  immutable source pin is `c31c2442899e778f1c49e5becd739c59ef8f1092`; Edge's
+- The Edge runtime now pins the M.I.O. source at immutable commit
+  `b441d431532507387fb81f1e03e31fd1aea57b68`, carrying PR #40's bounded
+  fast-assessment validation and zero-budget handoff behavior. MIO PR #41
+  selected package version `0.1.0+git.c31c244` as a unique PEP 440 local
+  version for its integration wheel; this is not a public release. Edge's
   deterministic scorer and authority are unchanged. No Edge product version
   or release artifact is created by this change.
 - The optional MIO fast-score comparison now degrades if package initialization

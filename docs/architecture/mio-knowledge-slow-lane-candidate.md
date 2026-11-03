@@ -3,10 +3,12 @@
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
 This local candidate follows Edge #525 head `80445737f2ae6df2cae3bcdd7e79176352dffe24`
-and uses the M.I.O. source pin `c31c2442899e778f1c49e5becd739c59ef8f1092`, which is
-publicly available at that immutable commit. This is a candidate, not a release or
-deployment claim. No installation, service configuration, credential provisioning
-or production deployment is included.
+and uses the M.I.O. source pin `b441d431532507387fb81f1e03e31fd1aea57b68`,
+which is publicly available at that immutable commit. MIO PR #41 selected
+package version `0.1.0+git.c31c244` as a unique PEP 440 local version for its
+integration wheel; this is not a public release. This is a candidate, not a
+release or deployment claim. No installation, service configuration,
+credential provisioning or production deployment is included.
 
 A separate latest-only Knowledge worker can make one authenticated
 `POST /v1/context` request on its own ten-second deadline. Ordinary event intake
