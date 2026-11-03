@@ -466,6 +466,7 @@ def test_fast_snapshot_failure_before_analysis_degrades_and_worker_survives():
         time.sleep(0.005)
         result = lane.snapshot()
     assert result["status"] == "complete"
+    assert result["generation"] == "2"
     assert result["fast_generation"] == "8"
     assert lane._thread.is_alive()
     assert len(audited) == 1
