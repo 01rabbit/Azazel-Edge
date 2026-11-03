@@ -46,16 +46,29 @@ class LiveMioKnowledgeLane:
             return _empty('disabled', generation)
         with self._lock:
             result = json.loads(json.dumps(self._result))
-            fresh = time.monotonic() - self._completed_at <= self.max_age_seconds
+            age = max(0.0, time.monotonic() - self._completed_at)
+        fresh = age <= self.max_age_seconds
         fast = self._fast_snapshot()
-        result['is_current'] = (result['status'] == 'projected' and fresh
-            and str(fast.get('generation') or '') == result['generation']
-            and fast.get('is_current') is True
+        generation = result['generation']
+        # Same event: still the live generation and the very frame/trace/event the receipt was built for.
+        # Independent of the fast frame's own expiry, so it can survive it as a historical report.
+        same_event = (result['status'] == 'projected' and isinstance(result.get('projection'), dict)
+            and bool(generation) and result.get('frame_generation') == generation
+            and self._live_generation() == generation
+            and str(fast.get('generation') or '') == generation
             and fast.get('trace_id') == result['source_trace_id']
             and (fast.get('source_context') or {}).get('event_key') == result.get('event_key')
             and (fast.get('advisory') or {}).get('trace_id') == result['trace_id']
             and (fast.get('advisory') or {}).get('frame_id') == result['frame_id'])
-        if not result['is_current']:
+        result['is_current'] = bool(same_event and fresh and fast.get('is_current') is True)
+        if same_event and not result['is_current'] and fresh:
+            # At most this one retained result. Display-only: never an input to the fast scorer,
+            # reasoning, model lane or action logic, and never labelled current.
+            result['report_state'] = 'last_report'
+            result['report_age_seconds'] = round(age, 3)
+            result['max_age_seconds'] = self.max_age_seconds
+            result['report_expires_at_ms'] = int((time.time() + self.max_age_seconds - age) * 1000)
+        elif not result['is_current']:
             result.pop('projection', None)
         # The auxiliary callback may block while opt-in is revoked. Recheck
         # before publishing the copied receipt, including its projection.
@@ -116,6 +129,9 @@ class LiveMioKnowledgeLane:
                     result.update(trace_id=frame['trace_id'], frame_id=frame.get('frame_id', ''),
                                   source_trace_id=source_trace_id,
                                   event_key=str((fast.get('source_context') or {}).get('event_key') or '')[:96])
+                    # Existing query deadline starts after frame capture, so time spent waiting
+                    # for the fast frame is not charged to the bounded Knowledge lookup.
+                    deadline = time.monotonic() + self.max_age_seconds
                     status, response = self._query(self._knowledge_input_snapshot(generation),
                                                    deadline=deadline, stale_check=stale)
                     result['request_count'] = int(status not in {'disabled', 'missing_token',

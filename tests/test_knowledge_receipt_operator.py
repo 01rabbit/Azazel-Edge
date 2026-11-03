@@ -498,3 +498,57 @@ def test_invalid_lane_diagnostic_schema_is_unavailable_even_when_fast_queued(fie
     payload['knowledge_analysis']['status'] = 'disabled'
     payload['knowledge_analysis'][field] = value
     assert operator_mio_payload(payload, now=101)['knowledge_analysis'] == status_only('unavailable')
+
+
+def historical(age=4.2):
+    """Fast frame expired; the lane kept its same-event last report."""
+    payload = current()
+    payload['is_current'] = False
+    receipt = payload['knowledge_analysis']
+    receipt.update(is_current=False, report_state='last_report', report_age_seconds=age, max_age_seconds=10,
+        report_expires_at_ms=int((time.time() + 10 - age) * 1000))
+    return payload
+
+
+def test_expired_fast_envelope_shows_only_labelled_same_event_last_report():
+    payload = historical()
+    expected_expires_at = payload['knowledge_analysis']['report_expires_at_ms']
+    output = operator_mio_payload(payload, now=500)
+    assert output['knowledge_analysis'] == {'status': 'projected', 'is_current': False,
+        'report_state': 'last_report', 'claim_status': 'reported_unverified',
+        'trust': 'unverified_advisory_only', 'attack_techniques': ['T1059.001'], 'source_groups': ['abusech'],
+        'report_age_seconds': 4.2,
+        'max_age_seconds': 10,
+        'report_expires_at_ms': expected_expires_at,
+        'source_freshness': {'status': 'reported_unverified_at_lookup', 'oldest_feed_days': 14.5, 'attack_version': '18.1'}}
+    assert set(output) == {'status', 'is_current', 'max_age_seconds', 'edge_event', 'knowledge_analysis'}
+    assert output['is_current'] is False
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda p: p['knowledge_analysis'].update(generation='2'),
+    lambda p: p['knowledge_analysis'].update(event_key='b' * 24),
+    lambda p: p['knowledge_analysis'].update(source_trace_id='edge-9'),
+    lambda p: p['knowledge_analysis'].update(frame_id='frame-9'),
+    lambda p: p['knowledge_analysis'].update(trace_id='mio-9'),
+    lambda p: p['handoff_binding'].update(valid=False),
+    lambda p: p['handoff_binding'].update(frame_id='frame-9'),
+    lambda p: p['knowledge_analysis'].update(report_state='current'),
+    lambda p: p['knowledge_analysis'].update(is_current=True),
+    lambda p: p['knowledge_analysis'].pop('report_age_seconds'),
+    lambda p: p['knowledge_analysis'].update(report_age_seconds=True),
+    lambda p: p['knowledge_analysis'].update(report_age_seconds=-1),
+    lambda p: p['knowledge_analysis'].update(report_age_seconds=float('inf')),
+    lambda p: p['knowledge_analysis'].update(report_age_seconds=11),
+    lambda p: p['knowledge_analysis'].update(max_age_seconds=0),
+    lambda p: p['knowledge_analysis'].update(report_expires_at_ms=int(time.time() * 1000) - 1),
+    lambda p: p['knowledge_analysis']['projection'].update(trust='trusted'),
+    lambda p: p['knowledge_analysis']['projection'].update(attack_techniques=['<script>']),
+    lambda p: p.update(status='queued'),
+])
+def test_last_report_mismatch_or_malformed_value_suppresses_old_refs(mutate):
+    payload = historical()
+    mutate(payload)
+    receipt = operator_mio_payload(payload, now=500)['knowledge_analysis']
+    assert receipt['is_current'] is False
+    assert 'attack_techniques' not in receipt and 'report_age_seconds' not in receipt

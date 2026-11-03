@@ -346,3 +346,99 @@ def test_private_input_is_current_only_and_not_retained_when_disabled(monkeypatc
     second = auxiliary.submit(event, score=50, factors=[], risk_level='MEDIUM')
     assert auxiliary.knowledge_input_snapshot(first['generation']) is None
     assert auxiliary.knowledge_input_snapshot(second['generation']) is None
+
+
+def _lane_fixture(max_age=.4, **overrides):
+    from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
+    state = {'generation': '1', 'trace_id': 'edge-1', 'status': 'complete', 'is_current': True,
+             'advisory': {'trace_id': 'mio-1', 'frame_id': 'frame-1'},
+             'source_context': {'event_key': 'event-1'}}
+    live = {'generation': '1', 'enabled': True}
+    seen = {}
+    def query(_input, *, deadline, stale_check):
+        seen['remaining'] = deadline - time.monotonic()
+        return 'received', {}
+    kwargs = dict(enabled=lambda: live['enabled'], query=query,
+        fast_snapshot=lambda: json.loads(json.dumps(state)),
+        frame_snapshot=lambda g: {'trace_id': 'mio-1', 'frame_id': 'frame-1'},
+        knowledge_input_snapshot=lambda _g: {},
+        project=lambda *_a: {'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only',
+                             'attack_techniques': ['T1059'], 'source_groups': ['abusech']},
+        max_age_seconds=max_age, current_generation=lambda: live['generation'])
+    kwargs.update(overrides)
+    return LiveMioKnowledgeLane(**kwargs), state, live, seen
+
+
+def _wait_done(lane, timeout=1.0):
+    until = time.monotonic() + timeout
+    while lane.snapshot()['status'] in {'starting', 'queued'} and time.monotonic() < until:
+        time.sleep(.005)
+    return lane.snapshot()
+
+
+def test_query_deadline_starts_after_frame_capture_not_at_queue_time():
+    lane, state, _live, seen = _lane_fixture(max_age=1.2)
+    state['status'] = 'pending'
+    threading.Timer(.75, lambda: state.update(status='complete')).start()
+    lane.submit('1', 'edge-1')
+    result = _wait_done(lane)
+    assert result['status'] == 'projected'
+    # A queue-anchored deadline would leave about .45 s; the query keeps its own full window.
+    assert seen['remaining'] > 1.0
+
+
+def test_fast_frame_wait_itself_remains_bounded():
+    lane, state, _live, seen = _lane_fixture(max_age=.2)
+    state['status'] = 'pending'
+    lane.submit('1', 'edge-1')
+    assert _wait_done(lane)['status'] == 'timeout'
+    assert 'remaining' not in seen
+
+
+def test_expired_fast_frame_keeps_same_event_last_report_with_age_and_not_current():
+    lane, state, _live, _seen = _lane_fixture()
+    lane.submit('1', 'edge-1')
+    assert _wait_done(lane)['is_current'] is True
+    state['is_current'] = False
+    time.sleep(.02)
+    report = lane.snapshot()
+    assert report['is_current'] is False and report['report_state'] == 'last_report'
+    assert report['report_age_seconds'] > 0
+    assert report['projection']['attack_techniques'] == ['T1059']
+    assert report['source_freshness_verification'] == 'reported_unverified_at_lookup'
+
+
+def test_last_report_expires_at_the_independent_knowledge_deadline():
+    lane, state, _live, _seen = _lane_fixture(max_age=.8)
+    lane.submit('1', 'edge-1')
+    assert _wait_done(lane)['is_current'] is True
+    state['is_current'] = False
+    time.sleep(1.0)
+    report = lane.snapshot()
+    assert report['is_current'] is False
+    assert 'report_state' not in report and 'projection' not in report
+
+
+@pytest.mark.parametrize('change', ['generation', 'event', 'trace', 'mio_trace', 'frame', 'disabled', 'resubmit'])
+def test_historical_report_is_suppressed_on_new_generation_event_mismatch_or_revocation(change):
+    lane, state, live, _seen = _lane_fixture()
+    lane.submit('1', 'edge-1')
+    assert _wait_done(lane)['status'] == 'projected'
+    state['is_current'] = False
+    if change == 'generation':
+        live['generation'] = '2'
+    elif change == 'event':
+        state['source_context'] = {'event_key': 'event-2'}
+    elif change == 'trace':
+        state['trace_id'] = 'edge-2'
+    elif change == 'mio_trace':
+        state['advisory']['trace_id'] = 'mio-2'
+    elif change == 'frame':
+        state['advisory']['frame_id'] = 'frame-2'
+    elif change == 'disabled':
+        live['enabled'] = False
+    else:
+        lane.submit('2', 'edge-2')
+    result = lane.snapshot()
+    assert 'projection' not in result and 'report_state' not in result
+    assert result['is_current'] is False

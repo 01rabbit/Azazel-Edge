@@ -397,7 +397,10 @@
     }
 
     var knowledgeExpiryTimer = null;
+    var knowledgeExpirySequence = 0;
     function renderMioLiveAuxiliary(payload) {
+        knowledgeExpirySequence += 1;
+        var expirySequence = knowledgeExpirySequence;
         payload = payload && typeof payload === 'object' ? payload : {};
         var advisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
         var handoff = advisory.handoff && typeof advisory.handoff === 'object' ? advisory.handoff : {};
@@ -691,24 +694,60 @@
         var knowledgeStatus = ['starting', 'queued', 'disabled', 'missing_token', 'invalid_configuration',
             'unavailable', 'timeout', 'oversized', 'redirect_rejected', 'auth_rejected', 'scope_rejected',
             'malformed', 'received', 'superseded', 'rejected', 'projected'];
-        var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
-            : (knowledge.status === 'projected' ? 'projected but not current'
-            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable'));
-        put('mioKnowledgeStatus', knowledgeLabel);
-        // Deterministic, observation-only guidance; never retries or implies a model/Knowledge action.
-        var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
-        put('mioKnowledgeCue', knowledgeCurrent
-            ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
-            : 'Knowledge ' + knowledgeLabel + ': not current/usable; no reference metadata.' + cueTail);
         function knowledgeRefs(key, pattern) {
             var values = knowledge[key];
             return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
                 return typeof v === 'string' && pattern.test(v);
             }) ? values.join(', ') : '';
         }
+        function refsWellFormed(key, pattern) {
+            var values = knowledge[key];
+            return Array.isArray(values) && values.length <= 16 && values.every(function (v) {
+                return typeof v === 'string' && pattern.test(v);
+            });
+        }
+        // Same-event binding is verified server-side. This client accepts only its fixed, unverified
+        // last-report schema and keeps it display-only after the fast frame expired.
+        var reportAge = knowledge.report_age_seconds;
+        var reportMaxAge = knowledge.max_age_seconds;
+        var reportExpiresAt = knowledge.report_expires_at_ms;
+        var knowledgeHistorical = !knowledgeCurrent && knowledge.status === 'projected' && knowledge.is_current === false
+            && knowledge.report_state === 'last_report'
+            && knowledge.claim_status === 'reported_unverified' && knowledge.trust === 'unverified_advisory_only'
+            && typeof reportAge === 'number' && Number.isFinite(reportAge) && reportAge >= 0
+            && typeof reportMaxAge === 'number' && Number.isFinite(reportMaxAge) && reportMaxAge >= 0.1 && reportMaxAge <= 10
+            && reportAge <= reportMaxAge
+            && typeof reportExpiresAt === 'number' && Number.isSafeInteger(reportExpiresAt)
+            && reportExpiresAt > Date.now() && reportExpiresAt <= Date.now() + reportMaxAge * 1000
+            && refsWellFormed('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/)
+            && refsWellFormed('source_groups', /^[a-z][a-z0-9_-]{0,31}$/);
+        var knowledgeLabel = knowledgeCurrent ? 'projected (reported, unverified)'
+            : (knowledgeHistorical ? 'last report (not current, unverified)'
+            : (knowledge.status === 'projected' ? 'projected but not current'
+            : (knowledgeStatus.indexOf(knowledge.status) >= 0 ? knowledge.status : 'unavailable')));
+        put('mioKnowledgeStatus', knowledgeLabel);
+        // Deterministic, observation-only guidance; never retries or implies a model/Knowledge action.
+        var cueTail = ' Edge observed action/result remains authoritative; use the existing operator review workflow for this event. Nothing is retried automatically.';
+        // Fixed, status-specific, read-only cues: no tokens, endpoints or raw errors are ever interpolated.
+        var KNOWLEDGE_STATUS_CUES = {
+            timeout: 'the bounded reference lookup did not finish within its own query deadline.',
+            unavailable: 'the reference lookup did not return a usable answer.',
+            disabled: 'the optional reference lookup is switched off by configuration.',
+            missing_token: 'the lookup credential is not configured; check the lane configuration.',
+            auth_rejected: 'the lookup service rejected the configured credential; check the lane configuration.'
+        };
+        var statusCue = knowledgeStatus.indexOf(knowledge.status) >= 0 && knowledge.status === knowledgeLabel
+            && Object.prototype.hasOwnProperty.call(KNOWLEDGE_STATUS_CUES, knowledgeLabel)
+            ? 'Knowledge ' + knowledgeLabel + ': ' + KNOWLEDGE_STATUS_CUES[knowledgeLabel] + ' No reference metadata.' + cueTail
+            : '';
+        put('mioKnowledgeCue', knowledgeCurrent
+            ? 'Reported, unverified reference metadata only; not a verdict. Edge observed action/result remains authoritative.'
+            : (knowledgeHistorical
+                ? 'Last report for this same event only: not current, unverified, not a verdict.' + cueTail
+                : (statusCue || 'Knowledge ' + knowledgeLabel + ': not current/usable; no reference metadata.' + cueTail)));
         function sourceFreshnessText() {
             var f = knowledge.source_freshness;
-            if (!knowledgeCurrent || !f || typeof f !== 'object' || Array.isArray(f)
+            if (!(knowledgeCurrent || knowledgeHistorical) || !f || typeof f !== 'object' || Array.isArray(f)
                 || f.status !== 'reported_unverified_at_lookup'
                 || Object.keys(f).some(function (key) { return ['status', 'oldest_feed_days', 'attack_version'].indexOf(key) < 0; })
                 || !Object.prototype.hasOwnProperty.call(f, 'oldest_feed_days')
@@ -729,16 +768,28 @@
             ? ('ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
                 + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None')
                 + ' · ' + sourceFreshnessText())
-            : 'Unavailable');
+            : (knowledgeHistorical
+                ? ('LAST REPORT · NOT CURRENT · UNVERIFIED · report age at last refresh ' + reportAge.toFixed(1) + ' s'
+                    + ' · ATT&CK: ' + (knowledgeRefs('attack_techniques', /^T[0-9]{4}(\.[0-9]{3})?$/) || 'None')
+                    + ' · Source groups: ' + (knowledgeRefs('source_groups', /^[a-z][a-z0-9_-]{0,31}$/) || 'None')
+                    + ' · ' + sourceFreshnessText())
+                : 'Unavailable'));
         // Expire projected references even when polling stops; lane diagnostics have no fast deadline.
         if (typeof window.setTimeout === 'function') {
             if (knowledgeExpiryTimer !== null) window.clearTimeout(knowledgeExpiryTimer);
             if (knowledgeCurrent) knowledgeExpiryTimer = window.setTimeout(function () {
+                if (expirySequence !== knowledgeExpirySequence) return;
                 put('mioKnowledgeStatus', 'unavailable');
                 put('mioKnowledgeRefs', 'Unavailable');
                 put('mioKnowledgeCue', 'Knowledge expired (stale).' + cueTail);
             }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000
                 - (Date.now() - completedAt)));
+            else if (knowledgeHistorical) knowledgeExpiryTimer = window.setTimeout(function () {
+                if (expirySequence !== knowledgeExpirySequence) return;
+                put('mioKnowledgeStatus', 'unavailable');
+                put('mioKnowledgeRefs', 'Unavailable');
+                put('mioKnowledgeCue', 'Knowledge last report expired (stale).' + cueTail);
+            }, Math.max(0, reportExpiresAt - Date.now()));
         }
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true

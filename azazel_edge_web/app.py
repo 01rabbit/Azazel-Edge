@@ -4947,7 +4947,7 @@ def touch_console():
 @require_token(ok_payload=None)
 def api_state():
     """GET /api/state - Return current state.json"""
-    state = read_state()
+    state = _sanitize_mio_state(read_state())
     # Add local monitoring status
     state["monitoring"] = get_monitoring_state()
     mode_state = get_mode_state()
@@ -4957,6 +4957,14 @@ def api_state():
     # azazel_fabric package is installed; null when unavailable.
     state["status_view"] = read_status_view()
     return jsonify(state)
+
+
+def _sanitize_mio_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep raw state APIs on the same bounded MIO display projection as the dashboard."""
+    result = dict(state)
+    if "mio_auxiliary" in result and result["mio_auxiliary"] is not None:
+        result["mio_auxiliary"] = operator_mio_payload(result.get("mio_auxiliary"))
+    return result
 
 
 @app.route("/api/booth-focus", methods=["GET"])
@@ -5282,7 +5290,7 @@ def api_state_stream():
         if cp_watch_snapshots is not None:
             stream_errors: List[str] = []
             for snap in cp_watch_snapshots(interval_sec=1.0, errors=stream_errors):
-                payload = dict(snap)
+                payload = _sanitize_mio_state(dict(snap))
                 payload["ok"] = True
                 payload["monitoring"] = get_monitoring_state()
                 mode_state = get_mode_state()
@@ -5300,7 +5308,7 @@ def api_state_stream():
             ) + "\n\n"
             return
         while True:
-            payload = read_state()
+            payload = _sanitize_mio_state(read_state())
             payload["monitoring"] = get_monitoring_state()
             mode_state = get_mode_state()
             payload["mode"] = mode_state.get("mode", {})
@@ -6318,7 +6326,7 @@ def api_dashboard_bundle():
     decision_traces = _bundle_decision_traces(evidence.get("recent_alerts") or [])
 
     # Same enrichments as GET /api/state.
-    state_payload = dict(state)
+    state_payload = _sanitize_mio_state(state)
     state_payload["monitoring"] = get_monitoring_state()
     mode_state = get_mode_state()
     state_payload["mode"] = mode_state.get("mode", {})

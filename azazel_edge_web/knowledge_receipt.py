@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import math
 import re
+import time
 
 from azazel_edge_ai.mio_live_auxiliary import binding_matches_same_envelope, edge_observation_for_display
 
@@ -340,6 +341,63 @@ def _fresh_bound_fast_envelope(payload, *, now=None):
     return isinstance(binding, dict) and binding.get('valid') is True and binding_matches_same_envelope(payload)
 
 
+def _last_report(payload, receipt):
+    """One same-event historical Knowledge report, or None to suppress every reference.
+
+    The fast envelope is not current here, so nothing is claimed current: the report carries
+    measured age and fixed not-current/unverified markers. Every identifier must still equal
+    the enclosing completed envelope; a new generation/event or any mismatch yields None.
+    """
+    if (receipt.get('report_state') != 'last_report' or receipt.get('is_current') is not False
+            or payload.get('status') != 'complete'):
+        return None
+    binding = payload.get('handoff_binding')
+    advisory, context = payload.get('advisory'), payload.get('source_context')
+    if (not isinstance(binding, dict) or binding.get('valid') is not True
+            or not binding_matches_same_envelope(payload)
+            or not isinstance(advisory, dict) or not isinstance(context, dict)):
+        return None
+    age = receipt.get('report_age_seconds')
+    limit = receipt.get('max_age_seconds')
+    expires_at_ms = receipt.get('report_expires_at_ms')
+    # The report's own post-query display age is bounded to at most ten
+    # seconds; the earlier fast-frame wait has a separate deadline.
+    if (type(age) not in (int, float) or not _finite_bounded_number(age, minimum=0, maximum=10)
+            or not _finite_bounded_number(limit, minimum=.1, maximum=10) or age > limit
+            or type(expires_at_ms) is not int):
+        return None
+    remaining = (expires_at_ms - int(time.time() * 1000)) / 1000
+    if remaining <= 0 or remaining > (limit - age + .1):
+        return None
+    for key, pattern in (('generation', _SAFE_GENERATION), ('frame_generation', _SAFE_GENERATION),
+            ('source_trace_id', _SAFE_TRACE_ID), ('trace_id', _SAFE_TRACE_ID), ('frame_id', _SAFE_TRACE_ID)):
+        if type(receipt.get(key)) is not str or not pattern.fullmatch(receipt[key]):
+            return None
+    event_key = receipt.get('event_key')
+    if type(event_key) is not str or re.fullmatch(r'[a-f0-9]{24}', event_key) is None:
+        return None
+    if (receipt['generation'] != payload.get('generation') or receipt['frame_generation'] != payload.get('generation')
+            or receipt['source_trace_id'] != payload.get('trace_id') or event_key != context.get('event_key')
+            or receipt['trace_id'] != advisory.get('trace_id') or receipt['frame_id'] != advisory.get('frame_id')):
+        return None
+    projection = receipt.get('projection')
+    if (not isinstance(projection, dict) or projection.get('claim_status') != 'reported_unverified'
+            or projection.get('trust') != 'unverified_advisory_only'):
+        return None
+    refs = {}
+    for key, pattern in (('attack_techniques', r'T[0-9]{4}(?:\.[0-9]{3})?'),
+                         ('source_groups', r'[a-z][a-z0-9_-]{0,31}')):
+        values = projection.get(key)
+        if (type(values) is not list or len(values) > 16 or any(
+                type(v) is not str or re.fullmatch(pattern, v) is None for v in values)):
+            return None
+        refs[key] = list(values)
+    return {'status': 'projected', 'is_current': False, 'report_state': 'last_report',
+        'claim_status': 'reported_unverified', 'trust': 'unverified_advisory_only', **refs,
+        'report_age_seconds': age, 'max_age_seconds': limit, 'report_expires_at_ms': expires_at_ms,
+        'source_freshness': _source_freshness(projection, receipt)}
+
+
 def operator_mio_payload(payload, *, now=None):
     """Expose a current allowlisted projection or a status-only safe envelope.
 
@@ -378,6 +436,10 @@ def operator_mio_payload(payload, *, now=None):
             output['knowledge_analysis'] = {'status': receipt['status'], 'is_current': False}
         return output
     if not outer_current:
+        # Fast frame expired: only the lane's same-event last report may remain, display-only.
+        report = _last_report(payload, receipt)
+        if report is not None:
+            output['knowledge_analysis'] = report
         return output
     if receipt.get('generation') != payload.get('generation'):
         return knowledge_status_only('projected')

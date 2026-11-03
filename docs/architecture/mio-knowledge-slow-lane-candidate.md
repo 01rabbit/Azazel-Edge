@@ -83,6 +83,18 @@ only its bounded `projected` status with `is_current=false` and no references.
 A stale, expired or mismatched receipt follows the same status-only rule; the
 operator console labels it "projected but not current" and shows no ATT&CK or
 source-group references.
+Knowledge latency is independent of the fast-frame wait: waiting for the frame
+is bounded by the existing ten-second window, and the bounded query then gets its
+own existing ten-second deadline starting at frame capture (no new target).
+After the fast frame expires, the lane keeps at most one result as a display-only
+"last report" for the same generation, event, Edge trace, MIO trace and frame. It
+is never labelled current, carries its measured age (at last refresh) and the
+reported-unverified markers, and is dropped on a new generation or event, a new
+submission, a disabled lane, any binding mismatch or a malformed value. It is
+never an input to the fast scorer, M.I.O. reasoning, the model lane or actions.
+Operators see fixed read-only cues for timeout, unavailable, disabled,
+missing_token and auth_rejected; they carry no token or raw error and trigger no
+automatic retry.
 This display projection does not modify the producer receipt or fast/model lane.
 Existing Edge decisions, tactical scores and frame evidence remain
 unchanged. The deterministic, DPI, arbiter and action paths make no calls.

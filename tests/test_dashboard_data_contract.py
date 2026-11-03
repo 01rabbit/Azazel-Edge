@@ -451,6 +451,49 @@ class DashboardDataContractTests(unittest.TestCase):
             "secret-mio-trace", "secret-frame", "secret-claim", "secret-handoff", "secret-source", "secret-model"):
             self.assertNotIn(secret, serialized)
 
+        # Expired last-report metadata is also filtered from the raw state and bundle
+        # endpoints, which persist/return the operator snapshot without using summary().
+        state = json.loads(webapp.STATE_PATH.read_text(encoding="utf-8"))
+        receipt = state["mio_auxiliary"]["knowledge_analysis"]
+        receipt.update(is_current=False, report_state="last_report", report_age_seconds=10,
+            max_age_seconds=10, report_expires_at_ms=int(time.time() * 1000) - 1)
+        webapp.STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+        state_response = self.client.get("/api/state")
+        self.assertEqual(state_response.status_code, 200)
+        raw_state_mio = state_response.get_json()["mio_auxiliary"]
+        self.assertNotIn("attack_techniques", raw_state_mio.get("knowledge_analysis", {}))
+        self.assertNotIn("source_groups", raw_state_mio.get("knowledge_analysis", {}))
+        bundle_response = self.client.get("/api/dashboard/bundle?session_id=ops-test&trends_limit=10")
+        self.assertEqual(bundle_response.status_code, 200)
+        bundled_mio = bundle_response.get_json()["state"]["mio_auxiliary"]
+        self.assertNotIn("attack_techniques", bundled_mio.get("knowledge_analysis", {}))
+        self.assertNotIn("source_groups", bundled_mio.get("knowledge_analysis", {}))
+
+    def test_api_state_stream_sanitizes_expired_mio_report(self) -> None:
+        snapshot = {"ok": True, "user_state": "CHECKING", "mio_auxiliary": {
+            "status": "complete", "is_current": False, "max_age_seconds": 0,
+            "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied"},
+            "knowledge_analysis": {"status": "projected", "is_current": False,
+                "report_state": "last_report", "claim_status": "reported_unverified",
+                "trust": "unverified_advisory_only", "report_age_seconds": 10,
+                "max_age_seconds": 10, "report_expires_at_ms": int(time.time() * 1000) - 1,
+                "attack_techniques": ["T1059"], "source_groups": ["abusech"]}}}
+        original_watch = webapp.cp_watch_snapshots
+        def fake_watch(*, interval_sec=1.0, errors=None):
+            yield snapshot
+        webapp.cp_watch_snapshots = fake_watch
+        try:
+            response = self.client.get("/api/state/stream")
+            body = response.get_data(as_text=True)
+        finally:
+            webapp.cp_watch_snapshots = original_watch
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: state", body, body)
+        state_event = json.loads(body.split("event: state\ndata: ", 1)[1].split("\n\n", 1)[0])
+        knowledge = state_event["mio_auxiliary"]["knowledge_analysis"]
+        self.assertNotIn("attack_techniques", knowledge)
+        self.assertNotIn("source_groups", knowledge)
+
 
     def test_api_state_uses_current_now_time_instead_of_snapshot_time(self) -> None:
         original_strftime = webapp.time.strftime

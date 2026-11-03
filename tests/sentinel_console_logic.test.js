@@ -1232,5 +1232,99 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     }
 })();
 
+// --- 1c. Knowledge last report and status-specific operator cues ---
+(function () {
+    const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics',
+     'mioSourceObserved','mioSourceUnavailable'];
+    function stale(knowledge) {
+        return {status: 'unavailable', is_current: false, max_age_seconds: 0,
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied'}, knowledge_analysis: knowledge};
+    }
+    function report(over) {
+        return Object.assign({status: 'projected', is_current: false, report_state: 'last_report',
+            claim_status: 'reported_unverified', trust: 'unverified_advisory_only', report_age_seconds: 4.2,
+            max_age_seconds: 10,
+            report_expires_at_ms: Date.now() + 5800,
+            attack_techniques: ['T1059'], source_groups: ['abusech'],
+            source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: 3, attack_version: '18.1'}}, over);
+    }
+    function run(knowledge) {
+        const m = mount();
+        const originalSetTimeout = global.window.setTimeout;
+        const originalClearTimeout = global.window.clearTimeout;
+        let expiry = null, expiryDelay = null;
+        try {
+            global.window.setTimeout = function (callback, delay) { expiry = callback; expiryDelay = delay; return 1; };
+            global.window.clearTimeout = function () {};
+            IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+            m.S.renderMioLiveAuxiliary(stale(knowledge));
+            const out = {status: m.$('mioKnowledgeStatus').textContent, refs: m.$('mioKnowledgeRefs').textContent,
+                cue: m.$('mioKnowledgeCue').textContent};
+            if (expiry) {
+                out.expiryDelay = expiryDelay;
+                expiry();
+                out.expired = {status: m.$('mioKnowledgeStatus').textContent, refs: m.$('mioKnowledgeRefs').textContent,
+                    cue: m.$('mioKnowledgeCue').textContent};
+            }
+            return out;
+        } finally {
+            global.window.setTimeout = originalSetTimeout;
+            global.window.clearTimeout = originalClearTimeout;
+            dom.uninstall();
+        }
+    }
+    const TAIL = 'Nothing is retried automatically';
+    let r = run(report({}));
+    eq(r.status, 'last report (not current, unverified)', 'last report: explicit not-current/unverified status');
+    ok(r.refs.indexOf('LAST REPORT · NOT CURRENT · UNVERIFIED · report age at last refresh 4.2 s') === 0
+        && r.refs.indexOf('ATT&CK: T1059') > 0, 'last report: measured age and labels precede refs');
+    ok(r.cue.indexOf('not current, unverified, not a verdict') >= 0 && r.cue.indexOf(TAIL) >= 0, 'last report: cue is not-current');
+    ok(r.expiryDelay > 0 && r.expiryDelay <= 5800, 'last report: expiry is bounded by absolute deadline');
+    eq(r.expired.status, 'unavailable', 'last report expiry: status cleared');
+    eq(r.expired.refs, 'Unavailable', 'last report expiry: refs cleared');
+    {
+        const m = mount();
+        const originalSetTimeout = global.window.setTimeout;
+        const originalClearTimeout = global.window.clearTimeout;
+        try {
+            const callbacks = [];
+            global.window.setTimeout = function (callback) { callbacks.push(callback); return callbacks.length; };
+            global.window.clearTimeout = function () {};
+            IDS.forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+            m.S.renderMioLiveAuxiliary(stale(report({})));
+            m.S.renderMioLiveAuxiliary(stale({status: 'disabled', is_current: false}));
+            callbacks[0](); // Simulate a callback that had already entered the event queue before clearTimeout.
+            eq(m.$('mioKnowledgeStatus').textContent, 'disabled', 'superseded expiry callback does not overwrite newer status');
+        } finally {
+            global.window.setTimeout = originalSetTimeout;
+            global.window.clearTimeout = originalClearTimeout;
+            dom.uninstall();
+        }
+    }
+    [{report_state: 'current'}, {is_current: true}, {report_age_seconds: -1}, {report_age_seconds: '4'},
+     {report_age_seconds: NaN}, {report_age_seconds: 10.1}, {max_age_seconds: 0},
+     {report_expires_at_ms: Date.now() - 1}, {trust: 'trusted'},
+     {attack_techniques: ['<img>']}, {source_groups: 'abusech'}
+    ].forEach(function (over, i) {
+        r = run(report(over));
+        ok(r.status !== 'last report (not current, unverified)' && r.refs === 'Unavailable',
+            'last report malformed #' + i + ': suppressed');
+    });
+    const CUES = {timeout: 'query deadline', unavailable: 'usable answer', disabled: 'switched off by configuration',
+        missing_token: 'credential is not configured', auth_rejected: 'rejected the configured credential'};
+    const seen = {};
+    Object.keys(CUES).forEach(function (status) {
+        r = run({status: status, is_current: false, token: 'SECRET-TOKEN', error: 'raw boom'});
+        ok(r.cue.indexOf('Knowledge ' + status + ': ') === 0 && r.cue.indexOf(CUES[status]) > 0, status + ': status-specific cue');
+        ok(r.cue.indexOf(TAIL) >= 0 && r.cue.indexOf('No reference metadata') > 0, status + ': read-only, no retry');
+        ok(r.cue.indexOf('SECRET') < 0 && r.cue.indexOf('boom') < 0, status + ': no token or raw error');
+        ok(!seen[r.cue], status + ': cue is distinct'); seen[r.cue] = true;
+    });
+    r = run({status: 'oversized', is_current: false});
+    ok(r.cue.indexOf('not current/usable; no reference metadata') >= 0, 'other statuses keep the generic cue');
+})();
+
 if (failures) { console.error(failures + ' assertion(s) failed'); process.exit(1); }
 console.log('sentinel logic: all assertions passed');
