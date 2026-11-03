@@ -3,9 +3,10 @@
 Run with a reviewed Azazel-MIO source checkout on PYTHONPATH.
 """
 import builtins
+import importlib.abc
+import importlib.machinery
 from pathlib import Path
 import sys
-import tempfile
 from unittest.mock import patch
 
 import pytest
@@ -78,18 +79,27 @@ def test_shadow_failure_or_mismatch_never_replaces_edge_result():
         assert (result.score, result.factors) == expected
         assert result.shadow["status"] == "unavailable"
 
-    # Import a real temporary package whose initializer fails, rather than
-    # raising before Python's sys.modules/package initialization path.
-    with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2]) as root:
-        package = Path(root) / "azazel_mio"
-        package.mkdir()
-        (package / "__init__.py").write_text("raise RuntimeError('initialization failed')\n")
-        (package / "fast_assessment.py").write_text("")
-        with patch.dict(sys.modules):
-            sys.modules.pop("azazel_mio", None)
-            sys.modules.pop("azazel_mio.fast_assessment", None)
-            with patch("sys.path", [root, *sys.path]):
-                result = TacticalScorer().score(features)
+    class FailingPackageLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            raise RuntimeError("initialization failed")
+
+    class FailingPackageFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "azazel_mio":
+                return importlib.machinery.ModuleSpec(
+                    fullname, FailingPackageLoader(), is_package=True)
+            return None
+
+    # Exercise importlib's package initialization without creating files in
+    # the checkout or relying on a mocked __import__ call.
+    with patch.dict(sys.modules):
+        sys.modules.pop("azazel_mio", None)
+        sys.modules.pop("azazel_mio.fast_assessment", None)
+        with patch("sys.meta_path", [FailingPackageFinder(), *sys.meta_path]):
+            result = TacticalScorer().score(features)
         assert (result.score, result.factors) == expected
         assert result.source == "edge_local"
         assert result.shadow == {
