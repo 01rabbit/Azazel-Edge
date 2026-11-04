@@ -530,7 +530,9 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
     assert [item["task"] for item in result["call_timings"]] == [item[0] for item in calls]
     assert all(item["elapsed_ns"] >= 0 and item["outcome"] == "success"
                for item in result["call_timings"])
-    assert audit_records[0]["metadata"]["call_timings"] == result["call_timings"]
+    # The durable governance schema has a closed metadata allowlist and does
+    # not persist task timings; they remain in the bounded lane result only.
+    assert "call_timings" not in audit_records[0]["metadata"]
     assert result["summary"] == "Shared M.I.O. analysis completed; hypotheses remain unverified."
     assert len(result["hypotheses"]) == 2
     assert [item["statement"] for item in result["hypotheses"]] == [

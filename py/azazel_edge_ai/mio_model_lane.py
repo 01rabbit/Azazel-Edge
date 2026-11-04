@@ -508,6 +508,6 @@ class LiveMioModelLane:
                 self._record({key: result.get(key) for key in (
                     "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                     "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",
-                            "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
+                    "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
             finally:
                 self._queue.task_done()

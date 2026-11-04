@@ -100,9 +100,11 @@ text are not logged.
 At this candidate, Edge wraps the existing product-owned `StructuredTransport`
 with MIO #45 `MeasuredTransport`, allowing only the four reasoning task labels
 (`generate_hypotheses`, `identify_evidence_gaps`, `update_hypotheses`,
-`recommend`). Each bounded result/diagnostic/audit record may carry at most four
-task timings with elapsed nanoseconds and success/failure only. Edge continues
-to own endpoint authorization, deadlines, Ollama transport, token counts, model
+`recommend`). Each bounded lane result and diagnostic may carry at most four
+task timings with elapsed nanoseconds and success/failure only. The durable
+governance audit uses its existing closed metadata schema and does not persist
+these timings. Edge continues to own endpoint authorization, deadlines, Ollama
+transport, token counts, model
 load duration, truncation and usage completeness. Timing records contain no
 prompt, response, exception text or model-authored labels; they are diagnostic
 only and do not change MIO result acceptance or Edge decisions.

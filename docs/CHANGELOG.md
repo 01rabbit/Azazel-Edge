@@ -59,8 +59,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `5bb09c8d28c57604dc1c63903b98fed7587b49ea`, including #43 defensive-state
   validation, #44's developer-only local model smoke tool, and #45's bounded
   measured transport. The product model lane wraps its existing Edge transport
-  for bounded per-task timing while Edge retains authorization, token/load
-  measurements and decision authority. Package metadata remains
+  for bounded per-task result/diagnostic timing while Edge retains
+  authorization, token/load measurements and decision authority. Package metadata remains
   `0.1.0+git.c31c244`; no Edge version, release or artifact changes.
 - The optional MIO fast-score comparison now degrades if package initialization
   raises a non-`ImportError` exception, while Edge's local score and factors

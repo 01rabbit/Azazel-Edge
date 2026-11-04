@@ -2650,7 +2650,6 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
                 # Failure/deadline records carry no truncation evidence (missing -> 0); present values fail closed.
                 "truncated_count": (bounded_truncated_count(result["truncated_count"])
                                     if "truncated_count" in result else 0),
-                "call_timings": bounded_usage(result).get("call_timings", []),
                 "prompt_tokens": max(0, min(int(result.get("prompt_tokens") or 0), 400_000)),
                 "completion_tokens": max(0, min(int(result.get("completion_tokens") or 0), 400_000)),
                 "usage_status": str(result.get("usage_status") or "unknown")[:16],
