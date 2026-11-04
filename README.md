@@ -38,7 +38,7 @@ For safe checkout checks, see [Development Verification](#development-verificati
 | M.I.O. cognitive core (`py/azazel_edge/mio/`) | Shadow and replay only. Run by offline tools (`bin/azazel-mio-shadow-replay`, `bin/azazel-mio-evaluate`, `bin/azazel-mio-trace-export`); no systemd unit starts it. Its recommendations are never executable. |
 | Control daemon and Web UI | Display, operator controls and fixed control actions. The core never reads their state. |
 
-Automatic actions are limited to notification, temporary flow-scoped throttling, and redirection to a prepared decoy. `isolate` is not an automatic action. Operator-approved high-impact actions are not part of the automatic path.
+Automatic actions can observe, notify and apply temporary flow-scoped throttling. Redirection to a prepared decoy is allowed in `semi-auto` only when high-impact automation is enabled, and in `full-auto`. `isolate` is not an automatic action.
 
 The live M.I.O. auxiliary runs in the AI agent path (`py/azazel_edge_ai/`) and remains advisory. It is distinct from the offline M.I.O. cognitive core in the row above.
 
@@ -64,7 +64,7 @@ The table is not exhaustive; the unit declares other variables as well.
 |---|---|---|
 | `AZAZEL_DEFENSE_ENFORCE` | `false` | No network change is applied |
 | `AZAZEL_DEFENSE_DRY_RUN` | `true` | Planned actions are logged only |
-| `AZAZEL_DEFENSE_ENFORCE_LEVEL` | `advisory` | Advisory level; no enforcement |
+| `AZAZEL_DEFENSE_ENFORCE_LEVEL` | `advisory` | Advisory policy level; enforcement is separately gated by `AZAZEL_DEFENSE_ENFORCE` and `AZAZEL_DEFENSE_DRY_RUN` |
 | `AZAZEL_DEFENSE_ACTION_TTL_SEC` | `300` | Lifetime in seconds of a defense action lease |
 | `AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO` | `false` | High-impact actions are not taken automatically |
 
@@ -72,7 +72,7 @@ Enabling enforcement is a deliberate deployment change that must be verified in 
 
 ## Development Verification
 
-Safe checks that run without root, network-namespace setup, or a device. These are the commands CI runs in its `test-python` and `test-rust` jobs. The `python -m compileall` line is the Python compile check, which CI runs earlier in its `lint-python` job:
+These checks need no root, network-namespace setup, or device. Installing the pinned dependencies requires GitHub network access. The commands match CI's `test-python` and `test-rust` jobs. The `python -m compileall` line is the Python compile check, which CI runs earlier in its `lint-python` job:
 
 ```bash
 python3 -m venv .venv
