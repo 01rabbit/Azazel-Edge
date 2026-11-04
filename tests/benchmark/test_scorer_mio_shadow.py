@@ -1,6 +1,7 @@
 """Complete ordered-result parity for the optional MIO shadow kernel.
 
-Run with a reviewed Azazel-MIO source checkout on PYTHONPATH.
+Only the parity tests (marked requires_mio) need a reviewed Azazel-MIO source
+checkout on PYTHONPATH; the fallback tests run without it.
 """
 import importlib.abc
 import importlib.machinery
@@ -16,7 +17,7 @@ from azazel_edge.tactics_engine.scorer import TacticalScorer, DECEPTION_SIDS
 try:
     import azazel_mio.fast_assessment  # noqa: F401
     MIO_AVAILABLE = True
-except ImportError:
+except Exception:
     MIO_AVAILABLE = False
 
 requires_mio = pytest.mark.skipif(
@@ -98,7 +99,9 @@ def test_shadow_package_unavailable_falls_back_to_edge_result():
         with patch("sys.meta_path", [MissingPackageFinder(), *sys.meta_path]):
             result = TacticalScorer().score(features)
         assert (result.score, result.factors) == expected
+        assert result.source == "edge_local"
         assert result.shadow["status"] == "unavailable"
+        assert result.shadow["reason"] == "package_unavailable"
 
 
 def test_shadow_failed_package_initialization_falls_back_to_edge_result():
