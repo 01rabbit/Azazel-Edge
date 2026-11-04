@@ -722,8 +722,13 @@
             }, Math.max(0, reportExpiresAt - Date.now()));
         }
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
+        var modelAdvisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
-            && String(model.fast_generation || '') === String(payload.generation || '');
+            && String(model.fast_generation || '') === String(payload.generation || '')
+            && typeof model.frame_id === 'string' && model.frame_id !== ''
+            && typeof model.trace_id === 'string' && model.trace_id !== ''
+            && typeof modelAdvisory.frame_id === 'string' && model.frame_id === modelAdvisory.frame_id
+            && typeof modelAdvisory.trace_id === 'string' && model.trace_id === modelAdvisory.trace_id;
         if (modelCurrent && Number.isFinite(completedAt) && typeof window.setTimeout === 'function') {
             modelExpiryTimer = window.setTimeout(function () {
                 if (modelSequence !== modelExpirySequence) return;

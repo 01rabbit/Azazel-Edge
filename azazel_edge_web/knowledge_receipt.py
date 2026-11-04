@@ -210,7 +210,9 @@ def _display_model_fields(value):
     raw_unknowns = value.get('unknowns')
     if type(raw_unknowns) is list and len(raw_unknowns) <= 100:
         texts = [_text(item, 160) for item in raw_unknowns[:12]]
-        total = value.get('unknowns_total', len(raw_unknowns))
+        total = value.get('unknowns_total')
+        if total is None and len(raw_unknowns) < 12 and 'unknowns_total' not in value:
+            total = len(raw_unknowns)
         if (all(text is not None for text in texts) and type(total) is int
                 and len(raw_unknowns) <= total <= 100):
             result['unknowns'] = texts

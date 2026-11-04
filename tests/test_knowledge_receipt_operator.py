@@ -660,3 +660,26 @@ def test_absent_unknowns_is_omitted_not_empty_list():
     del payload['model_analysis']['unknowns']
     output = operator_mio_payload(payload, now=101)
     assert 'unknowns' not in output['model_analysis']
+
+
+def test_capped_unknowns_without_explicit_total_are_omitted():
+    payload = _model_payload()
+    payload['model_analysis']['unknowns'] = [f'gap {index}' for index in range(12)]
+    payload['model_analysis'].pop('unknowns_total', None)
+    output = operator_mio_payload(payload, now=101)
+    assert 'unknowns' not in output['model_analysis']
+    assert 'unknowns_total' not in output['model_analysis']
+
+
+def test_below_cap_unknowns_without_total_and_explicit_null_total():
+    payload = _model_payload()
+    payload['model_analysis']['unknowns'] = [f'gap {index}' for index in range(11)]
+    payload['model_analysis'].pop('unknowns_total', None)
+    output = operator_mio_payload(payload, now=101)
+    assert output['model_analysis']['unknowns'] == [f'gap {index}' for index in range(11)]
+    assert output['model_analysis']['unknowns_total'] == 11
+
+    payload['model_analysis']['unknowns_total'] = None
+    output = operator_mio_payload(payload, now=101)
+    assert 'unknowns' not in output['model_analysis']
+    assert 'unknowns_total' not in output['model_analysis']

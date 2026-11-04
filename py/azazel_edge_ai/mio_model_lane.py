@@ -176,7 +176,6 @@ def _empty(status: str, reason: str = "") -> dict[str, Any]:
         "uncertainties": [],
         "hypotheses": [],
         "next_checks": [],
-        "unknowns": [],
         "mio_state": "",
         "generation_method": "",
         "frame_id": "",
@@ -468,7 +467,13 @@ class LiveMioModelLane:
                                 bounded_validation_diagnostic(model_result.get("validation_diagnostic"))) else {}),
                         }
                         if model_result.get("frame_id") != frame_payload.get("frame_id") or model_result.get("trace_id") != frame_payload.get("trace_id"):
+                            usage = bounded_usage(result)
+                            usage["prompt_tokens"] = min(usage["prompt_tokens"], 100_000)
+                            usage["completion_tokens"] = min(usage["completion_tokens"], 100_000)
+                            duration_ms = result.get("duration_ms")
                             result = _empty("degraded", "frame_binding_rejected")
+                            result.update(usage)
+                            result["duration_ms"] = max(0, min(duration_ms, 600_000)) if type(duration_ms) is int else elapsed
                     except (TimeoutError, MioModelFailure) as exc:
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         result = _empty("degraded", exc.reason if isinstance(exc, MioModelFailure) else "deadline_exceeded")

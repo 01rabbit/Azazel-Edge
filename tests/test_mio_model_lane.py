@@ -210,6 +210,67 @@ def test_model_lane_rejects_frame_snapshot_not_bound_to_verified_advisory():
     assert analyzed == [] and audited == []
 
 
+def test_model_lane_retains_bounded_usage_when_analyzed_frame_binding_is_rejected():
+    audited = []
+    def analyzed(_frame, _remaining):
+        time.sleep(0.005)
+        return {
+            "frame_id": "wrong-frame", "trace_id": "trace-abc", "model": "qwen3.5:0.8b",
+            "request_count": 2, "metered_request_count": 1,
+            "prompt_tokens": 37, "completion_tokens": 11, "load_duration_ms": 5,
+            "truncated_count": 1,
+            "call_timings": [{"task": "recommend", "elapsed_ns": 1234, "outcome": "failure",
+                              "prompt": "private"}],
+            "summary": "private completion", "unknowns": ["private unknown"],
+        }
+    lane = LiveMioModelLane(enabled=True,
+        analyze=analyzed,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        audit_result=lambda _trace, result: audited.append(result))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["status"] == "degraded"
+    assert result["request_count"] == 2 and result["metered_request_count"] == 1
+    assert result["prompt_tokens"] == 37 and result["completion_tokens"] == 11
+    assert result["load_duration_ms"] == 5 and 0 < result["duration_ms"] <= 600_000
+    assert result["call_timings"] == [{"task": "recommend", "elapsed_ns": 1234, "outcome": "failure"}]
+    assert result["truncated_count"] == 1 and result["usage_status"] == "partial"
+    assert "unknowns" not in result
+    for key in ("summary", "hypotheses", "next_checks", "uncertainties", "frame_id", "frame_trace_id"):
+        assert result.get(key, "") in ("", [])
+    assert result["model"] == "qwen3.5:0.8b"
+    import json
+    assert "private" not in json.dumps(result)
+    assert len(audited) == 1
+    assert audited[0]["reason"] == result["reason"]
+    assert audited[0]["call_timings"] == result["call_timings"]
+    assert audited[0]["prompt_tokens"] == result["prompt_tokens"]
+    assert "private" not in json.dumps(audited[0])
+
+
+def test_frame_binding_rejection_usage_matches_normal_token_caps():
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda _frame, _remaining: {
+            "frame_id": "wrong-frame", "trace_id": "trace-abc", "model": "fixture",
+            "request_count": 1, "metered_request_count": 1,
+            "prompt_tokens": 150_000, "completion_tokens": 120_000,
+            "truncated_count": 0,
+        },
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"})
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["prompt_tokens"] == 100_000
+    assert result["completion_tokens"] == 100_000
+
+
 def _unbound(mutate):
     fast = _fast()
     mutate(fast)

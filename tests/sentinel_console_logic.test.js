@@ -369,7 +369,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
      'mioKnowledgeStatus','mioKnowledgeRefs','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelUnknowns','mioModelMetrics'].forEach(function (id) {
         const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
     });
-    m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
+    const currentBasePayload = {status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(),
         knowledge: {status: 'not_provided'}, trace_id: 'edge-trace-5',
         edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
@@ -380,11 +380,13 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             authority: 'comparison_only', status: 'complete', generation: '5', trace_id: 'edge-trace-5',
             edge_score: 72, mio_score: 72, matches: true},
         knowledge_analysis:{status: 'projected', is_current: true, claim_status: 'reported_unverified', trust: 'unverified_advisory_only', generation: '5', frame_generation: '5', source_trace_id: 'edge-trace-5', event_key: 'event-5', trace_id: 'mio-trace-5', frame_id: 'frame-5', attack_techniques: ['T1059.001'], source_groups: ['abusech'], source_freshness: {status: 'reported_unverified_at_lookup', oldest_feed_days: null, attack_version: null}, action: 'isolate'}, model_analysis: {status: 'complete', is_current: true, fast_generation: '5', summary: '<b>measured</b>', mio_state: 'complete',
+            frame_id: 'frame-5', trace_id: 'mio-trace-5',
             hypotheses: [{statement: 'A hostile-activity explanation remains possible, but this frame does not establish it.', verification: 'model_proposed_unverified', source: 'mio_validated_alternative', frame_refs: ['suricata_sid:42']}],
             next_checks: ['check the observed event'], model: 'qwen:2b', duration_ms: 900, prompt_tokens: 20, completion_tokens: 12},
         advisory: {trace_id: 'mio-trace-5', frame_id: 'frame-5', recommendation: '<img src=x onerror=alert(1)>',
             hypotheses: [{statement: '<script>hypothesis</script>', verification: 'unverified'}],
-            next_checks: ['check one'], handoff: {summary: 'No model contributed to the static fast result.'}}});
+            next_checks: ['check one'], handoff: {summary: 'No model contributed to the static fast result.'}}};
+    m.S.renderMioLiveAuxiliary(currentBasePayload);
     eq(m.$('mioKnowledgeStatus').textContent, 'projected (reported, unverified)', 'independent receipt status');
     eq(m.$('mioKnowledgeRefs').textContent, 'ATT&CK: T1059.001 · Source groups: abusech · Source freshness reported, unverified at lookup: oldest feed unavailable; ATT&CK version unavailable', 'only allowlisted reference metadata rendered');
     eq(m.$('mioLiveAuxStatus').textContent, 'complete', 'MIO status rendered');
@@ -406,9 +408,20 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         'fixed MIO alternative rendered with context-only frame provenance');
     eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
     ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
-    expiryCallbacks[0](); // Knowledge timer is scheduled before the model-lane timer.
+    for (const binding of [{frame_id: 'other-frame'}, {trace_id: 'other-trace'}]) {
+        const mismatched = Object.assign({}, currentBasePayload, {model_analysis: Object.assign({}, currentBasePayload.model_analysis, binding)});
+        m.S.renderMioLiveAuxiliary(mismatched);
+        eq(m.$('mioModelSummary').textContent, 'Suppressed', 'model prose is suppressed on frame/trace mismatch');
+        eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'binding mismatch is not current');
+    }
+    const timersBeforeRefresh = expiryCallbacks.length;
+    m.S.renderMioLiveAuxiliary(currentBasePayload);
+    eq(expiryCallbacks.length, timersBeforeRefresh + 2, 'current Knowledge and model expiry timers are both scheduled');
+    expiryCallbacks[timersBeforeRefresh](); // Knowledge timer is scheduled first for each refresh.
     eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'receipt expires even without another poll');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'expiry clears refs');
+    expiryCallbacks[timersBeforeRefresh + 1](); // Model expiry follows the independent Knowledge timer.
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'model result expires without another poll');
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves the correlated Edge action');
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
         completed_at: new Date(Date.now() - 1000).toISOString(), generation: '6', trace_id: 'edge-trace-6',
@@ -484,8 +497,10 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         trace_id: 'edge-trace-5', edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-5'},
         source_context: {event_key: 'event-5'}, handoff_binding: {status: 'matched', valid: true, generation: '5',
             event_key: 'event-5', edge_trace_id: 'edge-trace-5', edge_action: 'notify',
-            edge_mode: 'dry_run', edge_result: 'planned_not_applied'},
+            edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-partial', frame_id: 'frame-partial'},
+        advisory: {frame_id: 'frame-partial', trace_id: 'mio-trace-partial'},
         model_analysis: {status: 'partial', is_current: true, fast_generation: '5',
+            frame_id: 'frame-partial', trace_id: 'mio-trace-partial',
             mio_state: 'error_fallback', request_count: 3, metered_request_count: 3,
             truncated_count: 1, usage_status: 'partial', prompt_tokens: 4435, completion_tokens: 604}});
     eq(m.$('mioModelFreshness').textContent, 'Current fast generation; partial M.I.O. result', 'partial result remains current to matching fast generation');
@@ -1177,9 +1192,10 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
             edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-9'},
             source_context: {event_key: KEY8, fields: sourceFields},
             handoff_binding: {status: 'matched', valid: true, generation: '9', event_key: KEY8, edge_trace_id: 'edge-trace-9',
-                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-9'},
-            advisory: {trace_id: 'mio-trace-9'},
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-9', frame_id: 'frame-9'},
+            advisory: {trace_id: 'mio-trace-9', frame_id: 'frame-9'},
             model_analysis: Object.assign({status: 'complete', is_current: true, fast_generation: '9', mio_state: 'complete',
+                trace_id: 'mio-trace-9', frame_id: 'frame-9',
                 summary: 'model summary', model: 'qwen:2b', duration_ms: 1,
                 next_checks: ['check the observed event']}, model)}, over || {}));
     }
@@ -1220,6 +1236,12 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'mixed valid and malformed unknowns are rejected as a malformed list');
     render({unknowns: ['']});
     eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'empty-string unknown is malformed, not an empty list');
+    render({frame_id: ''});
+    eq(m.$('mioModelSummary').textContent, 'Suppressed', 'empty model frame id cannot be current');
+    render({trace_id: undefined});
+    eq(m.$('mioModelSummary').textContent, 'Suppressed', 'missing model trace id cannot be current');
+    render({}, {advisory: {}});
+    eq(m.$('mioModelSummary').textContent, 'Suppressed', 'missing advisory frame/trace cannot bind model prose');
 
     // Stale or generation-mismatched result: suppressed, payload never rendered.
     render({is_current: false, unknowns: [SENTINEL]});
