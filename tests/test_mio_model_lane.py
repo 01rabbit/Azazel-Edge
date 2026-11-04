@@ -547,6 +547,41 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
     assert "action" not in result and "enforcement" not in result
 
 
+def test_malformed_unknowns_are_omitted_from_both_operator_views(monkeypatch):
+    import azazel_mio.assistant as mio_assistant
+    from azazel_edge_ai import agent
+
+    frame = {
+        "schema_version": "mio.situation_frame.v2", "frame_id": "frame-current",
+        "trace_id": "trace-current", "created_at": "2026-11-01T00:00:00Z",
+        "mission": "Provide a read-only explanation of this accepted Edge event.",
+        "current_defensive_state": "NOTIFY", "threat_level": "HIGH",
+        "noc_summary": "No NOC evaluation supplied to this bounded live adapter.",
+        "soc_summary": "Edge tactical scorer derived risk score: 72",
+        "known_facts": ["Observed Suricata SID: 42"], "unknowns": ["LIVE_ADAPTER_CONTEXT_LIMITED"],
+        "contradictions": [], "evidence_refs": ["suricata_sid:42"], "knowledge_refs": [],
+        "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"known_facts": ["caller"], "evidence_refs": ["caller"]},
+        "freshness_seconds": 0, "truncated": False, "actors": [], "actions": [],
+        "deception_context": None,
+    }
+    class Assistance:
+        def to_dict(self):
+            return {"generation_method": "model", "state": "complete",
+                    "unknowns": ["", "valid-looking but mixed with malformed item"],
+                    "summary": "bounded test result", "hypotheses": [], "next_checks": []}
+    class Core:
+        def __init__(self, model):
+            self.model = model
+        def explain(self, *_args, **_kwargs):
+            return Assistance()
+    monkeypatch.setattr(mio_assistant, "AssistantCore", Core)
+
+    result = agent._analyze_mio_fast_result(frame, 1.0)
+    assert "unknowns" not in result and "unknowns_total" not in result
+    assert result["uncertainties"] == []
+
+
 def test_reviewed_qwen_overclaim_is_replaced_by_frame_only_fallback_and_refs_stay_scoped():
     import json
     from azazel_edge_ai.mio_model_lane import _bounded_hypotheses

@@ -641,7 +641,8 @@ def test_combined_snapshot_envelope_remains_bounded_after_prose_removal(tmp_path
     class Model:
         def snapshot(self):
             return {"summary": "z" * 300, "request_count": 2, "metered_request_count": 1,
-                    "prompt_tokens": 41, "completion_tokens": 12, "model": "fixture"}
+                    "prompt_tokens": 41, "completion_tokens": 12, "model": "fixture",
+                    "unknowns": ["evidence gap"]}
     monkeypatch.setattr(agent, "LIVE_MIO_AUXILIARY", Fast())
     monkeypatch.setattr(agent, "LIVE_MIO_MODEL_LANE", Model())
     monkeypatch.setattr(agent, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
@@ -652,7 +653,46 @@ def test_combined_snapshot_envelope_remains_bounded_after_prose_removal(tmp_path
     assert mio["status"] == "degraded" and mio["is_current"] is False
     assert mio["authority"] == "read_only_advisory"
     assert mio["model_analysis"]["prompt_tokens"] == 41
+    # Prose-drop path: unknowns is omitted entirely (never [] = "no gap").
+    assert mio["model_analysis"]["reason"] == "envelope_size_limit"
+    assert mio["model_analysis"].get("summary", "") == ""
+    assert "unknowns" not in mio["model_analysis"]
     assert mio["knowledge"]["status"] == "not_provided"
+
+
+def test_combined_model_prose_trim_omits_unknowns_and_marks_model_noncurrent(tmp_path, monkeypatch):
+    import json
+    from azazel_edge_ai import agent
+    from azazel_edge_ai.mio_live_auxiliary import MAX_RESULT_BYTES
+
+    class Fast:
+        def current_generation(self):
+            return "1"
+        def snapshot(self):
+            return {"status": "complete", "generation": "1", "is_current": True,
+                    "knowledge": {"status": "not_queried", "refs": []},
+                    "advisory": {"summary": "fixed fast summary"}, "edge_event": {}}
+
+    class Model:
+        def snapshot(self):
+            return {"schema_version": "azazel.mio_model_analysis.v1", "status": "complete",
+                    "is_current": True, "fast_generation": "1", "summary": "z" * MAX_RESULT_BYTES,
+                    "request_count": 2, "metered_request_count": 1, "prompt_tokens": 41,
+                    "completion_tokens": 12, "model": "fixture", "unknowns": ["evidence gap"]}
+
+    monkeypatch.setattr(agent, "LIVE_MIO_AUXILIARY", Fast())
+    monkeypatch.setattr(agent, "LIVE_MIO_MODEL_LANE", Model())
+    monkeypatch.setattr(agent, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
+    monkeypatch.setattr(agent, "_default_route_info", lambda: {})
+    agent._update_ui_snapshot({"risk_score": 51}, count_suricata=False)
+    mio = json.loads(agent.SNAPSHOT_PATH.read_text())["mio_auxiliary"]
+    assert len(json.dumps(mio, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")) <= MAX_RESULT_BYTES
+    assert mio["status"] == "complete" and mio["is_current"] is True
+    assert mio["model_analysis"]["status"] == "degraded" and mio["model_analysis"]["is_current"] is False
+    assert mio["model_analysis"]["reason"] == "envelope_size_limit"
+    assert mio["model_analysis"]["summary"] == ""
+    assert "unknowns" not in mio["model_analysis"]
+    assert mio["model_analysis"]["prompt_tokens"] == 41
 
 
 def test_not_queried_status_is_persisted_in_agent_snapshot(tmp_path, monkeypatch):

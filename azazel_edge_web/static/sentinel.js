@@ -38,7 +38,8 @@
         queue_full: 'queue full',
         superseded: 'superseded',
         frame_binding_rejected: 'frame binding rejected',
-        fast_result_unavailable: 'fast result unavailable'
+        fast_result_unavailable: 'fast result unavailable',
+        envelope_size_limit: 'content omitted: size limit'
     };
     // Maps a lane reason to a fixed display label. Raw strings are never echoed; unlisted reasons are withheld.
     function modelLaneReasonLabel(raw) {
@@ -398,9 +399,15 @@
 
     var knowledgeExpiryTimer = null;
     var knowledgeExpirySequence = 0;
+    var modelExpiryTimer = null;
+    var modelExpirySequence = 0;
     function renderMioLiveAuxiliary(payload) {
         knowledgeExpirySequence += 1;
         var expirySequence = knowledgeExpirySequence;
+        modelExpirySequence += 1;
+        var modelSequence = modelExpirySequence;
+        if (modelExpiryTimer !== null) window.clearTimeout(modelExpiryTimer);
+        modelExpiryTimer = null;
         payload = payload && typeof payload === 'object' ? payload : {};
         var advisory = payload.advisory && typeof payload.advisory === 'object' ? payload.advisory : {};
         var handoff = advisory.handoff && typeof advisory.handoff === 'object' ? advisory.handoff : {};
@@ -717,6 +724,20 @@
         var model = payload.model_analysis && typeof payload.model_analysis === 'object' ? payload.model_analysis : {};
         var modelCurrent = usable && (model.status === 'complete' || model.status === 'partial') && model.is_current === true
             && String(model.fast_generation || '') === String(payload.generation || '');
+        if (modelCurrent && Number.isFinite(completedAt) && typeof window.setTimeout === 'function') {
+            modelExpiryTimer = window.setTimeout(function () {
+                if (modelSequence !== modelExpirySequence) return;
+                put('mioModelStatus', 'stale (not current)');
+                put('mioModelFreshness', 'Stale or no current model result');
+                put('mioModelSummary', 'Suppressed');
+                put('mioModelState', 'Suppressed');
+                put('mioModelHypotheses', 'Suppressed');
+                put('mioModelChecks', 'Suppressed');
+                put('mioModelUnknowns', 'Suppressed');
+                put('mioModelMetrics', 'Suppressed');
+            }, Math.max(0, Math.min(10, Number(payload.max_age_seconds || 0)) * 1000
+                - (Date.now() - completedAt)));
+        }
         // Lane degradation stays visible: a non-current result shows its own allowlisted lane status and a fixed-label reason.
         // Raw model text and unlisted reason strings are never displayed; authority is unchanged (display only).
         var modelLaneStatus = typeof model.status === 'string' && MODEL_LANE_DEGRADED_STATUSES.indexOf(model.status) >= 0 ? model.status : '';
@@ -738,6 +759,27 @@
             return String(item.statement || '').slice(0, 240) + source;
         }).filter(Boolean).join(' · ') || 'None');
         put('mioModelChecks', modelCurrent ? safeList(Array.isArray(model.next_checks) ? model.next_checks : [], 'check') : 'Suppressed');
+        // Model unknowns: explicit [] = "None reported"; absent = "Not provided"; malformed = "Unavailable". Bounded, textContent only.
+        var modelUnknowns = model.unknowns;
+        var modelUnknownsTotal = Array.isArray(modelUnknowns) ? modelUnknowns.length : 0;
+        var hasModelUnknownsTotal = Object.prototype.hasOwnProperty.call(model, 'unknowns_total');
+        var validModelUnknownsTotal = Number.isInteger(model.unknowns_total)
+            && model.unknowns_total >= modelUnknownsTotal && model.unknowns_total <= 100;
+        var invalidModelUnknownsTotal = hasModelUnknownsTotal && !validModelUnknownsTotal;
+        var missingTruncatedTotal = !hasModelUnknownsTotal && Array.isArray(modelUnknowns) && modelUnknowns.length >= 12;
+        if (Array.isArray(modelUnknowns) && validModelUnknownsTotal) {
+            modelUnknownsTotal = model.unknowns_total;
+        }
+        put('mioModelUnknowns', !modelCurrent ? 'Suppressed'
+            : modelUnknowns === undefined || modelUnknowns === null ? 'Not provided'
+                : !Array.isArray(modelUnknowns) ? 'Unavailable'
+                            : invalidModelUnknownsTotal || missingTruncatedTotal ? 'Unavailable'
+                                : modelUnknowns.length === 0 ? 'None reported'
+                                : modelUnknowns.some(function (item) { return typeof item !== 'string' || item.length === 0; }) ? 'Unavailable'
+                                    : modelUnknowns.slice(0, 4).map(function (item) {
+                                        return item.length > 100 ? item.slice(0, 99) + '…' : item;
+                                    }).join(' · ') + (modelUnknownsTotal > 4
+                                        ? ' · +' + (modelUnknownsTotal - 4) + ' more not shown' : ''), 500);
         var measurements = [model.model || 'model unknown', Number(model.duration_ms || 0) + ' ms',
             'load ' + Number(model.load_duration_ms || 0) + ' ms', 'tokens ' + Number(model.prompt_tokens || 0) + '/' + Number(model.completion_tokens || 0),
             'requests ' + Number(model.request_count || 0),

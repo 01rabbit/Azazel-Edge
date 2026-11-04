@@ -2569,8 +2569,10 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
                                "source": "mio_validated_alternative"})
     checks = [item[:200] for item in out.get("next_checks", [])[:4]
               if type(item) is str] if isinstance(out.get("next_checks"), list) else []
-    unknowns = [item[:160] for item in out.get("unknowns", [])[:12]
-                if type(item) is str] if isinstance(out.get("unknowns"), list) else []
+    raw_unknowns = out.get("unknowns")
+    unknowns_valid = (isinstance(raw_unknowns, list) and len(raw_unknowns) <= 100
+                      and all(type(item) is str and item for item in raw_unknowns))
+    unknowns = [item[:160] for item in raw_unknowns[:12]] if unknowns_valid else None
     requests = metrics["request_count"]
     metered = metrics["metered_request_count"]
     metrics["unknown_usage_request_count"] = max(0, requests - metered)
@@ -2579,8 +2581,9 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     complete = model_accepted and state == "complete"
     return {"summary": "Shared M.I.O. analysis completed; hypotheses remain unverified."
             if model_accepted and state == "complete" else "",
-        "uncertainties": [str(x)[:100] for x in out.get("unknowns", [])[:3] if type(x) is str],
-        "hypotheses": hypotheses, "next_checks": checks, "unknowns": unknowns,
+        "uncertainties": [x[:100] for x in raw_unknowns[:3]] if unknowns_valid else [],
+        "hypotheses": hypotheses, "next_checks": checks,
+        **({"unknowns": unknowns, "unknowns_total": len(raw_unknowns)} if unknowns_valid else {}),
         "confidence": 0.0, **metrics,
         "usage_status": usage_status,
         "duration_ms": max(0, min(int((time.monotonic() - started) * 1000), 600_000)),
@@ -3097,8 +3100,12 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         model["uncertainties"] = []
         model["hypotheses"] = []
         model["next_checks"] = []
-        model["unknowns"] = []
+        # Omit (never []): an empty list would tell the operator no evidence gap exists.
+        model.pop("unknowns", None)
+        model.pop("unknowns_total", None)
         model["reason"] = "envelope_size_limit"
+        model["status"] = "degraded"
+        model["is_current"] = False
         mio["model_analysis"] = model
     if len(json.dumps(mio, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")) > MAX_RESULT_BYTES:
         # Even the static result may nearly fill the cap. Fail to a typed,

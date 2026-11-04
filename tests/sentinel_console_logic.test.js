@@ -361,12 +361,12 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 // --- 1. Empty payload: nothing throws, nothing is green, unknowns say so ----
 (function () {
     const m = mount();
-    let expireKnowledge;
-    global.window.setTimeout = function (callback) { expireKnowledge = callback; return 1; };
+    const expiryCallbacks = [];
+    global.window.setTimeout = function (callback) { expiryCallbacks.push(callback); return expiryCallbacks.length; };
     global.window.clearTimeout = function () {};
     ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction',
      'mioLiveAuxAdvice','mioLiveScoreComparison','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff',
-     'mioKnowledgeStatus','mioKnowledgeRefs','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics'].forEach(function (id) {
+     'mioKnowledgeStatus','mioKnowledgeRefs','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelUnknowns','mioModelMetrics'].forEach(function (id) {
         const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el);
     });
     m.S.renderMioLiveAuxiliary({status: 'complete', is_current: true, max_age_seconds: 10,
@@ -406,7 +406,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         'fixed MIO alternative rendered with context-only frame provenance');
     eq(m.$('mioModelChecks').textContent, 'check the observed event', 'validated model checks rendered as text');
     ok(m.$('mioModelMetrics').textContent.indexOf('qwen:2b') >= 0, 'current model metrics rendered');
-    expireKnowledge();
+    expiryCallbacks[0](); // Knowledge timer is scheduled before the model-lane timer.
     eq(m.$('mioKnowledgeStatus').textContent, 'unavailable', 'receipt expires even without another poll');
     eq(m.$('mioKnowledgeRefs').textContent, 'Unavailable', 'expiry clears refs');
     eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-5', 'receipt expiry preserves the correlated Edge action');
@@ -569,6 +569,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
         eq(m.$('mioModelState').textContent, 'Suppressed', label + ': model state suppressed');
         eq(m.$('mioModelHypotheses').textContent, 'Suppressed', label + ': model hypotheses suppressed');
         eq(m.$('mioModelChecks').textContent, 'Suppressed', label + ': model checks suppressed');
+        eq(m.$('mioModelUnknowns').textContent, 'Suppressed', label + ': model unknowns suppressed');
         eq(m.$('mioModelMetrics').textContent, 'Suppressed', label + ': model metrics suppressed');
         eq(m.$('mioLiveEdgeAction').textContent, 'notify / mode dry_run / planned_not_applied / edge-trace-7', label + ': Edge action stays visible');
     }
@@ -864,7 +865,7 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
 (function () {
     const IDS = ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
      'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
-     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelMetrics',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses','mioModelChecks','mioModelUnknowns','mioModelMetrics',
      'mioSourceObserved','mioSourceUnavailable'];
     function payload(over) {
         const base = {status: 'complete', is_current: true, max_age_seconds: 10,
@@ -1154,6 +1155,106 @@ function describe(el) { return el.tagName.toLowerCase() + '#' + el.id + '.' + el
     })));
     eq(m.$('mioSourceObserved').textContent, 'event_type=alert · attack_type=ET EXPLOIT Possible (CVE-2024:1234) [web]/v2+ · category=web-attack · protocol=TCP · sid=2001 · severity=2 · technique_ids=T1190, T1059.001 · ts=2026-11-02T00:00:00.123+09:00 · normalized_outcome=blocked',
         'producer-shaped ASCII values render with field-specific validation');
+    dom.uninstall();
+})();
+
+// --- 8. Model unknowns (text only, explicit-empty vs absent vs malformed, gated) and next-check safety label
+(function () {
+    const m = mount();
+    ['mioLiveAuxStatus','mioLiveAuxKnowledge','mioLiveAuxFreshness','mioLiveEdgeAction','mioLiveCorrelation',
+     'mioLiveAuxAdvice','mioLiveAuxHypotheses','mioLiveAuxChecks','mioLiveAuxHandoff','mioKnowledgeStatus','mioKnowledgeRefs',
+     'mioKnowledgeCue','mioModelStatus','mioModelFreshness','mioModelSummary','mioModelState','mioModelHypotheses',
+     'mioModelChecks','mioModelUnknowns','mioModelMetrics','mioSourceObserved','mioSourceUnavailable']
+        .forEach(function (id) { const el = m.doc.createElement('span'); el.id = id; m.doc.body.appendChild(el); });
+    const modelExpiryCallbacks = [];
+    global.window.setTimeout = function (callback) { modelExpiryCallbacks.push(callback); return modelExpiryCallbacks.length; };
+    global.window.clearTimeout = function () {};
+    const KEY8 = 'a1b2c3d4e5f60718293a4b5c'; // producer-shaped: 24 lowercase hex chars
+    const sourceFields = {event_type: {value: 'alert', status: 'observed'}, sid: {value: 2001, status: 'observed'}};
+    function render(model, over) {
+        m.S.renderMioLiveAuxiliary(Object.assign({status: 'complete', is_current: true, max_age_seconds: 10,
+            completed_at: new Date(Date.now() - 1000).toISOString(), generation: '9', trace_id: 'edge-trace-9',
+            edge_event: {action: 'notify', mode: 'dry_run', result: 'planned_not_applied', trace_id: 'edge-trace-9'},
+            source_context: {event_key: KEY8, fields: sourceFields},
+            handoff_binding: {status: 'matched', valid: true, generation: '9', event_key: KEY8, edge_trace_id: 'edge-trace-9',
+                edge_action: 'notify', edge_mode: 'dry_run', edge_result: 'planned_not_applied', mio_trace_id: 'mio-trace-9'},
+            advisory: {trace_id: 'mio-trace-9'},
+            model_analysis: Object.assign({status: 'complete', is_current: true, fast_generation: '9', mio_state: 'complete',
+                summary: 'model summary', model: 'qwen:2b', duration_ms: 1,
+                next_checks: ['check the observed event']}, model)}, over || {}));
+    }
+    const SENTINEL = '<img src=x onerror=alert(1)>';
+
+    // Current result with unknowns: rendered as text, bounded, markup sentinel inert.
+    render({unknowns: [SENTINEL, 'no evidence for sid 2001 beyond the observed alert']});
+    eq(m.$('mioModelUnknowns').textContent, SENTINEL + ' · no evidence for sid 2001 beyond the observed alert',
+        'current unknowns rendered as text with markup sentinel inert');
+    render({unknowns: ['a'.repeat(400), 'b', 'c', 'd', 'e']});
+    eq(m.$('mioModelUnknowns').textContent, 'a'.repeat(99) + '… · b · c · d · +1 more not shown',
+        'unknowns are length- and count-bounded with a visible omitted count');
+    render({unknowns: ['a','b','c','d','e','f','g','h','i','j','k','l'], unknowns_total: 20});
+    eq(m.$('mioModelUnknowns').textContent, 'a · b · c · d · +16 more not shown',
+        'unknowns count uses the bounded producer total rather than the projected list length');
+    const cappedUnknowns = ['a','b','c','d','e','f','g','h','i','j','k','l'];
+    [11, 101, '20', true].forEach(function (invalidTotal) {
+        render({unknowns: cappedUnknowns, unknowns_total: invalidTotal});
+        eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'invalid unknowns_total is not silently undercounted: ' + String(invalidTotal));
+    });
+    render({unknowns: cappedUnknowns});
+    eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'missing total with capped list does not imply complete count');
+    render({unknowns: ['one item']});
+    eq(m.$('mioModelUnknowns').textContent, 'one item', 'missing total is acceptable below the producer truncation cap');
+
+    // Explicit empty array differs from absent and malformed fields.
+    render({unknowns: []});
+    eq(m.$('mioModelUnknowns').textContent, 'None reported', 'explicit empty unknowns array -> None reported');
+    render({});
+    eq(m.$('mioModelUnknowns').textContent, 'Not provided', 'absent unknowns field -> Not provided');
+    render({unknowns: null});
+    eq(m.$('mioModelUnknowns').textContent, 'Not provided', 'null unknowns field -> Not provided');
+    render({unknowns: 'junk'});
+    eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'malformed (non-array) unknowns -> Unavailable');
+    render({unknowns: [{}, 7]});
+    eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'array with no usable items -> Unavailable');
+    render({unknowns: ['valid item', 7]});
+    eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'mixed valid and malformed unknowns are rejected as a malformed list');
+    render({unknowns: ['']});
+    eq(m.$('mioModelUnknowns').textContent, 'Unavailable', 'empty-string unknown is malformed, not an empty list');
+
+    // Stale or generation-mismatched result: suppressed, payload never rendered.
+    render({is_current: false, unknowns: [SENTINEL]});
+    eq(m.$('mioModelUnknowns').textContent, 'Suppressed', 'stale model unknowns suppressed');
+    render({fast_generation: '8', unknowns: [SENTINEL]});
+    eq(m.$('mioModelUnknowns').textContent, 'Suppressed', 'generation-mismatched model unknowns suppressed');
+    ok(m.$('mioModelUnknowns').textContent.indexOf('img') === -1, 'suppressed unknowns never show payload text');
+
+    // Observed normalized source facts remain visible beside the current model result.
+    render({unknowns: ['x']});
+    ok(m.$('mioSourceObserved').textContent.indexOf('event_type=alert') !== -1,
+        'observed source facts remain visible beside the model result');
+    eq(m.$('mioModelSummary').textContent, 'model summary', 'model summary is a separate field from source facts');
+
+    // Next-check safety qualifier is part of the static label directly attached to the checks value.
+    ok(TEMPLATE.indexOf('M.I.O.-supplied next checks (unverified, read-only; not Edge actions — verify before acting): <span id="mioModelChecks">') !== -1,
+        'next checks labelled MIO-supplied, unverified, read-only, not Edge actions, verify before acting');
+    ok(TEMPLATE.indexOf('id="mioModelChecks"') !== -1 && m.$('mioModelChecks').textContent === 'check the observed event',
+        'next checks value still rendered as text');
+    ok(TEMPLATE.indexOf('Model unknowns (M.I.O.-reported; unverified, read-only): <span id="mioModelUnknowns">') !== -1,
+        'model unknowns have a dedicated operator row');
+
+    // Previously rendered model data expires even if no later refresh arrives.
+    render({unknowns: ['older unknown']});
+    const oldExpiryCallback = modelExpiryCallbacks[modelExpiryCallbacks.length - 1];
+    render({unknowns: ['current unknown']});
+    const expiryCallback = modelExpiryCallbacks[modelExpiryCallbacks.length - 1];
+    ok(typeof expiryCallback === 'function', 'current model schedules an expiry callback');
+    oldExpiryCallback();
+    eq(m.$('mioModelUnknowns').textContent, 'current unknown', 'superseded expiry callback cannot suppress a newer result');
+    expiryCallback();
+    eq(m.$('mioModelStatus').textContent, 'stale (not current)', 'model status expires without another refresh');
+    eq(m.$('mioModelFreshness').textContent, 'Stale or no current model result', 'model freshness expires without another refresh');
+    eq(m.$('mioModelUnknowns').textContent, 'Suppressed', 'unknowns are suppressed when the model expires');
+    eq(m.$('mioModelChecks').textContent, 'Suppressed', 'model checks are suppressed when the model expires');
     dom.uninstall();
 })();
 

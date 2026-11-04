@@ -140,7 +140,7 @@ def _display_advisory(value):
     return result
 
 
-_MODEL_PROSE_KEYS = frozenset(('summary', 'hypotheses', 'next_checks', 'unknowns', 'uncertainties',
+_MODEL_PROSE_KEYS = frozenset(('summary', 'hypotheses', 'next_checks', 'unknowns', 'unknowns_total', 'uncertainties',
     'frame_id', 'trace_id', 'generation_method'))
 
 
@@ -196,7 +196,7 @@ def _display_model_fields(value):
         number = value.get(key)
         if type(number) is int and 0 <= number <= cap:
             result[key] = number
-    for key, count, size in (('hypotheses', 4, 360), ('next_checks', 4, 200), ('unknowns', 12, 160), ('uncertainties', 3, 100)):
+    for key, count, size in (('hypotheses', 4, 360), ('next_checks', 4, 200), ('uncertainties', 3, 100)):
         raw = value.get(key)
         if type(raw) is list:
             items = []
@@ -205,6 +205,16 @@ def _display_model_fields(value):
                 if text is not None:
                     items.append({'statement': text} if key == 'hypotheses' else text)
             result[key] = items
+    # Explicit [] means none reported. Non-list, non-string, or safety/length-rejected
+    # items must not read as "no gap", so the whole key is omitted in those cases.
+    raw_unknowns = value.get('unknowns')
+    if type(raw_unknowns) is list and len(raw_unknowns) <= 100:
+        texts = [_text(item, 160) for item in raw_unknowns[:12]]
+        total = value.get('unknowns_total', len(raw_unknowns))
+        if (all(text is not None for text in texts) and type(total) is int
+                and len(raw_unknowns) <= total <= 100):
+            result['unknowns'] = texts
+            result['unknowns_total'] = total
     return result
 
 

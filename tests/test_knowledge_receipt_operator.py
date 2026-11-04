@@ -628,3 +628,35 @@ def test_last_report_mismatch_or_malformed_value_suppresses_old_refs(mutate):
     receipt = operator_mio_payload(payload, now=500)['knowledge_analysis']
     assert receipt['is_current'] is False
     assert 'attack_techniques' not in receipt and 'report_age_seconds' not in receipt
+
+
+def test_explicit_empty_unknowns_is_preserved_as_none_reported():
+    payload = _model_payload()
+    payload['model_analysis']['unknowns'] = []
+    output = operator_mio_payload(payload, now=101)
+    assert output['model_analysis']['is_current'] is True
+    assert output['model_analysis']['unknowns'] == []
+
+
+@pytest.mark.parametrize('unknowns', [
+    'not a list',                          # malformed container
+    [{'statement': 'dict item'}],          # non-string item
+    ['ok', 7],                             # mixed non-string item
+    ['x' * 161],                           # rejected by length cap
+    ['bad\x01control'],                    # rejected by safety projection
+    ['ok', 'bad\x01control'],              # one rejected item drops the whole list
+])
+def test_malformed_or_filtered_unknowns_omit_the_key_not_empty_list(unknowns):
+    payload = _model_payload()
+    payload['model_analysis']['unknowns'] = unknowns
+    output = operator_mio_payload(payload, now=101)
+    assert output['model_analysis']['is_current'] is True
+    assert 'unknowns' not in output['model_analysis']
+    assert output['model_analysis']['summary'] == 'Bounded analysis.'
+
+
+def test_absent_unknowns_is_omitted_not_empty_list():
+    payload = _model_payload()
+    del payload['model_analysis']['unknowns']
+    output = operator_mio_payload(payload, now=101)
+    assert 'unknowns' not in output['model_analysis']

@@ -412,7 +412,10 @@ class LiveMioModelLane:
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         safe_hypotheses = _bounded_hypotheses(model_result.get("hypotheses"), frame_payload)
                         safe_checks = [x[:200] for x in model_result.get("next_checks", [])[:4] if type(x) is str] if isinstance(model_result.get("next_checks"), list) else []
-                        safe_unknowns = [x[:160] for x in model_result.get("unknowns", [])[:12] if type(x) is str] if isinstance(model_result.get("unknowns"), list) else []
+                        raw_unknowns = model_result.get("unknowns")
+                        unknowns_valid = (isinstance(raw_unknowns, list) and len(raw_unknowns) <= 100
+                                          and all(type(x) is str and x for x in raw_unknowns))
+                        safe_unknowns = [x[:160] for x in raw_unknowns[:12]] if unknowns_valid else None
                         mio_state = str(model_result.get("mio_state") or "")[:48]
                         model_outcome = str(model_result.get("outcome") or "completed")[:48]
                         validation_rejection = model_result.get("validation_rejection")
@@ -457,7 +460,8 @@ class LiveMioModelLane:
                             "generation_method": str(model_result.get("generation_method") or "")[:48],
                             "hypotheses": safe_hypotheses,
                             "next_checks": safe_checks,
-                            "unknowns": safe_unknowns,
+                            **({"unknowns": safe_unknowns, "unknowns_total": len(raw_unknowns)}
+                               if unknowns_valid else {}),
                             "frame_generation": fast_generation,
                             "validation_rejection": validation_rejection,
                             **({"validation_diagnostic": diagnostic} if (diagnostic :=
