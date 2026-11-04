@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: branch preparation. The shared M.I.O. source is publicly available at immutable commit `b441d431532507387fb81f1e03e31fd1aea57b68`. Its package version `0.1.0+git.c31c244` is a local integration build identity, not a release; the earlier source `c31c244` carried merged PR #40. This document does not claim any release or deployment.
+Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO main `5bb09c8d28c57604dc1c63903b98fed7587b49ea`, which includes MIO #43–#45. Package metadata remains `0.1.0+git.c31c244`, a local integration build identity, not a release; the `c31c244` source carried merged PR #40. This document does not claim a release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
@@ -70,7 +70,7 @@ with their own clock against `max_age_seconds` and must not treat a stored
 `is_current: true` as still fresh.
 
 The runtime dependency is declared in `requirements/runtime.txt` using an
-immutable Git commit pin. The pinned source, `b441d431532507387fb81f1e03e31fd1aea57b68`,
+immutable Git commit pin. The pinned source, `5bb09c8d28c57604dc1c63903b98fed7587b49ea`,
 is publicly available; this branch does not vendor the package. If the
 package is absent at runtime, the guarded adapter reports `package_unavailable`
 and Edge continues its existing behavior. The fast adapter itself supplies no
@@ -97,13 +97,23 @@ model identity, duration, load duration, prompt/completion token counts, outcome
 and status; prompts, full completion bodies, request bodies, and raw exception
 text are not logged.
 
+At this candidate, Edge wraps the existing product-owned `StructuredTransport`
+with MIO #45 `MeasuredTransport`, allowing only the four reasoning task labels
+(`generate_hypotheses`, `identify_evidence_gaps`, `update_hypotheses`,
+`recommend`). Each bounded result/diagnostic/audit record may carry at most four
+task timings with elapsed nanoseconds and success/failure only. Edge continues
+to own endpoint authorization, deadlines, Ollama transport, token counts, model
+load duration, truncation and usage completeness. Timing records contain no
+prompt, response, exception text or model-authored labels; they are diagnostic
+only and do not change MIO result acceptance or Edge decisions.
+
 The model snapshot optionally carries M.I.O.'s `validation_diagnostic` with
 exactly `stage` and `rejection_class`. Edge accepts only the closed M.I.O.
 vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
 reason, and advisory authority remain unchanged. The immutable dependency pin
-is the public M.I.O. source commit `b441d431532507387fb81f1e03e31fd1aea57b68`.
+is the public M.I.O. source commit `5bb09c8d28c57604dc1c63903b98fed7587b49ea`.
 
 Failure isolation and audit degradation:
 

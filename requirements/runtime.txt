@@ -5,9 +5,10 @@ textual>=0.70,<1
 Pillow>=10,<12
 requests>=2.32,<3
 PyYAML>=6,<7
-# Shared M.I.O. advisory contracts: immutable source pin, not a production release.
-# Includes MIO #18, #21, and #40 behavior; MIO #41 gives integration wheels a unique local version.
-azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@b441d431532507387fb81f1e03e31fd1aea57b68
+# Shared M.I.O. core and measured model-call records: immutable merged-main pin,
+# not a production release. #45 supplies bounded task timing; Edge retains transport
+# authorization, token/load measurements, and enforcement authority.
+azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@5bb09c8d28c57604dc1c63903b98fed7587b49ea
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
 # (Every Fabric integration point is a guarded no-op without the package, so the
 # deterministic path runs unchanged when it is absent. An earlier note here said

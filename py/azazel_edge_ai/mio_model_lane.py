@@ -17,6 +17,11 @@ from azazel_edge_ai.mio_live_auxiliary import binding_matches_same_envelope
 KNOWLEDGE_STATUSES = frozenset({'disabled', 'missing_token', 'invalid_configuration', 'unavailable',
                       'timeout', 'oversized', 'redirect_rejected', 'auth_rejected',
                       'scope_rejected', 'malformed', 'received', 'superseded', 'projected', 'rejected'})
+MODEL_TASKS = frozenset({"generate_hypotheses", "identify_evidence_gaps",
+                         "update_hypotheses", "recommend"})
+MODEL_CALL_OUTCOMES = frozenset({"success", "failure"})
+MAX_MODEL_CALLS = 4
+MAX_MODEL_CALL_ELAPSED_NS = 10_000_000_000
 
 
 MAX_AGE_SECONDS = 10.0
@@ -66,6 +71,25 @@ def bounded_truncated_count(value: Any) -> int:
     return value
 
 
+def bounded_call_timings(values: Any) -> list[dict[str, Any]]:
+    """Keep only bounded MIO task timings; never accept prompt or response fields."""
+    if type(values) is not list:
+        return []
+    result = []
+    for item in values[:MAX_MODEL_CALLS]:
+        if not isinstance(item, Mapping):
+            continue
+        task, elapsed_ns, outcome = item.get("task"), item.get("elapsed_ns"), item.get("outcome")
+        if (type(task) is not str or task not in MODEL_TASKS | {"other"}
+                or type(elapsed_ns) is not int or type(outcome) is not str
+                or outcome not in MODEL_CALL_OUTCOMES):
+            continue
+        result.append({"task": task,
+                       "elapsed_ns": max(0, min(elapsed_ns, MAX_MODEL_CALL_ELAPSED_NS)),
+                       "outcome": outcome})
+    return result
+
+
 def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
     """Allow only bounded accrued measurements across failure boundaries."""
     result = {}
@@ -78,6 +102,7 @@ def bounded_usage(values: Mapping[str, Any]) -> dict[str, Any]:
     # A truly missing key carries no truncation evidence (0); a present value is bounded fail-closed.
     result["truncated_count"] = bounded_truncated_count(values["truncated_count"]) if "truncated_count" in values else 0
     result["model"] = values.get("model", "")[:96] if type(values.get("model")) is str else ""
+    result["call_timings"] = bounded_call_timings(values.get("call_timings", []))
     requests, metered = result["request_count"], result["metered_request_count"]
     result["unknown_usage_request_count"] = max(0, requests - metered)
     result["usage_status"] = ("unknown" if metered == 0 else
@@ -144,6 +169,7 @@ def _empty(status: str, reason: str = "") -> dict[str, Any]:
         "metered_request_count": 0,
         "unknown_usage_request_count": 0,
         "truncated_count": 0,
+        "call_timings": [],
         "usage_status": "unknown",
         "outcome": status,
         "summary": "",
@@ -333,7 +359,7 @@ class LiveMioModelLane:
                             self._record({key: result.get(key) for key in (
                                 "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                                 "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",
-                                "truncated_count", "usage_status", "outcome", "status", "reason")})
+                                "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
                             continue
                         if generation != self._generation:
                             result = _empty("degraded", "superseded")
@@ -343,7 +369,7 @@ class LiveMioModelLane:
                             self._record({key: result.get(key) for key in (
                                 "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                                 "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",
-                                "truncated_count", "usage_status", "outcome", "status", "reason")})
+                                "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
                             continue
                     started = time.monotonic()
                     try:
@@ -422,6 +448,7 @@ class LiveMioModelLane:
                             "metered_request_count": metered_count,
                             "unknown_usage_request_count": usage["unknown_usage_request_count"],
                             "truncated_count": truncated_count,
+                            "call_timings": bounded_call_timings(model_result.get("call_timings", [])),
                             "usage_status": usage["usage_status"],
                             "outcome": model_outcome,
                             "frame_id": str(model_result.get("frame_id") or "")[:96],
@@ -481,6 +508,6 @@ class LiveMioModelLane:
                 self._record({key: result.get(key) for key in (
                     "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                     "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",
-                    "truncated_count", "usage_status", "outcome", "status", "reason")})
+                            "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
             finally:
                 self._queue.task_done()

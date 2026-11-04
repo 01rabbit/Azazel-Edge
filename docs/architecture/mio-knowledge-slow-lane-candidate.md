@@ -10,6 +10,10 @@ integration wheel; this is not a public release. This is a candidate, not a
 release or deployment claim. No installation, service configuration,
 credential provisioning or production deployment is included.
 
+This remains a historical Edge #525 / MIO `b441d43` evidence snapshot. The
+later Edge #538 candidate advances its runtime pin to MIO main `5bb09c8`; the
+process evidence below has not been rerun against that newer source.
+
 A separate latest-only Knowledge worker can make one authenticated
 `POST /v1/context` request on its own ten-second deadline. Ordinary event intake
 queues it after deterministic scoring; it does not wait for model consent,

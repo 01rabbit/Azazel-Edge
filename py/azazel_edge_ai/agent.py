@@ -33,8 +33,9 @@ from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
 from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
-from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_truncated_count,
-                                           bounded_usage, bounded_validation_diagnostic)
+from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_call_timings,
+                                           bounded_truncated_count, bounded_usage,
+                                           bounded_validation_diagnostic)
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
 from azazel_edge.tactics_engine.decision_logger import (
     ChosenAction,
@@ -2467,13 +2468,15 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     """Run the exact shared reasoning path over the accepted frame."""
     from azazel_mio.assistant import AssistantCore
     from azazel_mio.contracts import MioSituationFrame
+    from azazel_mio.model_adapter import MeasuredTransport
     from azazel_mio.playbook import compiled_model_response_schema
 
     started = time.monotonic()
     deadline = started + min(MIO_MODEL_TIMEOUT_SEC, max(0.0, float(remaining_seconds)))
     metrics = {"model": "", "request_count": 0, "metered_request_count": 0,
                "unknown_usage_request_count": 0, "truncated_count": 0,
-               "load_duration_ms": 0, "prompt_tokens": 0, "completion_tokens": 0}
+               "load_duration_ms": 0, "prompt_tokens": 0, "completion_tokens": 0,
+               "call_timings": []}
 
     def record_outer_metadata(metadata: Dict[str, Any]) -> None:
         metrics["model"] = str(metadata.get("model") or metrics["model"])[:96]
@@ -2520,18 +2523,34 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
             metrics["model"] = self.last_model or metrics["model"]
             return raw
 
+    measured_transport = MeasuredTransport(
+        StructuredTransport(),
+        allowed_tasks=("generate_hypotheses", "identify_evidence_gaps",
+                       "update_hypotheses", "recommend"),
+        max_records=4,
+    )
+
+    def measured_call_timings() -> list[dict[str, Any]]:
+        return bounded_call_timings([
+            {"task": record.task, "elapsed_ns": record.elapsed_ns,
+             "outcome": record.outcome}
+            for record in measured_transport.records()
+        ])
+
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
-    core = AssistantCore(model=StructuredTransport())
+    core = AssistantCore(model=measured_transport)
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
             knowledge_attempted=False,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
+        metrics["call_timings"] = measured_call_timings()
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")
         out = assistance.to_dict()
     except Exception as exc:
+        metrics["call_timings"] = measured_call_timings()
         reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
         raise MioModelFailure(reason, metrics) from None
     model_accepted = out.get("generation_method") == "model"
@@ -2631,6 +2650,7 @@ def _audit_mio_model_result(trace_id: str, result: Dict[str, Any]) -> None:
                 # Failure/deadline records carry no truncation evidence (missing -> 0); present values fail closed.
                 "truncated_count": (bounded_truncated_count(result["truncated_count"])
                                     if "truncated_count" in result else 0),
+                "call_timings": bounded_usage(result).get("call_timings", []),
                 "prompt_tokens": max(0, min(int(result.get("prompt_tokens") or 0), 400_000)),
                 "completion_tokens": max(0, min(int(result.get("completion_tokens") or 0), 400_000)),
                 "usage_status": str(result.get("usage_status") or "unknown")[:16],

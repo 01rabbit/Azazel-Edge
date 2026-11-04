@@ -500,8 +500,10 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
                 "prompt_tokens": 11, "completion_tokens": 5}
     monkeypatch.setattr(agent, "_ollama_chat", fake_chat)
 
+    audit_records = []
     class Governance:
         def record_structured_result(self, **kwargs):
+            audit_records.append(kwargs)
             return True
     monkeypatch.setattr(agent, "AI_GOVERNANCE", Governance())
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
@@ -524,6 +526,11 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
     assert result["model"] == "fixture-model"
     assert result["prompt_tokens"] == 33 and result["completion_tokens"] == 15
     assert result["load_duration_ms"] == 21
+    assert result["usage_status"] == "complete"
+    assert [item["task"] for item in result["call_timings"]] == [item[0] for item in calls]
+    assert all(item["elapsed_ns"] >= 0 and item["outcome"] == "success"
+               for item in result["call_timings"])
+    assert audit_records[0]["metadata"]["call_timings"] == result["call_timings"]
     assert result["summary"] == "Shared M.I.O. analysis completed; hypotheses remain unverified."
     assert len(result["hypotheses"]) == 2
     assert [item["statement"] for item in result["hypotheses"]] == [
@@ -960,6 +967,8 @@ def test_accrued_failure_metrics_survive_governance_and_worker(monkeypatch):
         def fail(*args):
             raise MioModelFailure(reason, {"model": "fixture", "request_count": 2,
                 "metered_request_count": 1, "prompt_tokens": 37, "completion_tokens": 11,
+                "call_timings": [{"task": "recommend", "elapsed_ns": 1234,
+                                  "outcome": "failure", "prompt": "private prompt"}],
                 "summary": "private completion", "prompt": "private prompt"})
         monkeypatch.setattr(agent, "_analyze_mio_fast_result", fail)
         monkeypatch.setattr(agent, "_audit_mio_model_result", lambda trace, result: audits.append(result))
@@ -974,6 +983,8 @@ def test_accrued_failure_metrics_survive_governance_and_worker(monkeypatch):
             assert measured["prompt_tokens"] == 37
             assert measured["completion_tokens"] == 11
             assert measured["model"] == "fixture"
+            assert measured["call_timings"] == [{"task": "recommend", "elapsed_ns": 1234,
+                                                   "outcome": "failure"}]
             assert "private" not in json.dumps(measured)
         assert result["unknown_usage_request_count"] == 1
         assert result["summary"] == ""
@@ -1019,7 +1030,7 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
         def explain(self, frame, **kwargs):
             assert kwargs.get("knowledge_attempted") is False
             # Exercise the real transport metadata callback before core failure.
-            self.model("hypotheses", "private request")
+            self.model("generate_hypotheses", "private request")
             raise failure
         def chat(*args, **kwargs):
             kwargs["metadata_callback"]({"model": "fixture", "prompt_tokens": 17,
@@ -1035,7 +1046,72 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
         assert caught.value.metrics["prompt_tokens"] == 17
         assert caught.value.metrics["completion_tokens"] == 9
         assert caught.value.metrics["model"] == "fixture"
+        assert len(caught.value.metrics["call_timings"]) == 1
+        timing = caught.value.metrics["call_timings"][0]
+        assert timing["task"] == "generate_hypotheses"
+        assert timing["elapsed_ns"] >= 0 and timing["outcome"] == "success"
         assert caught.value.reason == ("deadline_exceeded" if isinstance(failure, TimeoutError) else "model_error")
+
+
+def test_measured_mio_transport_retains_failure_timing_without_payload(monkeypatch):
+    import json
+    import pytest
+    from azazel_edge_ai import agent
+    from azazel_edge_ai.mio_model_lane import MioModelFailure
+    from azazel_mio.assistant import AssistantCore
+
+    frame = {
+        "schema_version": "mio.situation_frame.v2", "frame_id": "frame-current",
+        "trace_id": "trace-current", "created_at": "2026-11-01T00:00:00Z",
+        "mission": "Provide a read-only explanation of this accepted Edge event.",
+        "current_defensive_state": "NOTIFY", "threat_level": "HIGH",
+        "noc_summary": "No NOC evaluation supplied to this bounded live adapter.",
+        "soc_summary": "Edge tactical scorer derived risk score: 72",
+        "known_facts": ["Observed Suricata SID: 42"], "unknowns": ["LIVE_ADAPTER_CONTEXT_LIMITED"],
+        "contradictions": [], "evidence_refs": ["suricata_sid:42"], "knowledge_refs": [],
+        "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"known_facts": ["caller"], "evidence_refs": ["caller"]},
+        "freshness_seconds": 0, "truncated": False, "actors": [], "actions": [],
+        "deception_context": None,
+    }
+
+    def fail_explain(self, _frame, **_kwargs):
+        self.model("recommend", "private prompt")
+
+    def fail_chat(*_args, **_kwargs):
+        raise RuntimeError("private model response")
+
+    monkeypatch.setattr(AssistantCore, "explain", fail_explain)
+    monkeypatch.setattr(agent, "_ollama_chat", fail_chat)
+    import azazel_mio.playbook as playbook
+    monkeypatch.setattr(playbook, "compiled_model_response_schema", lambda *_args: {})
+
+    with pytest.raises(MioModelFailure) as caught:
+        agent._analyze_mio_fast_result(frame, 1.0)
+
+    timings = caught.value.metrics["call_timings"]
+    assert len(timings) == 1
+    assert timings[0]["task"] == "recommend"
+    assert timings[0]["elapsed_ns"] >= 0
+    assert timings[0]["outcome"] == "failure"
+    assert "private" not in json.dumps(timings)
+
+
+def test_bounded_call_timings_clamps_and_drops_untrusted_fields():
+    from azazel_edge_ai.mio_model_lane import bounded_call_timings, bounded_usage
+
+    values = [
+        {"task": "recommend", "elapsed_ns": 99_000_000_000, "outcome": "success",
+         "prompt": "private prompt", "response": "private completion"},
+        {"task": "private_task", "elapsed_ns": 1, "outcome": "success"},
+        {"task": "generate_hypotheses", "elapsed_ns": True, "outcome": "success"},
+        {"task": "identify_evidence_gaps", "elapsed_ns": 10, "outcome": "private error"},
+    ]
+    expected = [{"task": "recommend", "elapsed_ns": 10_000_000_000,
+                 "outcome": "success"}]
+    assert bounded_call_timings(values) == expected
+    assert bounded_usage({"request_count": 1, "metered_request_count": 1,
+                          "usage_status": "unknown", "call_timings": values})["call_timings"] == expected
 
 
 def test_validation_diagnostic_closed_vocabulary_and_strict_shape():

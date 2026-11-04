@@ -55,13 +55,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- The Edge runtime now pins the M.I.O. source at immutable commit
-  `b441d431532507387fb81f1e03e31fd1aea57b68`, carrying PR #40's bounded
-  fast-assessment validation and zero-budget handoff behavior. MIO PR #41
-  selected package version `0.1.0+git.c31c244` as a unique PEP 440 local
-  version for its integration wheel; this is not a public release. Edge's
-  deterministic scorer and authority are unchanged. No Edge product version
-  or release artifact is created by this change.
+- The Edge #538 candidate pins M.I.O. main at immutable commit
+  `5bb09c8d28c57604dc1c63903b98fed7587b49ea`, including #43 defensive-state
+  validation, #44's developer-only local model smoke tool, and #45's bounded
+  measured transport. The product model lane wraps its existing Edge transport
+  for bounded per-task timing while Edge retains authorization, token/load
+  measurements and decision authority. Package metadata remains
+  `0.1.0+git.c31c244`; no Edge version, release or artifact changes.
 - The optional MIO fast-score comparison now degrades if package initialization
   raises a non-`ImportError` exception, while Edge's local score and factors
   remain authoritative. A genuinely absent package keeps its existing
