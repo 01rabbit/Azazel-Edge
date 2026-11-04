@@ -122,3 +122,43 @@ matches and exact/near-miss mappings, traverses the independent Knowledge worker
 pinned MIO projection with the model opt-in disabled, and checks bounded status and
 absence of raw IOC/token output. This is synthetic local integration evidence;
 it does not establish production credentials, deployment or remote TLS readiness.
+
+Optional local model lane (default off): set `EDGE_TEST_MIO_OLLAMA=1` and
+`EDGE_TEST_OLLAMA_MODEL=<exact-installed-tag>` alongside the two source exports
+above, then run:
+
+```sh
+PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_knowledge_slow_lane.py -k actual_knowledge_process
+```
+
+Before starting Knowledge or running baselines, the test reads `/api/tags` from
+local Ollama at `127.0.0.1:11434` and requires an exact installed tag. Model
+calls use the fixed loopback endpoint and `/api/chat`; this test does not install
+or pull a model. Without the opt-in flag, the ordinary Edge handler is asserted
+disabled with zero model HTTP submissions.
+
+The model-enabled handler is polled for at most 12 seconds and its child process
+has a 16-second timeout; baseline children have 6- and 12-second limits. A model
+that is not complete, metered and untruncated within those limits fails this
+opt-in test. The test intercepts each attempted model HTTP request before
+submission and checks its serialized JSON for the QUERY token and synthetic IPs
+or subnet values; it also requires positive prompt/completion token counts and
+elapsed time. Final assertions bind Knowledge and the model lane's
+`fast_generation` / `frame_generation` to the generation and trace in Edge's
+persisted MIO handoff; the MIO frame ID and trace must match the model result.
+The independent workers are
+checked at their final projected/complete states; the test makes no claim about
+which poll first observed them. Edge score and comparison fields must match the
+model-disabled run.
+
+The child audit hook is a best-effort test guard: it rejects `open` calls that
+request writes outside the run's temporary directory, limits socket connections
+to approved numeric loopback ports or UNIX sockets under the run directory, and
+blocks common Python subprocess, fork and exec audit events plus
+`sendto`/`sendmsg` UDP sends. It does not mediate every filesystem operation and
+is not a general-purpose sandbox. The test does not retain raw prompt or raw completion
+text; bounded, validated MIO result fields remain in pytest's temporary snapshot
+and child result. It checks the QUERY token in produced artifacts and the
+synthetic source marker in scanned logs. It does not claim every Edge event or
+advisory artifact omits synthetic IPs. This is synthetic local advisory evidence;
+it is not full-node Nexus authentication, production readiness or HG evidence.
