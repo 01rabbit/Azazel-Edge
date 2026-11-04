@@ -35,7 +35,7 @@ For safe checkout checks, see [Development Verification](#development-verificati
 | Rust core (`rust/azazel-edge-core`, `azazel-edge-core.service`) | The live decision and enforcement path. It reads Suricata EVE, selects the action (`decide_defense()`), and applies it only when enforcement is enabled (`maybe_enforce()`). It releases leases on expiry. |
 | Python `ActionArbiter` (`py/azazel_edge/arbiter/`) | A deterministic decision record for scenario replay, benchmarks and the SOC policy dry run. No running service applies its output. |
 | AI agent (`azazel-edge-ai-agent.service`, `py/azazel_edge_ai/`) | Receives each event after the core has decided. It records the decision, computes the tactical score and second-pass SOC evaluation, and writes advisory text. It cannot change the action. |
-| M.I.O. cognitive core (`py/azazel_edge/mio/`) | Shadow and replay only. Run by offline tools (`bin/azazel-mio-shadow-replay`, `bin/azazel-mio-evaluate`, `bin/azazel-mio-trace-export`); no systemd unit starts it. Its recommendations are never executable. |
+| M.I.O. cognitive core (`py/azazel_edge/mio/`) | Shadow and replay only. Run by offline shadow/replay and evaluation tools; no systemd unit starts it. Its recommendations are never executable. |
 | Control daemon and Web UI | Display, operator controls and fixed control actions. The core never reads their state. |
 
 Automatic actions can observe, notify and apply temporary flow-scoped throttling. Redirection to a prepared decoy is allowed in `semi-auto` only when high-impact automation is enabled, and in `full-auto`. `isolate` is not an automatic action.
