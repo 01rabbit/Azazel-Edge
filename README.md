@@ -21,6 +21,8 @@ Optional local AI assist runs after the deterministic decision. It may summarize
 
 Azazel-Edge is not a production SIEM replacement, not an autonomous AI defender, and not a promise of complete attack prevention.
 
+For safe checkout checks, see [Development Verification](#development-verification). The device installer below changes system, network, storage, and optional model-runtime state.
+
 **Who this is for:** security operators, field defenders, incident responders, training teams, and researchers working with constrained local networks.
 
 2025 -> 2026 evolution line:
@@ -38,6 +40,8 @@ Azazel-Edge is not a production SIEM replacement, not an autonomous AI defender,
 
 Automatic actions are limited to notification, temporary flow-scoped throttling, and redirection to a prepared decoy. `isolate` is not an automatic action. Operator-approved high-impact actions are not part of the automatic path.
 
+The live M.I.O. auxiliary runs in the AI agent path (`py/azazel_edge_ai/`) and remains advisory. It is distinct from the offline M.I.O. cognitive core in the row above.
+
 Full authority matrix: [M.I.O. Cognitive Plane](docs/architecture/mio-cognitive-plane.md).
 
 ## Requirements
@@ -52,19 +56,23 @@ Full authority matrix: [M.I.O. Cognitive Plane](docs/architecture/mio-cognitive-
 
 ## Shipped Defaults
 
-The shipped systemd unit (`systemd/azazel-edge-core.service`) sets:
+The values below are the shipped systemd unit-file values declared with `Environment=` in [`systemd/azazel-edge-core.service`](systemd/azazel-edge-core.service). The unit also loads `/etc/default/azazel-edge-security` through `EnvironmentFile=`, and settings from that file override the unit's `Environment=` values on a device. The effective values on a given device can therefore differ from this table. Verify dry-run behavior with the [Hardware First-Run Checklist](docs/HARDWARE_FIRST_RUN_CHECKLIST.md).
 
-| Setting | Shipped value | Meaning |
+The table is not exhaustive; the unit declares other variables as well.
+
+| Setting | Shipped unit-file value | Meaning |
 |---|---|---|
 | `AZAZEL_DEFENSE_ENFORCE` | `false` | No network change is applied |
 | `AZAZEL_DEFENSE_DRY_RUN` | `true` | Planned actions are logged only |
 | `AZAZEL_DEFENSE_ENFORCE_LEVEL` | `advisory` | Advisory level; no enforcement |
+| `AZAZEL_DEFENSE_ACTION_TTL_SEC` | `300` | Lifetime in seconds of a defense action lease |
+| `AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO` | `false` | High-impact actions are not taken automatically |
 
-Enabling enforcement is a deliberate deployment change that must be verified in dry run first. Changing these settings is outside this README's scope; see [Configuration Reference](docs/CONFIGURATION.md).
+Enabling enforcement is a deliberate deployment change that must be verified in dry run first. Changing these settings is outside this README's scope; for the configuration reference, see [Configuration Reference](docs/CONFIGURATION.md).
 
 ## Development Verification
 
-Safe checks that run without root, network-namespace setup, or a device. These are the commands CI runs in its `test-python` and `test-rust` jobs:
+Safe checks that run without root, network-namespace setup, or a device. These are the commands CI runs in its `test-python` and `test-rust` jobs. The `python -m compileall` line is the Python compile check, which CI runs earlier in its `lint-python` job:
 
 ```bash
 python3 -m venv .venv
@@ -101,8 +109,8 @@ sudo ENABLE_INTERNAL_NETWORK=1 \
 ```
 
 What this run does to the device:
-- **Interactive encrypted-secret setup.** The app stack's security step creates an encrypted secrets volume by default (unless `SKIP_LUKS=1`). It prompts for a passphrase on the terminal. Without a terminal the installer stops; `SKIP_LUKS=1` must be set explicitly to skip the volume.
-- **Network changes.** It builds the internal LAN bridge (`br0`) and its access point. Building `br0` drops an SSH session over `eth0` or `wlan0`, so run it on the console or in `tmux`. On a Raspberry Pi 5, the uplink needs a USB Ethernet or USB Wi-Fi adapter. `WIFI_COUNTRY` is required unless a Wi-Fi country is already set. The AP passphrase is generated and saved root-only in `/etc/azazel-edge/internal-ap.psk`.
+- **Interactive encrypted-secret setup.** The app stack's security step creates an encrypted secrets volume by default (unless `SKIP_LUKS=1`). It prompts for a passphrase on the terminal. On first install, when the volume is absent, the installer stops if there is no terminal; `SKIP_LUKS=1` must be set explicitly to skip the volume.
+- **Network changes.** It builds the internal LAN bridge (`br0`) and its access point. Building `br0` drops an SSH session over `eth0` or `wlan0`, so run it on the console or in `tmux`. On a Raspberry Pi 5, the uplink needs a USB Ethernet or USB Wi-Fi adapter. `WIFI_COUNTRY` is required unless a Wi-Fi country is already set. The `WIFI_COUNTRY=JP` in the command above is an example; change it to your deployment country's code. The AP passphrase is generated and saved root-only in `/etc/azazel-edge/internal-ap.psk`.
 - **Packages.** It installs system packages with `apt-get` (including Rust tooling) and builds the Rust core.
 - **Model download.** With `ENABLE_AI_RUNTIME=1`, it starts the Ollama container and pulls `qwen3.5:2b` and `qwen3.5:0.8b` over the network.
 - **Selftest.** At the end, it runs `bin/azazel-edge-selftest` and installs a periodic selftest timer. A critical selftest failure exits non-zero and reports that the device is not ready.
