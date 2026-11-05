@@ -180,6 +180,64 @@ def test_model_lane_discards_fast_result_from_a_superseded_generation():
     assert calls == []
 
 
+def test_slow_result_audit_does_not_hold_lane_lock_or_publish_after_supersede():
+    import threading
+
+    audit_entered = threading.Event()
+    release_first_audit = threading.Event()
+    second_analysis_entered = threading.Event()
+    release_second_analysis = threading.Event()
+    audit_results = []
+    analysis_count = 0
+
+    def analyze(payload, _remaining):
+        nonlocal analysis_count
+        analysis_count += 1
+        if analysis_count == 2:
+            second_analysis_entered.set()
+            assert release_second_analysis.wait(1)
+        return {
+            "summary": "bounded advisory", "model": "fixture", "frame_id": payload["frame_id"],
+            "trace_id": payload["trace_id"], "mio_state": "complete",
+            "generation_method": "model", "outcome": "completed", "truncated_count": 0,
+        }
+
+    def audit(_trace_id, result):
+        audit_results.append(dict(result))
+        if len(audit_results) == 1:
+            audit_entered.set()
+            assert release_first_audit.wait(1)
+
+    lane = LiveMioModelLane(
+        enabled=True,
+        analyze=analyze,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": [],
+        },
+        audit_result=audit,
+    )
+    lane.submit("7", "trace-abc")
+    assert audit_entered.wait(1)
+
+    started = time.monotonic()
+    queued = lane.submit("7", "trace-abc")
+    submit_elapsed = time.monotonic() - started
+    assert submit_elapsed < 0.1
+    assert queued["status"] == "queued" and queued["generation"] == "2"
+    release_first_audit.set()
+
+    assert second_analysis_entered.wait(1)
+    # The first result was audited while it was current, but never became the
+    # visible result after submit() advanced the lane generation.
+    current = lane.snapshot()
+    assert current["status"] == "queued" and current["generation"] == "2"
+    assert audit_results[0]["status"] == "complete"
+    release_second_analysis.set()
+    result = _wait(lane, "complete")
+    assert result["generation"] == "2"
+
+
 def test_model_lane_rejects_completed_fast_snapshot_without_explicit_current_marker():
     calls = {"authorize": [], "analyze": [], "audit": []}
     fast = _fast()
@@ -779,7 +837,7 @@ def test_truncated_outer_usage_is_counted_once_and_core_error_fallback_is_partia
              (1421, 8, 1_409_958, "stop"),
              (1467, 384, 1_592_167, "length")]
     requests = []
-    def fake_post(_target, path, body, _timeout, deadline_monotonic=None):
+    def fake_post(_target, path, body, _timeout, deadline_monotonic=None, cancel_check=None):
         assert path == "/api/chat"
         request = json.loads(body)
         prompt = request["messages"][1]["content"]
@@ -1085,6 +1143,108 @@ def test_real_auxiliary_new_event_supersedes_old_slow_generation():
     assert analyzed[0][1] != core_calls[0]
     assert adapter.snapshot()["status"] == "complete"
     assert adapter.snapshot()["generation"] == "2"
+
+
+def test_supersede_cancels_inflight_loopback_model_request_and_next_generation_runs():
+    import http.server
+    import threading
+    from azazel_edge_ai import agent
+
+    first_request_entered = threading.Event()
+    release_first_handler = threading.Event()
+    request_lock = threading.Lock()
+    request_count = 0
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            nonlocal request_count
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            with request_lock:
+                request_count += 1
+                number = request_count
+            if number == 1:
+                first_request_entered.set()
+                release_first_handler.wait(3)
+            body = b"{}"
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                # The first client is expected to close its socket on supersede.
+                pass
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serve_thread.start()
+    target = ("http", "127.0.0.1", ("127.0.0.1",), server.server_address[1], "")
+    fast = {"value": _fast("7", "trace-old", frame_id="frame-old")}
+    old_call_cancelled = threading.Event()
+    audited = []
+
+    def analyze(payload, remaining, stale_check):
+        try:
+            agent._post_to_llm_endpoint(
+                target, "/api/chat", b"{}", timeout_sec=remaining,
+                cancel_check=stale_check,
+            )
+        except TimeoutError:
+            if payload["frame_id"] == "frame-old" and stale_check():
+                old_call_cancelled.set()
+                return {
+                    "model": "fixture", "request_count": 1, "metered_request_count": 0,
+                    "unknown_usage_request_count": 1, "prompt_tokens": 0,
+                    "completion_tokens": 0, "truncated_count": 0,
+                    "call_timings": [{"task": "recommend", "elapsed_ns": 10_000,
+                                      "outcome": "failure"}],
+                    "outcome": "superseded", "mio_state": "error_fallback",
+                    "generation_method": "static_reference", "frame_id": payload["frame_id"],
+                    "trace_id": payload["trace_id"],
+                }
+            raise
+        return {
+            "summary": "current advisory", "model": "fixture",
+            "frame_id": payload["frame_id"], "trace_id": payload["trace_id"],
+            "mio_state": "complete", "generation_method": "model",
+            "outcome": "completed", "truncated_count": 0,
+            "request_count": 1, "metered_request_count": 1,
+        }
+
+    lane = LiveMioModelLane(
+        enabled=True, analyze=analyze, fast_snapshot=lambda: fast["value"],
+        frame_snapshot=lambda generation: {
+            "frame_id": "frame-old" if generation == "7" else "frame-new",
+            "trace_id": "trace-old" if generation == "7" else "trace-new",
+            "evidence_refs": [],
+        },
+        max_age_seconds=2,
+        audit_result=lambda _trace_id, result: audited.append(dict(result)),
+    )
+    try:
+        lane.submit("7", "trace-old")
+        assert first_request_entered.wait(1)
+        fast["value"] = _fast("8", "trace-new", frame_id="frame-new")
+        lane.submit("8", "trace-new")
+
+        assert old_call_cancelled.wait(0.5)
+        result = _wait(lane, "complete", timeout=1)
+        assert result["generation"] == "2"
+        assert result["frame_generation"] == "8"
+        assert request_count == 2
+        superseded = next(item for item in audited if item.get("reason") == "superseded")
+        assert superseded["request_count"] == 1
+        assert superseded["unknown_usage_request_count"] == 1
+        assert superseded["call_timings"][0]["outcome"] == "failure"
+    finally:
+        release_first_handler.set()
+        server.shutdown()
+        server.server_close()
+        serve_thread.join(timeout=1)
 
 
 def test_lane_skips_both_legacy_llm_and_ops_coach_queued_requests():

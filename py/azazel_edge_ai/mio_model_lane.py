@@ -235,8 +235,9 @@ class LiveMioModelLane:
                  authorize: Callable[[Mapping[str, Any]], tuple[bool, str]] | None = None,
                  max_age_seconds: float = MAX_AGE_SECONDS,
                  audit_result: Callable[[str, dict[str, Any]], None] | None = None):
-        # audit_result(trace_id, final_result) durably audits the lane-accepted result
-        # under self._lock with the freshness re-check and publication. Raising fails the result closed.
+        # audit_result(trace_id, final_result) durably audits the lane-accepted result.
+        # It runs outside self._lock so a slow audit sink cannot block event submission
+        # or UI snapshots. Freshness is checked both before and after the callback.
         self._audit_result = audit_result
         self.enabled = bool(enabled)
         self.max_age_seconds = max(0.1, min(float(max_age_seconds), MAX_AGE_SECONDS))
@@ -416,7 +417,14 @@ class LiveMioModelLane:
                         else:
                             analyzed = self._analyze(dict(frame_payload), remaining)
                         if stale_check():
-                            raise TimeoutError("superseded")
+                            # Preserve bounded consumption measurements for a cancelled
+                            # request even though its advisory is no longer publishable.
+                            measured = {key: analyzed.get(key) for key in (
+                                "model", "request_count", "metered_request_count",
+                                "unknown_usage_request_count", "truncated_count",
+                                "load_duration_ms", "prompt_tokens", "completion_tokens",
+                                "call_timings", "knowledge_status")}
+                            raise MioModelFailure("superseded", measured)
                         model_result = dict(analyzed)
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         safe_hypotheses = _bounded_hypotheses(model_result.get("hypotheses"), frame_payload)
@@ -497,29 +505,47 @@ class LiveMioModelLane:
                         elapsed = max(0, int((time.monotonic() - started) * 1000))
                         result = _empty("degraded", "model_error")
                         result["duration_ms"] = min(elapsed, 600_000)
+                fresh_before_audit = False
+                if audit_pending and self._audit_result is not None:
+                    audit_trace = (source_trace_id or str(result.get("frame_trace_id") or "")[:96]
+                                   or str((fast or {}).get("trace_id") or "")[:96])
+                    # A failing snapshot means freshness cannot be verified: treat as stale.
+                    with self._lock:
+                        try:
+                            fresh_before_audit = (generation == self._generation and
+                                str(self._fast_snapshot().get("generation") or "") == fast_generation)
+                        except Exception:
+                            fresh_before_audit = False
+                    if not fresh_before_audit:
+                        usage = bounded_usage(result)
+                        result = _empty("degraded", "superseded")
+                        result.update(usage)
+                    try:
+                        # Durable audit I/O may fsync or wait on another process. Never
+                        # hold the lane lock across this callback.
+                        self._audit_result(audit_trace, result)
+                    except Exception:
+                        if fresh_before_audit:
+                            usage = bounded_usage(result)
+                            result = _empty("degraded", "mio_model_result_audit_failed")
+                            result.update(usage)
+                            result["summary"] = ""
                 with self._lock:
-                    # Strict invariant: re-check freshness, audit the final result and publish it
-                    # while holding the lane lock, so a newer submit cannot interleave.
-                    if audit_pending and self._audit_result is not None:
-                        audit_trace = (source_trace_id or str(result.get("frame_trace_id") or "")[:96]
-                                       or str(fast.get("trace_id") or "")[:96])
-                        # A failing snapshot means freshness cannot be verified: treat as not fresh.
+                    # The audit can take long enough for a newer event to supersede this
+                    # result. Recheck after the callback and never publish stale output.
+                    current_generation = generation == self._generation
+                    fresh_after_audit = True
+                    if current_generation and audit_pending:
                         try:
-                            fresh = (generation == self._generation and
-                                     str(self._fast_snapshot().get("generation") or "") == fast_generation)
+                            fresh_after_audit = (str(self._fast_snapshot().get("generation") or "")
+                                                 == fast_generation)
                         except Exception:
-                            fresh = False
-                        if not fresh:
+                            fresh_after_audit = False
+                    if current_generation:
+                        if not fresh_after_audit:
+                            usage = bounded_usage(result)
                             result = _empty("degraded", "superseded")
-                        try:
-                            self._audit_result(audit_trace, result)
-                        except Exception:
-                            if fresh:
-                                usage = bounded_usage(result)
-                                result = _empty("degraded", "mio_model_result_audit_failed")
-                                result.update(usage)
-                                result["summary"] = ""
-                    if generation == self._generation:
+                            result.update(usage)
                         result["generation"] = str(generation)
                         result["trace_id"] = (str(result.get("frame_trace_id") or "") if result.get("status") in {"complete", "partial"}
                                                else str(fast.get("trace_id") or "")[:96] if fast else "")
@@ -527,6 +553,10 @@ class LiveMioModelLane:
                         result["authority"] = "read_only_advisory"
                         result["label"] = "Measured model analysis (advisory)"
                         self._result = result
+                    else:
+                        usage = bounded_usage(result)
+                        result = _empty("degraded", "superseded")
+                        result.update(usage)
                 self._record({key: result.get(key) for key in (
                     "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                     "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",

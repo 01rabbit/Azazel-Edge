@@ -392,7 +392,8 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 model_payload_checks = []
                 model_payload_violations = []
                 original_model_post = agent._post_to_llm_endpoint
-                def check_model_payload(target, path, body, timeout_sec, deadline_monotonic=None):
+                def check_model_payload(target, path, body, timeout_sec, deadline_monotonic=None,
+                                        cancel_check=None):
                     if path != "/api/chat":
                         model_payload_violations.append("unexpected_model_path")
                         raise RuntimeError("synthetic test permits only the model chat path")
@@ -408,7 +409,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                             raise RuntimeError("synthetic model payload redaction check failed")
                     model_payload_checks.append(path)
                     return original_model_post(target, path, body, timeout_sec,
-                        deadline_monotonic=deadline_monotonic)
+                        deadline_monotonic=deadline_monotonic, cancel_check=cancel_check)
                 agent._post_to_llm_endpoint = check_model_payload
                 calls = []
                 original_query = agent.LIVE_MIO_KNOWLEDGE_LANE._query

@@ -709,10 +709,10 @@ def test_production_lane_supersession_during_analysis_is_never_adopted(monkeypat
     assert result["status"] == "degraded"
 
 
-def test_production_lane_newer_submit_cannot_overtake_audit_publication(monkeypatch, tmp_path):
+def test_production_lane_newer_submit_is_not_blocked_by_durable_audit(monkeypatch, tmp_path):
     import threading
     lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
-    in_audit, release = threading.Event(), threading.Event()
+    in_audit, release, audit_finished = threading.Event(), threading.Event(), threading.Event()
     order = []
 
     def audit(trace_id, result):
@@ -720,6 +720,7 @@ def test_production_lane_newer_submit_cannot_overtake_audit_publication(monkeypa
         assert release.wait(2)
         agent._audit_mio_model_result(trace_id, result)
         order.append("audited")
+        audit_finished.set()
     lane._audit_result = audit
     lane.submit("1", "tr", source_trace_id="tr")
     assert in_audit.wait(2)
@@ -734,11 +735,12 @@ def test_production_lane_newer_submit_cannot_overtake_audit_publication(monkeypa
     thread = threading.Thread(target=newer, daemon=True)
     thread.start()
     assert started.wait(2)  # the submitter is running before the blocking window is timed
-    assert not done.wait(0.2)  # blocked behind the audit/publication critical section
+    assert done.wait(0.2)  # the durable audit callback does not hold the lane lock
+    assert lane.snapshot()["generation"] == "2" and lane.snapshot()["status"] == "queued"
     release.set()
-    assert done.wait(2)  # proceeds immediately afterwards
     thread.join(2)
-    assert order == ["audited", "submitted"]
+    assert audit_finished.wait(2)
+    assert order == ["submitted", "audited"]
     assert _decisions(log) == ["adopted"]
     snapshot = lane.snapshot()
     assert snapshot["generation"] == "2" and snapshot["status"] != "complete"
