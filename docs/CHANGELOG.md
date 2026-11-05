@@ -55,6 +55,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Update the optional Azazel-Fabric integration pin from `v0.9.0rc6` to the
+  stable `v0.9.0` (annotated tag, commit
+  `ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6`, digest
+  `sha256:5107054682802f1e615615d0de51471859014d31a8808b61d8cbf6c16b27dbf4`).
+  Fabric's `src/` differs from rc6 only in `version.py`, so the contract
+  surface is the same as rc6; the signature is inside the tag's tree. The
+  stable release does not claim an aggregate attestation or golden-fixture
+  interoperability. This optional dependency change does not change the Edge
+  product version or create a release.
 - Update the optional Azazel-Fabric integration pin from `v0.9.0rc4` to
   `v0.9.0rc6` (tag commit `023381371b56b3883a89a28a69625ddb87742f2e`). rc6 is
   not additive over rc5 (Fabric#65 trailing newline in typed refs, digests and

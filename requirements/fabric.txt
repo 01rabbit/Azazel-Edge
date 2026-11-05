@@ -7,13 +7,24 @@
 # Pin policy: an exact tagged release, never a branch and never a development
 # commit, for field deployment.
 #
-# v0.9.0rc6 is a release candidate at tag commit
+# v0.9.0 is the stable release, at the annotated tag's commit
+# ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6 (digest
+# sha256:5107054682802f1e615615d0de51471859014d31a8808b61d8cbf6c16b27dbf4).
+# Its src/ differs from v0.9.0rc6 only in version.py, so the contract surface
+# is the same as rc6 (the rc6 notes below still describe it). Unlike rc6, the
+# release-owner signature (release/v0.9.0.digest.json.sig) is inside the tag's
+# tree. Verify with the tag's `tools/rc_digest.py --check` and
+# `tools/rc_signature.py --check`.
+#
+# Fabric's CHANGELOG [0.9.0] separates stable from experimental surfaces. The
+# stable release does not claim an aggregate attestation or golden-fixture
+# interoperability; read it before relying on either.
+#
+# History: v0.9.0rc6 was a release candidate at tag commit
 # 023381371b56b3883a89a28a69625ddb87742f2e (digest
 # sha256:f1b76901bee8938b45b5a600d967286b7a397933acdbecb30328c6adad1ab1e6).
-# The release-owner signature over that digest was added AFTER the tag, on
-# Azazel-Fabric main (88c47d5, release/v0.9.0rc6.digest.json.sig); the tag
-# itself does not contain it. Verify the digest with the tag's
-# `tools/rc_digest.py --check`, and the signature from Fabric main.
+# Its release-owner signature was added AFTER the tag, on Azazel-Fabric main
+# (88c47d5, release/v0.9.0rc6.digest.json.sig); that tag does not contain it.
 #
 # rc6 is NOT additive over rc5 (the pin moves rc4 -> rc6, so rc5 is skipped):
 #   - Azazel-Fabric#65: a typed reference, a provisioning digest or a MAC that
@@ -58,4 +69,4 @@
 # v0.5.0 is the deception-environment contract baseline (Azazel-Fabric#9).
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0rc6
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0
