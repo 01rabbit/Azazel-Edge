@@ -39,7 +39,7 @@ def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
     declared_mio_commit = pin_match.group(1)
 
     installed_mio = distribution("azazel-mio")
-    assert installed_mio.version == "0.1.0.dev20261105+gite639a65", (
+    assert installed_mio.version == "0.1.0.dev20261105+gitf5b0014", (
         "Edge and Nexus must identify the same MIO development package"
     )
     direct_url_text = installed_mio.read_text("direct_url.json")

@@ -95,13 +95,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - The Edge #538 candidate pins M.I.O. at immutable PR #47 head
-  `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`, package version
-  `0.1.0.dev20261105+gite639a65`, matching public MIO PR #47. It includes the #43
-  defensive-state validation, #44's developer-only local model smoke tool,
-  #45's bounded measured transport and #47's advisory projection API. Edge's
-  model lane keeps its existing transport, authorization, token/load
-  measurements and decision authority. No Edge version, release or artifact
-  changes.
+  `ffac07cc9bf06d6904faa98001cfcfaea788bcf7`, package version
+  `0.1.0.dev20261105+gitf5b0014`, matching the current public MIO #47 candidate.
+  The exact wheel built from that commit is recorded in the PR evidence. Edge's
+  model lane keeps its product-owned transport, authorization, token/load
+  measurements and decision authority. No Edge version or release was created.
 - The optional MIO fast-score comparison now degrades if package initialization
   raises a non-`ImportError` exception, while Edge's local score and factors
   remain authoritative. A genuinely absent package keeps its existing

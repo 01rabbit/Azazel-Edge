@@ -11,8 +11,10 @@ release or deployment claim. No installation, service configuration,
 credential provisioning or production deployment is included.
 
 This remains a historical Edge #525 / MIO `b441d43` evidence snapshot. The
-later Edge #538 candidate advances its runtime pin to MIO main `5bb09c8`; the
-process evidence below has not been rerun against that newer source.
+current Edge #538 candidate pins MIO PR #47 head
+`ffac07cc9bf06d6904faa98001cfcfaea788bcf7`, package version
+`0.1.0.dev20261105+gitf5b0014`. The process evidence below is for the older
+MIO source and is not reused as evidence for the current pin.
 
 A separate latest-only Knowledge worker can make one authenticated
 `POST /v1/context` request on its own ten-second deadline. Ordinary event intake

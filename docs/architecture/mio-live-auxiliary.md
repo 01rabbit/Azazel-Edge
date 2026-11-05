@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO PR #47 head `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`, package version `0.1.0.dev20261105+gite639a65`. This is a development candidate, not a release. The MIO projection source was independently reviewed and tested at parent `e639a659991f370e9be4f6b9533e16c702912a09`; the later commit changes only package metadata. This document does not claim release or deployment.
+Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO PR #47 head `ffac07cc9bf06d6904faa98001cfcfaea788bcf7`, package version `0.1.0.dev20261105+gitf5b0014`. This is a development candidate, not a release. The source tree is `f5b00149…`; metadata commit `ffac07c…` applies the unique PEP 440 development identity. The exact wheel hash/build inputs are recorded in the PR evidence. This document does not claim release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
@@ -70,7 +70,7 @@ with their own clock against `max_age_seconds` and must not treat a stored
 `is_current: true` as still fresh.
 
 The runtime dependency is declared in `requirements/runtime.txt` using an
-immutable Git commit pin. The pinned source `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`
+immutable Git commit pin. The pinned source `ffac07cc9bf06d6904faa98001cfcfaea788bcf7`
 is publicly available; this branch does not vendor the package. If the
 package is absent at runtime, the guarded adapter reports `package_unavailable`
 and Edge continues its existing behavior. The fast adapter itself supplies no
@@ -115,7 +115,7 @@ vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
 reason, and advisory authority remain unchanged. The immutable dependency pin
-is the public M.I.O. source commit `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`.
+is the public M.I.O. source commit `ffac07cc9bf06d6904faa98001cfcfaea788bcf7`.
 
 Failure isolation and audit degradation:
 
