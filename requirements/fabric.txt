@@ -7,13 +7,33 @@
 # Pin policy: an exact tagged release, never a branch and never a development
 # commit, for field deployment.
 #
-# v0.9.0rc4 is a release *candidate*, and it is the first one in this series
-# that is NOT additive: an `EffectObservation` may claim only `observed_fact`
-# or `active_materialized` (Azazel-Fabric#52). Four authority classes that
-# v0.9.0rc3 accepted are refused. Edge is unaffected in production —
-# `effect_observation_reader` already refused the same four locally — but the
-# move is not free for a consumer that emitted one of them, and a candidate
-# move cannot be treated as free from here on.
+# v0.9.0rc6 is a release candidate at tag commit
+# 023381371b56b3883a89a28a69625ddb87742f2e (digest
+# sha256:f1b76901bee8938b45b5a600d967286b7a397933acdbecb30328c6adad1ab1e6).
+# The release-owner signature over that digest was added AFTER the tag, on
+# Azazel-Fabric main (88c47d5, release/v0.9.0rc6.digest.json.sig); the tag
+# itself does not contain it. Verify the digest with the tag's
+# `tools/rc_digest.py --check`, and the signature from Fabric main.
+#
+# rc6 is NOT additive over rc5 (the pin moves rc4 -> rc6, so rc5 is skipped):
+#   - Azazel-Fabric#65: a typed reference, a provisioning digest or a MAC that
+#     ends in a newline is refused (it validated under rc5).
+#   - Azazel-Fabric#23: a payload nested more than 32 levels deep, passed to a
+#     deception, engagement or effect directive guard, is refused with a
+#     ValueError even when it carries no directive.
+#   - Azazel-Fabric#72: a decision_ref, activation_decision_ref, trace_id or
+#     EffectObservation.execution_ref typed `observation_objective:`,
+#     `hypothesis:` or `frame:` is refused where rc5 read it as untyped. The new
+#     optional envelope fields (observation_objective_ref, hypothesis_refs,
+#     frame_ref, limitations) are additive.
+# Edge produces none of these. rc5 itself was additive over rc4 (optional
+# PresentedTerrainRef bindings for decision-less effects).
+#
+# rc4 was the first non-additive step: an `EffectObservation` may claim only
+# `observed_fact` or `active_materialized` (Azazel-Fabric#52). Four authority
+# classes that v0.9.0rc3 accepted stay refused. Edge's
+# `effect_observation_reader` already refused the same four locally. A
+# candidate move cannot be treated as free; check each one.
 #
 # This pin skips v0.9.0rc3, which widened the typed-reference grammar so a
 # reference body may carry further colons. Edge mints `edge:nft:1` and was
@@ -38,4 +58,4 @@
 # v0.5.0 is the deception-environment contract baseline (Azazel-Fabric#9).
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0rc4
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0rc6

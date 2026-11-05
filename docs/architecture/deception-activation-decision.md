@@ -84,7 +84,7 @@ order does not change the id or signature.
 ## Compatibility
 
 Additive: a new module and tests, no change to existing modules. Fabric is the
-existing optional extra (`requirements/fabric.txt`, `v0.9.0rc4`; both models
+existing optional extra (`requirements/fabric.txt`, `v0.9.0rc6`; both models
 are present there). Without Fabric the module cannot be imported, like the
 other Fabric-backed producers. A decision built with no `objective_refs`
 is a plain accepted/modified activation, which Azazel-Deception PR #59 treats as before

@@ -53,6 +53,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     role is refused with `role_unknown`; registrations without a role are
     unchanged. Nothing reads the role to decide, authorize or enforce.
 
+### Changed
+
+- Update the optional Azazel-Fabric integration pin from `v0.9.0rc4` to
+  `v0.9.0rc6` (tag commit `023381371b56b3883a89a28a69625ddb87742f2e`). rc6 is
+  not additive over rc5 (Fabric#65 trailing newline in typed refs, digests and
+  MACs; Fabric#23 directive walker depth limit 32; Fabric#72 observation
+  objective ref kinds). Edge produces none of these. This optional prerelease
+  dependency change does not change the Edge product version or create a
+  release.
+
 ### Fixed
 
 - SENTINEL surfaces that showed green or a made-up value when their input was
