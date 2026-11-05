@@ -7,26 +7,31 @@
 # Pin policy: an exact tagged release, never a branch and never a development
 # commit, for field deployment.
 #
-# v0.10.0rc1 is a release CANDIDATE, at the annotated tag's commit
+# v0.10.0 is the stable release, at the annotated tag's commit
+# 397fcce7a87ca7ab1a5e84bc196c44d70c404907 (digest
+# sha256:d789f27464114bf29bbdc64fcc515cdbdfc02903a0b42af4de3dc707446e302f).
+# Its src/ differs from v0.10.0rc1 only in version.py, so the contract surface
+# is rc1's (the rc1 notes below still describe it). The release-owner
+# signature (release/v0.10.0.digest.json.sig) is inside the tag's tree. Verify
+# with the tag's `tools/rc_digest.py --check` and
+# `tools/rc_signature.py --check`.
+#
+# History: v0.10.0rc1 was the candidate pin, at tag commit
 # 36db04412679e2694d697595cbf913d0bfc72019 (digest
-# sha256:114402979360855ccaeb92fcc1851db1b03572a289c43e3591633f263b7559eb).
-# The release-owner signature (release/v0.10.0rc1.digest.json.sig) is inside
-# the tag's tree (signed before tagging). Verify with the tag's
-# `tools/rc_digest.py --check` and `tools/rc_signature.py --check`.
+# sha256:114402979360855ccaeb92fcc1851db1b03572a289c43e3591633f263b7559eb;
+# signature inside the tag's tree). It was pinned because it is the first tag
+# carrying the producer captures in `azazel_fabric.testing`
+# (Azazel-Fabric#23, #85) -- records Azazel-Edge and Azazel-Deception actually
+# emitted -- which Edge's consumer tests read (Deception's captures through
+# Edge's consumers). Its leaving condition -- move to v0.10.0 when that
+# stable release is cut -- is met by this pin.
 #
-# Why a candidate: rc1 is the first tag carrying the producer captures in
-# `azazel_fabric.testing` (Azazel-Fabric#23, #85) -- records Azazel-Edge and
-# Azazel-Deception actually emitted -- which Edge's consumer tests read
-# (Deception's captures through Edge's consumers). Leaving condition: move to
-# v0.10.0 when that stable release is cut.
-#
-# rc1 is ADDITIVE over v0.9.0: its src/ adds the experimental
+# rc1 (and so v0.10.0) is ADDITIVE over v0.9.0: its src/ adds the experimental
 # `knowledge_context` family and the `testing` producer captures and changes
 # version.py; no released symbol changed. The four stable families
 # (deception, effect, engagement, outcome) are unchanged, so the contract
 # surface Edge uses is v0.9.0's. Five families are experimental (cti, mio,
-# external_security, provisioning, knowledge_context). v0.9.0 remains the
-# latest stable release.
+# external_security, provisioning, knowledge_context).
 #
 # History: v0.9.0 was the stable pin, at tag commit
 # ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6 (digest
@@ -86,4 +91,4 @@
 # v0.5.0 is the deception-environment contract baseline (Azazel-Fabric#9).
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0rc1
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0
