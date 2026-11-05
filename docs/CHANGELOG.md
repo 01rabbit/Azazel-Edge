@@ -55,6 +55,17 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Update the optional Azazel-Fabric integration pin from the stable `v0.9.0`
+  to the candidate `v0.10.0rc1` (annotated tag, commit
+  `36db04412679e2694d697595cbf913d0bfc72019`, digest
+  `sha256:114402979360855ccaeb92fcc1851db1b03572a289c43e3591633f263b7559eb`;
+  the signature is inside the tag's tree). rc1 is additive over `v0.9.0`: the
+  four stable families are unchanged, so the contract surface Edge uses is the
+  same. A candidate is pinned because rc1 is the first tag carrying the
+  producer captures (`azazel_fabric.testing`, Fabric#23) that Edge's consumer
+  tests read; the pin moves to `v0.10.0` when it is cut. This optional
+  dependency change does not change the Edge product version or create a
+  release.
 - Update the optional Azazel-Fabric integration pin from `v0.9.0rc6` to the
   stable `v0.9.0` (annotated tag, commit
   `ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6`, digest

@@ -7,20 +7,37 @@
 # Pin policy: an exact tagged release, never a branch and never a development
 # commit, for field deployment.
 #
-# v0.9.0 is the stable release, at the annotated tag's commit
+# v0.10.0rc1 is a release CANDIDATE, at the annotated tag's commit
+# 36db04412679e2694d697595cbf913d0bfc72019 (digest
+# sha256:114402979360855ccaeb92fcc1851db1b03572a289c43e3591633f263b7559eb).
+# The release-owner signature (release/v0.10.0rc1.digest.json.sig) is inside
+# the tag's tree (signed before tagging). Verify with the tag's
+# `tools/rc_digest.py --check` and `tools/rc_signature.py --check`.
+#
+# Why a candidate: rc1 is the first tag carrying the producer captures in
+# `azazel_fabric.testing` (Azazel-Fabric#23, #85) -- records Azazel-Edge and
+# Azazel-Deception actually emitted -- which Edge's consumer tests read
+# (Deception's captures through Edge's consumers). Leaving condition: move to
+# v0.10.0 when that stable release is cut.
+#
+# rc1 is ADDITIVE over v0.9.0: its src/ adds the experimental
+# `knowledge_context` family and the `testing` producer captures and changes
+# version.py; no released symbol changed. The four stable families
+# (deception, effect, engagement, outcome) are unchanged, so the contract
+# surface Edge uses is v0.9.0's. Five families are experimental (cti, mio,
+# external_security, provisioning, knowledge_context). v0.9.0 remains the
+# latest stable release.
+#
+# History: v0.9.0 was the stable pin, at tag commit
 # ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6 (digest
 # sha256:5107054682802f1e615615d0de51471859014d31a8808b61d8cbf6c16b27dbf4).
-# Its src/ differs from v0.9.0rc6 only in version.py, so the contract surface
-# is the same as rc6 (the rc6 notes below still describe it). Unlike rc6, the
-# release-owner signature (release/v0.9.0.digest.json.sig) is inside the tag's
-# tree. Verify with the tag's `tools/rc_digest.py --check` and
-# `tools/rc_signature.py --check`.
+# Its src/ differs from v0.9.0rc6 only in version.py, so its contract surface
+# is rc6's (the rc6 notes below still describe it); its signature is inside
+# the tag's tree. Fabric's CHANGELOG [0.9.0] separates stable from
+# experimental surfaces and does not claim an aggregate attestation or
+# golden-fixture interoperability.
 #
-# Fabric's CHANGELOG [0.9.0] separates stable from experimental surfaces. The
-# stable release does not claim an aggregate attestation or golden-fixture
-# interoperability; read it before relying on either.
-#
-# History: v0.9.0rc6 was a release candidate at tag commit
+# v0.9.0rc6 was a release candidate at tag commit
 # 023381371b56b3883a89a28a69625ddb87742f2e (digest
 # sha256:f1b76901bee8938b45b5a600d967286b7a397933acdbecb30328c6adad1ab1e6).
 # Its release-owner signature was added AFTER the tag, on Azazel-Fabric main
@@ -69,4 +86,4 @@
 # v0.5.0 is the deception-environment contract baseline (Azazel-Fabric#9).
 #
 # Import namespace: azazel_fabric.
-azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.9.0
+azazel-fabric @ git+https://github.com/01rabbit/Azazel-Fabric.git@v0.10.0rc1
