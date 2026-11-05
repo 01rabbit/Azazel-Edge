@@ -273,6 +273,28 @@ def test_model_lane_retains_bounded_usage_when_analyzed_frame_binding_is_rejecte
     assert "private" not in json.dumps(audited[0])
 
 
+@pytest.mark.parametrize("identity", ["frame_id", "trace_id"])
+@pytest.mark.parametrize("invalid_value", [None, ""])
+def test_analyzed_result_with_missing_or_empty_correlation_id_is_degraded(identity, invalid_value):
+    analyzed_result = {"frame_id": "frame-abc", "trace_id": "trace-abc",
+                       "summary": "must not be adopted", "outcome": "completed",
+                       "mio_state": "complete", "generation_method": "model"}
+    analyzed_result[identity] = invalid_value
+    audited = []
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda _payload, _remaining: analyzed_result,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        audit_result=lambda trace_id, result: audited.append((trace_id, result)))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["summary"] == ""
+    assert audited and audited[0][1]["reason"] == "frame_binding_rejected"
+
+
 def test_frame_binding_rejection_usage_matches_normal_token_caps():
     lane = LiveMioModelLane(enabled=True,
         analyze=lambda _frame, _remaining: {
