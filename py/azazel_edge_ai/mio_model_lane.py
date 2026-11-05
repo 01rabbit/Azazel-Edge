@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import inspect
 import queue
+import re
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -22,6 +23,11 @@ MODEL_TASKS = frozenset({"generate_hypotheses", "identify_evidence_gaps",
 MODEL_CALL_OUTCOMES = frozenset({"success", "failure"})
 MAX_MODEL_CALLS = 4
 MAX_MODEL_CALL_ELAPSED_NS = 10_000_000_000
+_CORRELATION_ID = re.compile(r"[A-Za-z0-9._:-]{1,96}\Z")
+
+
+def _valid_correlation_id(value: Any) -> bool:
+    return type(value) is str and _CORRELATION_ID.fullmatch(value) is not None
 
 
 MAX_AGE_SECONDS = 10.0
@@ -383,6 +389,10 @@ class LiveMioModelLane:
                             raise RuntimeError("accepted_frame_unavailable")
                         advisory = fast.get("advisory")
                         if (not isinstance(advisory, Mapping)
+                                or not _valid_correlation_id(frame_payload.get("frame_id"))
+                                or not _valid_correlation_id(frame_payload.get("trace_id"))
+                                or not _valid_correlation_id(advisory.get("frame_id"))
+                                or not _valid_correlation_id(advisory.get("trace_id"))
                                 or frame_payload.get("frame_id") != advisory.get("frame_id")
                                 or frame_payload.get("trace_id") != advisory.get("trace_id")):
                             # Bind the fetched frame to the verified fast advisory before any
@@ -466,7 +476,10 @@ class LiveMioModelLane:
                             **({"validation_diagnostic": diagnostic} if (diagnostic :=
                                 bounded_validation_diagnostic(model_result.get("validation_diagnostic"))) else {}),
                         }
-                        if model_result.get("frame_id") != frame_payload.get("frame_id") or model_result.get("trace_id") != frame_payload.get("trace_id"):
+                        if (not _valid_correlation_id(model_result.get("frame_id"))
+                                or not _valid_correlation_id(model_result.get("trace_id"))
+                                or model_result.get("frame_id") != frame_payload.get("frame_id")
+                                or model_result.get("trace_id") != frame_payload.get("trace_id")):
                             usage = bounded_usage(result)
                             usage["prompt_tokens"] = min(usage["prompt_tokens"], 100_000)
                             usage["completion_tokens"] = min(usage["completion_tokens"], 100_000)

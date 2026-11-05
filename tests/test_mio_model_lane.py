@@ -210,6 +210,27 @@ def test_model_lane_rejects_frame_snapshot_not_bound_to_verified_advisory():
     assert analyzed == [] and audited == []
 
 
+@pytest.mark.parametrize("identity,binding_key", [("frame_id", "frame_id"), ("trace_id", "mio_trace_id")])
+def test_model_lane_rejects_matching_but_missing_correlation_identity(identity, binding_key):
+    fast = _fast()
+    fast["advisory"][identity] = None
+    fast["handoff_binding"][binding_key] = None
+    calls = {"analyze": [], "audit": []}
+    frame = {"frame_id": "frame-abc", "trace_id": "trace-abc"}
+    frame[identity] = None
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {},
+        fast_snapshot=lambda: fast,
+        frame_snapshot=lambda generation: frame,
+        audit_result=lambda trace_id, result: calls["audit"].append((trace_id, result)))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert calls == {"analyze": [], "audit": []}
+
+
 def test_model_lane_retains_bounded_usage_when_analyzed_frame_binding_is_rejected():
     audited = []
     def analyzed(_frame, _remaining):
