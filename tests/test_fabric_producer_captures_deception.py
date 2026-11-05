@@ -24,8 +24,11 @@ unclassified):
 * The engagement model (`engagement_advisory_client`) has captures only from
   Edge (product="edge"), none from Deception, so it is out of scope here.
 
-Captures exist from Fabric v0.10.0rc1; the pinned v0.9.0 has none, so this
-file skips there. That is development-time coverage until the pin moves.
+Captures exist from Fabric v0.10.0rc1, the tag `requirements/fabric.txt`
+pins, so with the Fabric extra installed this file runs. It skips only when
+Fabric is not installed (the extra is optional) or when the installed Fabric
+predates the pin; the second case is a wrong install, which
+`test_fabric_pin_integrity.py` reports as a failure.
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ _testing = pytest.importorskip(
 )
 if not hasattr(_testing, "producer_capture_names"):
     pytest.skip(
-        "producer captures arrive in Fabric v0.10.0rc1; the installed Fabric has none",
+        "the installed Fabric predates v0.10.0rc1 (the pin) and has no producer captures",
         allow_module_level=True,
     )
 
