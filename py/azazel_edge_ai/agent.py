@@ -2813,6 +2813,7 @@ def _production_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: fl
 LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_production_mio_model_analyze,
                                        audit_result=lambda trace_id, result: _audit_mio_model_result(trace_id, result),
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
+                                       current_fast_generation=LIVE_MIO_AUXILIARY.current_generation,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
                                        authorize=_authorize_mio_model_event)
 

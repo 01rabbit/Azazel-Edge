@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import logging
 import queue
 import re
 import threading
@@ -32,6 +33,7 @@ def _valid_correlation_id(value: Any) -> bool:
 
 MAX_AGE_SECONDS = 10.0
 MAX_DIAGNOSTICS = 64
+logger = logging.getLogger(__name__)
 _ALTERNATIVE_ROLES = {
     "credential_attack": "hostile", "misconfigured_automation": "benign",
     "reconnaissance": "hostile", "inventory_monitoring": "benign",
@@ -231,6 +233,7 @@ class LiveMioModelLane:
 
     def __init__(self, *, enabled: bool, analyze: Callable[[dict[str, Any], float], Mapping[str, Any]],
                  fast_snapshot: Callable[[], Mapping[str, Any]],
+                 current_fast_generation: Callable[[], Any] | None = None,
                  frame_snapshot: Callable[[Any], Mapping[str, Any] | None] | None = None,
                  authorize: Callable[[Mapping[str, Any]], tuple[bool, str]] | None = None,
                  max_age_seconds: float = MAX_AGE_SECONDS,
@@ -243,6 +246,7 @@ class LiveMioModelLane:
         self.max_age_seconds = max(0.1, min(float(max_age_seconds), MAX_AGE_SECONDS))
         self._analyze = analyze
         self._fast_snapshot = fast_snapshot
+        self._current_fast_generation = current_fast_generation
         self._frame_snapshot = frame_snapshot
         self._authorize = authorize
         self._queue: queue.Queue[tuple[float, int, str, dict[str, Any], str]] = queue.Queue(maxsize=1)
@@ -261,8 +265,18 @@ class LiveMioModelLane:
         with self._lock:
             result = json.loads(json.dumps(self._result))
             result["diagnostic_count"] = len(self._diagnostics)
-            result["is_current"] = (result.get("status") in {"complete", "partial"}
+            lane_current = (result.get("status") in {"complete", "partial"}
                 and str(result.get("generation") or "") == str(self._generation))
+            fast_current = (self._fast_generation_is_current(str(result.get("fast_generation") or ""))
+                if lane_current and self._current_fast_generation is not None else True)
+            result["is_current"] = lane_current and fast_current
+            if lane_current and not fast_current:
+                generation, trace_id = result.get("generation"), result.get("trace_id")
+                result = _empty("degraded", "superseded")
+                result.update(bounded_usage(self._result))
+                result.update({"generation": generation, "trace_id": trace_id,
+                    "authority": "read_only_advisory", "label": "Measured model analysis (advisory)",
+                    "diagnostic_count": len(self._diagnostics), "is_current": False})
             return result
 
     def diagnostics(self) -> list[dict[str, Any]]:
@@ -275,6 +289,9 @@ class LiveMioModelLane:
             if self._async_generation == 0 or self._async_generation != self._generation:
                 return ""
             if self._result.get("status") in {"starting", "queued"}:
+                return ""
+            if (self._current_fast_generation is not None
+                    and not self._fast_generation_is_current(str(self._result.get("fast_generation") or ""))):
                 return ""
             return str(self._async_generation)
 
@@ -319,6 +336,14 @@ class LiveMioModelLane:
         with self._lock:
             self._diagnostics.append(record)
             del self._diagnostics[:-MAX_DIAGNOSTICS]
+
+    def _fast_generation_is_current(self, expected: str) -> bool:
+        try:
+            if self._current_fast_generation is not None:
+                return str(self._current_fast_generation()) == expected
+            return str(self._fast_snapshot().get("generation") or "") == expected
+        except Exception:
+            return False
 
     def _run(self) -> None:
         while True:
@@ -400,7 +425,7 @@ class LiveMioModelLane:
                             # model call or result-audit adoption can occur.
                             raise MioModelFailure("frame_binding_rejected", {})
                         stale_check = lambda: (generation != self._generation or
-                            str(self._fast_snapshot().get("generation") or "") != fast_generation)
+                            not self._fast_generation_is_current(fast_generation))
                         if stale_check():
                             raise TimeoutError("superseded")
                         try:
@@ -506,24 +531,26 @@ class LiveMioModelLane:
                         result = _empty("degraded", "model_error")
                         result["duration_ms"] = min(elapsed, 600_000)
                 fresh_before_audit = False
+                audit_succeeded = False
+                audited_status = "unknown"
+                audit_compensation_failed = False
+                audit_trace = (source_trace_id or str(result.get("frame_trace_id") or "")[:96]
+                               or str((fast or {}).get("trace_id") or "")[:96])
                 if audit_pending and self._audit_result is not None:
-                    audit_trace = (source_trace_id or str(result.get("frame_trace_id") or "")[:96]
-                                   or str((fast or {}).get("trace_id") or "")[:96])
                     # A failing snapshot means freshness cannot be verified: treat as stale.
                     with self._lock:
-                        try:
-                            fresh_before_audit = (generation == self._generation and
-                                str(self._fast_snapshot().get("generation") or "") == fast_generation)
-                        except Exception:
-                            fresh_before_audit = False
+                        fresh_before_audit = (generation == self._generation and
+                            self._fast_generation_is_current(fast_generation))
                     if not fresh_before_audit:
                         usage = bounded_usage(result)
                         result = _empty("degraded", "superseded")
                         result.update(usage)
+                    audited_status = str(result.get("status") or "unknown")
                     try:
                         # Durable audit I/O may fsync or wait on another process. Never
                         # hold the lane lock across this callback.
                         self._audit_result(audit_trace, result)
+                        audit_succeeded = True
                     except Exception:
                         if fresh_before_audit:
                             usage = bounded_usage(result)
@@ -534,13 +561,8 @@ class LiveMioModelLane:
                     # The audit can take long enough for a newer event to supersede this
                     # result. Recheck after the callback and never publish stale output.
                     current_generation = generation == self._generation
-                    fresh_after_audit = True
-                    if current_generation and audit_pending:
-                        try:
-                            fresh_after_audit = (str(self._fast_snapshot().get("generation") or "")
-                                                 == fast_generation)
-                        except Exception:
-                            fresh_after_audit = False
+                    fresh_after_audit = (self._fast_generation_is_current(fast_generation)
+                                         if current_generation and audit_pending else True)
                     if current_generation:
                         if not fresh_after_audit:
                             usage = bounded_usage(result)
@@ -557,9 +579,23 @@ class LiveMioModelLane:
                         usage = bounded_usage(result)
                         result = _empty("degraded", "superseded")
                         result.update(usage)
-                self._record({key: result.get(key) for key in (
+                # An adopted audit may race with a newer fast generation while its
+                # durable write is in progress. Record the final superseded outcome
+                # after the post-audit check; never hold the lane lock for this write.
+                if (audit_succeeded and audited_status == "complete"
+                        and (not current_generation or not fresh_after_audit)):
+                    superseded = _empty("degraded", "superseded")
+                    superseded.update(bounded_usage(result))
+                    try:
+                        self._audit_result(audit_trace, superseded)
+                    except Exception:
+                        audit_compensation_failed = True
+                        logger.warning("superseded mio model audit compensation failed")
+                record = {key: result.get(key) for key in (
                     "generation", "trace_id", "model", "duration_ms", "load_duration_ms",
                     "prompt_tokens", "completion_tokens", "request_count", "metered_request_count",
-                    "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")})
+                    "truncated_count", "call_timings", "usage_status", "outcome", "status", "reason")}
+                record["audit_compensation_failed"] = audit_compensation_failed
+                self._record(record)
             finally:
                 self._queue.task_done()

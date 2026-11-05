@@ -714,13 +714,16 @@ def test_production_lane_newer_submit_is_not_blocked_by_durable_audit(monkeypatc
     lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
     in_audit, release, audit_finished = threading.Event(), threading.Event(), threading.Event()
     order = []
+    audit_decisions = []
 
     def audit(trace_id, result):
         in_audit.set()
         assert release.wait(2)
         agent._audit_mio_model_result(trace_id, result)
         order.append("audited")
-        audit_finished.set()
+        audit_decisions.append(result["status"])
+        if len(audit_decisions) == 2:
+            audit_finished.set()
     lane._audit_result = audit
     lane.submit("1", "tr", source_trace_id="tr")
     assert in_audit.wait(2)
@@ -740,10 +743,72 @@ def test_production_lane_newer_submit_is_not_blocked_by_durable_audit(monkeypatc
     release.set()
     thread.join(2)
     assert audit_finished.wait(2)
-    assert order == ["submitted", "audited"]
-    assert _decisions(log) == ["adopted"]
+    assert order == ["submitted", "audited", "audited"]
+    assert audit_decisions == ["complete", "degraded"]
+    assert _decisions(log) == ["adopted", "degraded"]
     snapshot = lane.snapshot()
     assert snapshot["generation"] == "2" and snapshot["status"] != "complete"
+
+
+def test_fast_generation_change_during_durable_audit_is_compensated(monkeypatch, tmp_path):
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    state = {"generation": "1"}
+    lane._fast_snapshot = lambda: _bound_fast(state["generation"], "tr", "f", "tr")
+    original_audit = lane._audit_result
+    audited_statuses = []
+
+    def audit(trace_id, result):
+        original_audit(trace_id, result)
+        audited_statuses.append(result["status"])
+        if result["status"] == "complete":
+            state["generation"] = "2"  # supersede while the durable audit is in progress
+
+    lane._audit_result = audit
+    lane.submit("1", "tr", source_trace_id="tr")
+    result = _wait_terminal(lane)
+    assert result["status"] == "degraded" and result["reason"] == "superseded"
+    assert audited_statuses == ["complete", "degraded"]
+    assert _decisions(log) == ["adopted", "degraded"]
+
+
+def test_fast_generation_change_after_finalize_is_hidden_from_snapshots(monkeypatch, tmp_path):
+    from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+
+    generation = {"value": "1"}
+    lane = LiveMioModelLane(enabled=True, analyze=lambda *_args: dict(_GOOD),
+        fast_snapshot=lambda: _bound_fast(generation["value"], "tr", "f", "tr"),
+        current_fast_generation=lambda: generation["value"], frame_snapshot=lambda _g: _FRAME)
+    lane.submit("1", "tr")
+    assert _wait_terminal(lane)["status"] == "complete"
+    assert lane.completed_async_generation() == "1"
+    generation["value"] = "2"
+    snapshot = lane.snapshot()
+    assert snapshot["status"] == "degraded" and snapshot["reason"] == "superseded"
+    assert snapshot["summary"] == "" and snapshot["is_current"] is False
+    assert lane.completed_async_generation() == ""
+
+
+def test_compensation_failure_is_visible_in_lane_diagnostics(monkeypatch, tmp_path):
+    lane, log = _production_lane(monkeypatch, tmp_path, _GOOD)
+    state = {"generation": "1"}
+    lane._fast_snapshot = lambda: _bound_fast(state["generation"], "tr", "f", "tr")
+    original_audit = lane._audit_result
+    calls = []
+
+    def audit(trace_id, result):
+        calls.append(result["status"])
+        if len(calls) == 1:
+            original_audit(trace_id, result)
+            state["generation"] = "2"
+        else:
+            raise OSError("synthetic compensation failure")
+
+    lane._audit_result = audit
+    lane.submit("1", "tr", source_trace_id="tr")
+    assert _wait_terminal(lane)["reason"] == "superseded"
+    assert calls == ["complete", "degraded"]
+    assert lane.diagnostics()[-1]["audit_compensation_failed"] is True
+    assert _decisions(log) == ["adopted"]
 
 
 def test_production_lane_fast_generation_change_audits_superseded_degraded(monkeypatch, tmp_path):
@@ -759,6 +824,34 @@ def test_production_lane_fast_generation_change_audits_superseded_degraded(monke
     result = _wait_terminal(lane)
     assert result["status"] == "degraded"
     assert _decisions(log) == ["degraded"]
+
+
+def test_stale_check_uses_lightweight_generation_accessor_not_snapshot(monkeypatch, tmp_path):
+    import threading
+    from azazel_edge_ai.mio_model_lane import LiveMioModelLane
+
+    snapshot_calls = []
+    generation = {"value": 1}
+    entered = threading.Event()
+    checked = threading.Event()
+
+    def fast_snapshot():
+        snapshot_calls.append(True)
+        return _bound_fast("1", "tr", "f", "tr")
+
+    def analyze(_payload, _remaining, stale_check):
+        entered.set()
+        generation["value"] = 2
+        assert stale_check() is True
+        checked.set()
+        return dict(_GOOD)
+
+    lane = LiveMioModelLane(enabled=True, analyze=analyze, fast_snapshot=fast_snapshot,
+        current_fast_generation=lambda: generation["value"], frame_snapshot=lambda _g: _FRAME)
+    lane.submit("1", "tr")
+    assert entered.wait(1) and checked.wait(1)
+    assert _wait_terminal(lane)["reason"] == "superseded"
+    assert len(snapshot_calls) == 1  # model cancellation did not deep-copy another snapshot
 
 
 def test_production_lane_audit_failure_prevents_complete_publication(monkeypatch, tmp_path):

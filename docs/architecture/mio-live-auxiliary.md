@@ -128,24 +128,26 @@ Failure isolation and audit degradation:
   without raising before the audit record is written. `record_structured_result`
   applies the same rule to a present value (exact int 0..4, else persisted as 4);
   a missing value is omitted.
-- Audit follows the final accepted result: in the production lane the success
-  audit is written by `LiveMioModelLane` after the stale check and frame/trace
-  binding check, from the final result (so a binding rejection audits as
+- Audit follows the lane's accepted analysis result: in the production lane the
+  result is audited outside `LiveMioModelLane._lock`, after the pre-audit stale
+  check and frame/trace binding check (so a binding rejection audits as
   `degraded`). `usage_status` is recomputed from normalized counts, never copied
-  from the analyzer. Finalization runs entirely under `LiveMioModelLane._lock`:
-  re-check the generation and the current fast generation, audit the final
-  result, then publish it before releasing the lock. If either freshness check
-  changed, a `degraded` `superseded` result is audited instead and is not
-  published as complete. If the audit raises, only a `degraded` result with an
-  empty summary and bounded usage metrics is published. There is no compensating
-  or adopted-then-degraded record. Only post-authorization analysis attempts use
+  from the analyzer. If a newer generation arrives while a complete-result
+  audit is being durably written, the lane does not publish the stale result and
+  writes a compensating `degraded` `superseded` record. Here `adopted` means the
+  lane accepted the result for publication when its audit began; it does not
+  prove that a UI or operator observed it. The compensation write is best effort
+  and emits a fixed warning plus a lane diagnostic if it fails. Snapshots also
+  suppress a completed result if the fast generation changes immediately after
+  the finalization check. If the initial audit raises, only a
+  `degraded` result with an empty summary and bounded usage metrics is published.
+  Only post-authorization analysis attempts use
   the output callback. Pre-analysis paths (fast result unavailable, pre-analysis
   deadline, frame unavailable, stale-before-analysis) do not; governance denial is
-  recorded by the input authorization audit instead.
-  Tradeoff: finalization holds `LiveMioModelLane._lock` while the durable
-  result-audit write runs, so both `submit` and `snapshot` may briefly wait on
-  that audit I/O. This is required to serialize final adoption with generation
-  advancement. The deterministic Edge action path is unchanged.
+  recorded by the input authorization audit instead. Final freshness checks use
+  the auxiliary lane's cheap generation accessor rather than deep-copying its
+  full JSON snapshot on each model-cancellation poll. The deterministic Edge
+  action path is unchanged.
 - Allowlisted durable `knowledge_status`: the governed audit record persists
   `knowledge_status` only when it is a string in the fixed Knowledge status
   vocabulary. Any other value is dropped and never echoed into the audit payload.
