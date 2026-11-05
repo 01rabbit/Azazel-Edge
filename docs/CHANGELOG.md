@@ -57,7 +57,7 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The Edge #538 candidate pins M.I.O. at immutable PR #47 head
   `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`, package version
-  `0.1.0.dev20261105+gite639a65`, matching Nexus #402. It includes the #43
+  `0.1.0.dev20261105+gite639a65`, matching public MIO PR #47. It includes the #43
   defensive-state validation, #44's developer-only local model smoke tool,
   #45's bounded measured transport and #47's advisory projection API. Edge's
   model lane keeps its existing transport, authorization, token/load

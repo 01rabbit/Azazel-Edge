@@ -6,7 +6,7 @@ Pillow>=10,<12
 requests>=2.32,<3
 PyYAML>=6,<7
 # Shared M.I.O. core and advisory projection API: immutable Draft-candidate pin.
-# This uses the same source/package identity as Nexus #402; it is not a release.
+# This uses the public MIO #47 source/package identity; it is not a release.
 azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
 # (Every Fabric integration point is a guarded no-op without the package, so the

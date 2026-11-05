@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO PR #47 head `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`, package version `0.1.0.dev20261105+gite639a65`. This is the same MIO source/package identity pinned by Nexus #402; it is a development candidate, not a release. The MIO projection source was independently reviewed and tested at parent `e639a659991f370e9be4f6b9533e16c702912a09`; the later commit changes only package metadata. This document does not claim release or deployment.
+Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO PR #47 head `1ba191b4daa8b3edd8bcd6ee6517a1b31a982c85`, package version `0.1.0.dev20261105+gite639a65`. This is a development candidate, not a release. The MIO projection source was independently reviewed and tested at parent `e639a659991f370e9be4f6b9533e16c702912a09`; the later commit changes only package metadata. This document does not claim release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
