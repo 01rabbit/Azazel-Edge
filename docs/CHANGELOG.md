@@ -53,6 +53,45 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     role is refused with `role_unknown`; registrations without a role are
     unchanged. Nothing reads the role to decide, authorize or enforce.
 
+### Changed
+
+- Update the optional Azazel-Fabric integration pin from the candidate
+  `v0.10.0rc1` to the stable `v0.10.0` (annotated tag, commit
+  `397fcce7a87ca7ab1a5e84bc196c44d70c404907`, digest
+  `sha256:d789f27464114bf29bbdc64fcc515cdbdfc02903a0b42af4de3dc707446e302f`;
+  the signature is inside the tag's tree). Fabric's `src/` differs from rc1
+  only in `version.py`, so the contract surface is unchanged; this meets the
+  rc1 pin's leaving condition. The producer-capture tests keep running on it.
+  This optional dependency change does not change the Edge product version or
+  create a release.
+- Update the optional Azazel-Fabric integration pin from the stable `v0.9.0`
+  to the candidate `v0.10.0rc1` (annotated tag, commit
+  `36db04412679e2694d697595cbf913d0bfc72019`, digest
+  `sha256:114402979360855ccaeb92fcc1851db1b03572a289c43e3591633f263b7559eb`;
+  the signature is inside the tag's tree). rc1 is additive over `v0.9.0`: the
+  four stable families are unchanged, so the contract surface Edge uses is the
+  same. A candidate is pinned because rc1 is the first tag carrying the
+  producer captures (`azazel_fabric.testing`, Fabric#23) that Edge's consumer
+  tests read; the pin moves to `v0.10.0` when it is cut. This optional
+  dependency change does not change the Edge product version or create a
+  release.
+- Update the optional Azazel-Fabric integration pin from `v0.9.0rc6` to the
+  stable `v0.9.0` (annotated tag, commit
+  `ee2ab8cf5173b5967481d2452dfd5fd8cf76ade6`, digest
+  `sha256:5107054682802f1e615615d0de51471859014d31a8808b61d8cbf6c16b27dbf4`).
+  Fabric's `src/` differs from rc6 only in `version.py`, so the contract
+  surface is the same as rc6; the signature is inside the tag's tree. The
+  stable release does not claim an aggregate attestation or golden-fixture
+  interoperability. This optional dependency change does not change the Edge
+  product version or create a release.
+- Update the optional Azazel-Fabric integration pin from `v0.9.0rc4` to
+  `v0.9.0rc6` (tag commit `023381371b56b3883a89a28a69625ddb87742f2e`). rc6 is
+  not additive over rc5 (Fabric#65 trailing newline in typed refs, digests and
+  MACs; Fabric#23 directive walker depth limit 32; Fabric#72 observation
+  objective ref kinds). Edge produces none of these. This optional prerelease
+  dependency change does not change the Edge product version or create a
+  release.
+
 ### Fixed
 
 - The Edge #538 candidate pins M.I.O. at immutable PR #47 head
