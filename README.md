@@ -35,13 +35,13 @@ For safe checkout checks, see [Development Verification](#development-verificati
 | Rust core (`rust/azazel-edge-core`, `azazel-edge-core.service`) | The live decision and enforcement path. It reads Suricata EVE, selects the action (`decide_defense()`), and applies it only when enforcement is enabled (`maybe_enforce()`). It releases leases on expiry. |
 | Python `ActionArbiter` (`py/azazel_edge/arbiter/`) | A deterministic decision record for scenario replay, benchmarks and the SOC policy dry run. No running service applies its output. |
 | AI agent (`azazel-edge-ai-agent.service`, `py/azazel_edge_ai/`) | Receives each event after the core has decided. It records the decision, computes the tactical score and second-pass SOC evaluation, and writes advisory text. It cannot change the action. |
-| Shared M.I.O. package (`azazel_mio`) | When explicitly enabled, the AI agent uses the pinned shared `AssistantCore` for post-decision advisory analysis. The current source pin is commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`, not a public MIO release. Its output cannot change Edge's action. |
+| Shared M.I.O. package (`azazel_mio`) | If installed, the AI agent uses the pinned shared `AssistantCore` without a model for bounded post-decision advisory analysis. The current source pin is commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`, not a public MIO release. Its output cannot change Edge's action. |
 | Edge-local M.I.O. modules (`py/azazel_edge/mio/`) | Shadow, replay, and evaluation tools only; no systemd unit starts these local modules. They are distinct from the shared `azazel_mio` package. Their recommendations are never executable. |
 | Control daemon and Web UI | Display, operator controls and fixed control actions. The core never reads their state. |
 
 Automatic actions can observe, notify and apply temporary flow-scoped throttling. Redirection to a prepared decoy is allowed in `semi-auto` only when high-impact automation is enabled, and in `full-auto`. `isolate` is not an automatic action.
 
-The shared M.I.O. package is used from the post-decision AI-agent path only when `AZAZEL_MIO_MODEL_ENABLED=1`; the shipped default is disabled. The separate Knowledge Context lane also requires `AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED=1` and is disabled by default. A package pin or producer-capture fixture does not establish end-to-end Knowledge producer interoperability.
+The live agent submits the shared no-model M.I.O. advisory by default when the package is importable. `AZAZEL_MIO_MODEL_ENABLED=1` separately enables the local-model lane; it is disabled by default. The separate Knowledge Context lane also requires `AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED=1` and is disabled by default. A package pin or producer-capture fixture does not establish end-to-end Knowledge producer interoperability.
 
 Full authority matrix: [M.I.O. Cognitive Plane](docs/architecture/mio-cognitive-plane.md).
 
