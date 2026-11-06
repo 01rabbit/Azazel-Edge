@@ -1,9 +1,12 @@
 """Complete ordered-result parity for the optional MIO shadow kernel.
 
-Run with a reviewed Azazel-MIO source checkout on PYTHONPATH.
+Only the parity tests (marked requires_mio) need a reviewed Azazel-MIO source
+checkout on PYTHONPATH; the fallback tests run without it.
 """
-import builtins
+import importlib.abc
+import importlib.machinery
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +14,14 @@ import pytest
 from azazel_edge.tactics_engine.eve_parser import EVEParser
 from azazel_edge.tactics_engine.scorer import TacticalScorer, DECEPTION_SIDS
 
-pytest.importorskip("azazel_mio.fast_assessment", reason="optional pinned MIO source required")
+try:
+    import azazel_mio.fast_assessment  # noqa: F401
+    MIO_AVAILABLE = True
+except Exception:
+    MIO_AVAILABLE = False
+
+requires_mio = pytest.mark.skipif(
+    not MIO_AVAILABLE, reason="optional pinned MIO source required")
 
 CORPUS = Path(__file__).parent / "corpus"
 
@@ -24,6 +34,7 @@ def assert_parity(features):
     }
 
 
+@requires_mio
 @pytest.mark.parametrize("path", sorted(CORPUS.glob("*.jsonl")), ids=lambda p: p.stem)
 def test_all_supported_corpus_rows(path):
     parser = EVEParser()
@@ -38,6 +49,7 @@ def test_all_supported_corpus_rows(path):
     assert compared > 0
 
 
+@requires_mio
 @pytest.mark.parametrize("severity", [1, 2, 3, 4, 0, -1, 5, "bad", None])
 @pytest.mark.parametrize("features", [
     {},
@@ -54,6 +66,7 @@ def test_normalization_and_corner_boundaries(severity, features, port, action):
                    "target_port": port, "suricata_action": action})
 
 
+@requires_mio
 def test_shadow_failure_or_mismatch_never_replaces_edge_result():
     from azazel_mio.fast_assessment import FastAssessment
     features = {"suricata_sid": 9901251, "suricata_sev": 2, "target_port": 443}
@@ -66,12 +79,58 @@ def test_shadow_failure_or_mismatch_never_replaces_edge_result():
         result = TacticalScorer().score(features)
         assert (result.score, result.factors) == expected
         assert result.shadow["status"] == "degraded"
-    original_import = builtins.__import__
-    def missing(name, *args, **kwargs):
-        if name == "azazel_mio.fast_assessment":
-            raise ImportError("optional package absent")
-        return original_import(name, *args, **kwargs)
-    with patch("builtins.__import__", side_effect=missing):
-        result = TacticalScorer().score(features)
+
+
+class MissingPackageFinder(importlib.abc.MetaPathFinder):
+    """Make azazel_mio (and its submodules) look uninstalled, regardless of PYTHONPATH."""
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "azazel_mio" or fullname.startswith("azazel_mio."):
+            raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
+        return None
+
+
+def test_shadow_package_unavailable_falls_back_to_edge_result():
+    features = {"suricata_sid": 9901251, "suricata_sev": 2, "target_port": 443}
+    expected = TacticalScorer().score_with_features(features)
+    with patch.dict(sys.modules):
+        sys.modules.pop("azazel_mio", None)
+        sys.modules.pop("azazel_mio.fast_assessment", None)
+        with patch("sys.meta_path", [MissingPackageFinder(), *sys.meta_path]):
+            result = TacticalScorer().score(features)
         assert (result.score, result.factors) == expected
+        assert result.source == "edge_local"
         assert result.shadow["status"] == "unavailable"
+        assert result.shadow["reason"] == "package_unavailable"
+
+
+def test_shadow_failed_package_initialization_falls_back_to_edge_result():
+    features = {"suricata_sid": 9901251, "suricata_sev": 2, "target_port": 443}
+    expected = TacticalScorer().score_with_features(features)
+
+    class FailingPackageLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            raise RuntimeError("initialization failed")
+
+    class FailingPackageFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "azazel_mio":
+                return importlib.machinery.ModuleSpec(
+                    fullname, FailingPackageLoader(), is_package=True)
+            return None
+
+    # Exercise importlib's package initialization without creating files in the checkout.
+    with patch.dict(sys.modules):
+        sys.modules.pop("azazel_mio", None)
+        sys.modules.pop("azazel_mio.fast_assessment", None)
+        with patch("sys.meta_path", [FailingPackageFinder(), *sys.meta_path]):
+            result = TacticalScorer().score(features)
+        assert (result.score, result.factors) == expected
+        assert result.source == "edge_local"
+        assert result.shadow == {
+            "authority": "comparison_only", "mode": "shadow",
+            "status": "degraded", "reason": "import_failed",
+        }

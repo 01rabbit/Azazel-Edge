@@ -1,6 +1,6 @@
 # Live M.I.O. auxiliary path
 
-Status: branch preparation. The shared M.I.O. source is publicly available at immutable commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`. This document does not claim any release or deployment.
+Status: Draft PR #538 candidate. Its shared M.I.O. dependency is pinned to immutable MIO PR #47 head `a1807bf7abb08788b834ae038f7a8b46d09d0acc`, package version `0.1.0.dev20261106+gitbb6dcfd`. This is a development candidate, not a release. The implementation source is `bb6dcfd…`; metadata commit `a1807bf…` applies the unique PEP 440 development identity. The exact wheel hash/build inputs are recorded in the PR evidence. This document does not claim release or deployment.
 
 Canonical M.I.O. authority and data-flow architecture: [M.I.O. Cognitive Plane](mio-cognitive-plane.md).
 
@@ -70,7 +70,7 @@ with their own clock against `max_age_seconds` and must not treat a stored
 `is_current: true` as still fresh.
 
 The runtime dependency is declared in `requirements/runtime.txt` using an
-immutable Git commit pin. The pinned source, `9fedb01bc9936531407a5181aa8fa5553ec19d55`,
+immutable Git commit pin. The pinned source `a1807bf7abb08788b834ae038f7a8b46d09d0acc`
 is publicly available; this branch does not vendor the package. If the
 package is absent at runtime, the guarded adapter reports `package_unavailable`
 and Edge continues its existing behavior. The fast adapter itself supplies no
@@ -97,13 +97,25 @@ model identity, duration, load duration, prompt/completion token counts, outcome
 and status; prompts, full completion bodies, request bodies, and raw exception
 text are not logged.
 
+At this candidate, Edge wraps the existing product-owned `StructuredTransport`
+with MIO #45 `MeasuredTransport`, allowing only the four reasoning task labels
+(`generate_hypotheses`, `identify_evidence_gaps`, `update_hypotheses`,
+`recommend`). Each bounded lane result and diagnostic may carry at most four
+task timings with elapsed nanoseconds and success/failure only. The durable
+governance audit uses its existing closed metadata schema and does not persist
+these timings. Edge continues to own endpoint authorization, deadlines, Ollama
+transport, token counts, model
+load duration, truncation and usage completeness. Timing records contain no
+prompt, response, exception text or model-authored labels; they are diagnostic
+only and do not change MIO result acceptance or Edge decisions.
+
 The model snapshot optionally carries M.I.O.'s `validation_diagnostic` with
 exactly `stage` and `rejection_class`. Edge accepts only the closed M.I.O.
 vocabulary with strict string types and omits malformed diagnostics, including
 objects with extra keys. It never forwards raw validation errors, trace details,
 or model-authored identifiers through this field. Existing generic status,
 reason, and advisory authority remain unchanged. The immutable dependency pin
-is the public M.I.O. source commit `9fedb01bc9936531407a5181aa8fa5553ec19d55`.
+is the public M.I.O. source commit `a1807bf7abb08788b834ae038f7a8b46d09d0acc`.
 
 Failure isolation and audit degradation:
 
@@ -116,24 +128,26 @@ Failure isolation and audit degradation:
   without raising before the audit record is written. `record_structured_result`
   applies the same rule to a present value (exact int 0..4, else persisted as 4);
   a missing value is omitted.
-- Audit follows the final accepted result: in the production lane the success
-  audit is written by `LiveMioModelLane` after the stale check and frame/trace
-  binding check, from the final result (so a binding rejection audits as
+- Audit follows the lane's accepted analysis result: in the production lane the
+  result is audited outside `LiveMioModelLane._lock`, after the pre-audit stale
+  check and frame/trace binding check (so a binding rejection audits as
   `degraded`). `usage_status` is recomputed from normalized counts, never copied
-  from the analyzer. Finalization runs entirely under `LiveMioModelLane._lock`:
-  re-check the generation and the current fast generation, audit the final
-  result, then publish it before releasing the lock. If either freshness check
-  changed, a `degraded` `superseded` result is audited instead and is not
-  published as complete. If the audit raises, only a `degraded` result with an
-  empty summary and bounded usage metrics is published. There is no compensating
-  or adopted-then-degraded record. Only post-authorization analysis attempts use
+  from the analyzer. If a newer generation arrives while a complete-result
+  audit is being durably written, the lane does not publish the stale result and
+  writes a compensating `degraded` `superseded` record. Here `adopted` means the
+  lane accepted the result for publication when its audit began; it does not
+  prove that a UI or operator observed it. The compensation write is best effort
+  and emits a fixed warning plus a lane diagnostic if it fails. Snapshots also
+  suppress a completed result if the fast generation changes immediately after
+  the finalization check. If the initial audit raises, only a
+  `degraded` result with an empty summary and bounded usage metrics is published.
+  Only post-authorization analysis attempts use
   the output callback. Pre-analysis paths (fast result unavailable, pre-analysis
   deadline, frame unavailable, stale-before-analysis) do not; governance denial is
-  recorded by the input authorization audit instead.
-  Tradeoff: finalization holds `LiveMioModelLane._lock` while the durable
-  result-audit write runs, so both `submit` and `snapshot` may briefly wait on
-  that audit I/O. This is required to serialize final adoption with generation
-  advancement. The deterministic Edge action path is unchanged.
+  recorded by the input authorization audit instead. Final freshness checks use
+  the auxiliary lane's cheap generation accessor rather than deep-copying its
+  full JSON snapshot on each model-cancellation poll. The deterministic Edge
+  action path is unchanged.
 - Allowlisted durable `knowledge_status`: the governed audit record persists
   `knowledge_status` only when it is a string in the fixed Knowledge status
   vocabulary. Any other value is dropped and never echoed into the audit payload.

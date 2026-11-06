@@ -3,10 +3,18 @@
 The [cognitive-plane authority matrix](mio-cognitive-plane.md) remains authoritative.
 
 This local candidate follows Edge #525 head `80445737f2ae6df2cae3bcdd7e79176352dffe24`
-and uses the M.I.O. source pin `9fedb01bc9936531407a5181aa8fa5553ec19d55`, which is
-publicly available at that immutable commit. This is a candidate, not a release or
-deployment claim. No installation, service configuration, credential provisioning
-or production deployment is included.
+and uses the M.I.O. source pin `b441d431532507387fb81f1e03e31fd1aea57b68`,
+which is publicly available at that immutable commit. MIO PR #41 selected
+package version `0.1.0+git.c31c244` as a unique PEP 440 local version for its
+integration wheel; this is not a public release. This is a candidate, not a
+release or deployment claim. No installation, service configuration,
+credential provisioning or production deployment is included.
+
+This remains a historical Edge #525 / MIO `b441d43` evidence snapshot. The
+current Edge #538 candidate pins MIO PR #47 head
+`a1807bf7abb08788b834ae038f7a8b46d09d0acc`, package version
+`0.1.0.dev20261106+gitbb6dcfd`. The process evidence below is for the older
+MIO source and is not reused as evidence for the current pin.
 
 A separate latest-only Knowledge worker can make one authenticated
 `POST /v1/context` request on its own ten-second deadline. Ordinary event intake
@@ -116,3 +124,43 @@ matches and exact/near-miss mappings, traverses the independent Knowledge worker
 pinned MIO projection with the model opt-in disabled, and checks bounded status and
 absence of raw IOC/token output. This is synthetic local integration evidence;
 it does not establish production credentials, deployment or remote TLS readiness.
+
+Optional local model lane (default off): set `EDGE_TEST_MIO_OLLAMA=1` and
+`EDGE_TEST_OLLAMA_MODEL=<exact-installed-tag>` alongside the two source exports
+above, then run:
+
+```sh
+PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_knowledge_slow_lane.py -k actual_knowledge_process
+```
+
+Before starting Knowledge or running baselines, the test reads `/api/tags` from
+local Ollama at `127.0.0.1:11434` and requires an exact installed tag. Model
+calls use the fixed loopback endpoint and `/api/chat`; this test does not install
+or pull a model. Without the opt-in flag, the ordinary Edge handler is asserted
+disabled with zero model HTTP submissions.
+
+The model-enabled handler is polled for at most 12 seconds and its child process
+has a 16-second timeout; baseline children have 6- and 12-second limits. A model
+that is not complete, metered and untruncated within those limits fails this
+opt-in test. The test intercepts each attempted model HTTP request before
+submission and checks its serialized JSON for the QUERY token and synthetic IPs
+or subnet values; it also requires positive prompt/completion token counts and
+elapsed time. Final assertions bind Knowledge and the model lane's
+`fast_generation` / `frame_generation` to the generation and trace in Edge's
+persisted MIO handoff; the MIO frame ID and trace must match the model result.
+The independent workers are
+checked at their final projected/complete states; the test makes no claim about
+which poll first observed them. Edge score and comparison fields must match the
+model-disabled run.
+
+The child audit hook is a best-effort test guard: it rejects `open` calls that
+request writes outside the run's temporary directory, limits socket connections
+to approved numeric loopback ports or UNIX sockets under the run directory, and
+blocks common Python subprocess, fork and exec audit events plus
+`sendto`/`sendmsg` UDP sends. It does not mediate every filesystem operation and
+is not a general-purpose sandbox. The test does not retain raw prompt or raw completion
+text; bounded, validated MIO result fields remain in pytest's temporary snapshot
+and child result. It checks the QUERY token in produced artifacts and the
+synthetic source marker in scanned logs. It does not claim every Edge event or
+advisory artifact omits synthetic IPs. This is synthetic local advisory evidence;
+it is not full-node Nexus authentication, production readiness or HG evidence.

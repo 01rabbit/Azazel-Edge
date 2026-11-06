@@ -94,6 +94,22 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The Edge #538 candidate pins M.I.O. at immutable PR #47 head
+  `a1807bf7abb08788b834ae038f7a8b46d09d0acc`, package version
+  `0.1.0.dev20261106+gitbb6dcfd`, matching the current public MIO #47 candidate.
+  The exact wheel built from that commit is recorded in the PR evidence. Edge's
+  model lane keeps its product-owned transport, authorization, token/load
+  measurements and decision authority. No Edge version or release was created.
+- The optional MIO fast-score comparison now degrades if package initialization
+  raises a non-`ImportError` exception, while Edge's local score and factors
+  remain authoritative. A genuinely absent package keeps its existing
+  `unavailable` status. No decision or enforcement behavior changes (PR #538).
+- The optional M.I.O. model lane now requires an explicitly current, same-event
+  Edge handoff and a frame bound to that handoff before analysis. The operator
+  projection suppresses model prose when generation, frame or trace no longer
+  matches the current fast result. Edge decision and enforcement authority are
+  unchanged (PR #538).
+
 - SENTINEL surfaces that showed green or a made-up value when their input was
   absent now show unknown (Edge#348): the NOC path strip's Clients and
   Azazel-Edge hops, the NOC runtime meters (`—` with no queue or LLM health),

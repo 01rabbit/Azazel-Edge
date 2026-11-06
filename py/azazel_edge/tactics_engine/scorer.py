@@ -247,6 +247,9 @@ class TacticalScorer:
             from azazel_mio.fast_assessment import FastAssessmentInput, PortSignal, assess_fast
         except ImportError:
             shadow.update(status="unavailable", reason="package_unavailable")
+        except Exception:
+            # A broken optional package must not take down Edge's local score.
+            shadow.update(status="degraded", reason="import_failed")
         else:
             try:
                 comparison = assess_fast(FastAssessmentInput(

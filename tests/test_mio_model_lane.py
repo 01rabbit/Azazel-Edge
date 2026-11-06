@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import copy
 import time
+
+import pytest
 
 from azazel_edge_ai.mio_model_lane import LiveMioModelLane, bounded_truncated_count, bounded_usage
 
+_EVENT_KEY = "a1b2c3d4e5f60718293a4b5c"
 
-def _fast(generation="7"):
+
+def _fast(generation="7", trace_id="trace-abc", *, mio_trace_id=None, frame_id="frame-abc"):
+    """A complete fast envelope whose handoff_binding is the producer's valid same-envelope binding."""
     return {
         "status": "complete", "generation": generation, "is_current": True,
-        "trace_id": "trace-abc", "knowledge": {"status": "absent"},
-        "advisory": {"summary": "Static summary", "hypotheses": [{"statement": "possible probe"}],
+        "trace_id": trace_id, "knowledge": {"status": "absent"},
+        "edge_event": {"action": "notify", "mode": "dry_run", "result": "planned_not_applied",
+                       "trace_id": trace_id},
+        "source_context": {"event_key": _EVENT_KEY},
+        "handoff_binding": {"status": "matched", "valid": True, "generation": generation,
+            "event_key": _EVENT_KEY, "edge_trace_id": trace_id, "edge_action": "notify",
+            "edge_mode": "dry_run", "edge_result": "planned_not_applied",
+            "mio_trace_id": mio_trace_id or trace_id, "frame_id": frame_id},
+        "advisory": {"trace_id": mio_trace_id or trace_id, "frame_id": frame_id, "summary": "Static summary",
+                     "hypotheses": [{"statement": "possible probe"}],
                      "next_checks": [{"check": "review logs"}]},
     }
 
@@ -164,6 +178,264 @@ def test_model_lane_discards_fast_result_from_a_superseded_generation():
     result = _wait(lane, "degraded")
     assert result["reason"] == "fast_result_unavailable"
     assert calls == []
+
+
+def test_slow_result_audit_does_not_hold_lane_lock_or_publish_after_supersede():
+    import threading
+
+    audit_entered = threading.Event()
+    release_first_audit = threading.Event()
+    second_analysis_entered = threading.Event()
+    release_second_analysis = threading.Event()
+    audit_results = []
+    analysis_count = 0
+
+    def analyze(payload, _remaining):
+        nonlocal analysis_count
+        analysis_count += 1
+        if analysis_count == 2:
+            second_analysis_entered.set()
+            assert release_second_analysis.wait(1)
+        return {
+            "summary": "bounded advisory", "model": "fixture", "frame_id": payload["frame_id"],
+            "trace_id": payload["trace_id"], "mio_state": "complete",
+            "generation_method": "model", "outcome": "completed", "truncated_count": 0,
+        }
+
+    def audit(_trace_id, result):
+        audit_results.append(dict(result))
+        if len(audit_results) == 1:
+            audit_entered.set()
+            assert release_first_audit.wait(1)
+
+    lane = LiveMioModelLane(
+        enabled=True,
+        analyze=analyze,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {
+            "frame_id": "frame-abc", "trace_id": "trace-abc", "evidence_refs": [],
+        },
+        audit_result=audit,
+    )
+    lane.submit("7", "trace-abc")
+    assert audit_entered.wait(1)
+
+    started = time.monotonic()
+    queued = lane.submit("7", "trace-abc")
+    submit_elapsed = time.monotonic() - started
+    assert submit_elapsed < 0.1
+    assert queued["status"] == "queued" and queued["generation"] == "2"
+    release_first_audit.set()
+
+    assert second_analysis_entered.wait(1)
+    # The first result was audited while it was current, but never became the
+    # visible result after submit() advanced the lane generation.
+    current = lane.snapshot()
+    assert current["status"] == "queued" and current["generation"] == "2"
+    assert audit_results[0]["status"] == "complete"
+    release_second_analysis.set()
+    result = _wait(lane, "complete")
+    assert result["generation"] == "2"
+
+
+def test_model_lane_rejects_completed_fast_snapshot_without_explicit_current_marker():
+    calls = {"authorize": [], "analyze": [], "audit": []}
+    fast = _fast()
+    fast.pop("is_current")
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {},
+        fast_snapshot=lambda: fast,
+        authorize=lambda payload: calls["authorize"].append(payload) or (True, "allowed"),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "fast_result_unavailable"
+    assert calls == {"authorize": [], "analyze": [], "audit": []}
+
+
+def test_model_lane_rejects_frame_snapshot_not_bound_to_verified_advisory():
+    authorized, analyzed, audited = [], [], []
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: analyzed.append(payload) or {},
+        fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "other-frame", "trace_id": "trace-abc"},
+        authorize=lambda payload: authorized.append(payload) or (True, "allowed"),
+        audit_result=lambda trace_id, result: audited.append((trace_id, result)))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "frame_binding_rejected"
+    assert len(authorized) == 1
+    assert analyzed == [] and audited == []
+
+
+@pytest.mark.parametrize("identity,binding_key", [("frame_id", "frame_id"), ("trace_id", "mio_trace_id")])
+def test_model_lane_rejects_matching_but_missing_correlation_identity(identity, binding_key):
+    fast = _fast()
+    fast["advisory"][identity] = None
+    fast["handoff_binding"][binding_key] = None
+    calls = {"analyze": [], "audit": []}
+    frame = {"frame_id": "frame-abc", "trace_id": "trace-abc"}
+    frame[identity] = None
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {},
+        fast_snapshot=lambda: fast,
+        frame_snapshot=lambda generation: frame,
+        audit_result=lambda trace_id, result: calls["audit"].append((trace_id, result)))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert calls == {"analyze": [], "audit": []}
+
+
+def test_model_lane_retains_bounded_usage_when_analyzed_frame_binding_is_rejected():
+    audited = []
+    def analyzed(_frame, _remaining):
+        time.sleep(0.005)
+        return {
+            "frame_id": "wrong-frame", "trace_id": "trace-abc", "model": "qwen3.5:0.8b",
+            "request_count": 2, "metered_request_count": 1,
+            "prompt_tokens": 37, "completion_tokens": 11, "load_duration_ms": 5,
+            "truncated_count": 1,
+            "call_timings": [{"task": "recommend", "elapsed_ns": 1234, "outcome": "failure",
+                              "prompt": "private"}],
+            "summary": "private completion", "unknowns": ["private unknown"],
+        }
+    lane = LiveMioModelLane(enabled=True,
+        analyze=analyzed,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        audit_result=lambda _trace, result: audited.append(result))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["status"] == "degraded"
+    assert result["request_count"] == 2 and result["metered_request_count"] == 1
+    assert result["prompt_tokens"] == 37 and result["completion_tokens"] == 11
+    assert result["load_duration_ms"] == 5 and 0 < result["duration_ms"] <= 600_000
+    assert result["call_timings"] == [{"task": "recommend", "elapsed_ns": 1234, "outcome": "failure"}]
+    assert result["truncated_count"] == 1 and result["usage_status"] == "partial"
+    assert "unknowns" not in result
+    for key in ("summary", "hypotheses", "next_checks", "uncertainties", "frame_id", "frame_trace_id"):
+        assert result.get(key, "") in ("", [])
+    assert result["model"] == "qwen3.5:0.8b"
+    import json
+    assert "private" not in json.dumps(result)
+    assert len(audited) == 1
+    assert audited[0]["reason"] == result["reason"]
+    assert audited[0]["call_timings"] == result["call_timings"]
+    assert audited[0]["prompt_tokens"] == result["prompt_tokens"]
+    assert "private" not in json.dumps(audited[0])
+
+
+@pytest.mark.parametrize("identity", ["frame_id", "trace_id"])
+@pytest.mark.parametrize("invalid_value", [None, ""])
+def test_analyzed_result_with_missing_or_empty_correlation_id_is_degraded(identity, invalid_value):
+    analyzed_result = {"frame_id": "frame-abc", "trace_id": "trace-abc",
+                       "summary": "must not be adopted", "outcome": "completed",
+                       "mio_state": "complete", "generation_method": "model"}
+    analyzed_result[identity] = invalid_value
+    audited = []
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda _payload, _remaining: analyzed_result,
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        audit_result=lambda trace_id, result: audited.append((trace_id, result)))
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["summary"] == ""
+    assert audited and audited[0][1]["reason"] == "frame_binding_rejected"
+
+
+def test_frame_binding_rejection_usage_matches_normal_token_caps():
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda _frame, _remaining: {
+            "frame_id": "wrong-frame", "trace_id": "trace-abc", "model": "fixture",
+            "request_count": 1, "metered_request_count": 1,
+            "prompt_tokens": 150_000, "completion_tokens": 120_000,
+            "truncated_count": 0,
+        },
+        fast_snapshot=_fast,
+        frame_snapshot=lambda _generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"})
+
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+
+    assert result["reason"] == "frame_binding_rejected"
+    assert result["prompt_tokens"] == 100_000
+    assert result["completion_tokens"] == 100_000
+
+
+def _unbound(mutate):
+    fast = _fast()
+    mutate(fast)
+    return fast
+
+
+def _without_binding(fast):
+    fast.pop("handoff_binding")
+
+
+def _invalid_marker(fast):
+    fast["handoff_binding"]["valid"] = False
+
+
+def _string_marker(fast):
+    fast["handoff_binding"]["valid"] = "True"
+
+
+def _missing_marker(fast):
+    fast["handoff_binding"].pop("valid")
+
+
+def _edge_trace_mismatch(fast):
+    fast["handoff_binding"]["edge_trace_id"] = "other-trace"
+
+
+def _mio_frame_mismatch(fast):
+    fast["handoff_binding"]["frame_id"] = "frame-other"
+
+
+def _reduced_binding(fast):
+    fast["handoff_binding"] = {"valid": True}
+
+
+@pytest.mark.parametrize("mutate", [_without_binding, _invalid_marker, _string_marker,
+    _missing_marker, _edge_trace_mismatch, _mio_frame_mismatch, _reduced_binding])
+def test_unbound_or_reduced_fast_envelope_never_reaches_authorize_analyze_or_audit(mutate):
+    calls = {"authorize": [], "analyze": [], "audit": []}
+    fast = _unbound(mutate)
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls["analyze"].append(payload) or {"summary": "must not surface"},
+        fast_snapshot=lambda: copy.deepcopy(fast),
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        authorize=lambda payload: calls["authorize"].append(payload) or (True, ""),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    result = _wait(lane, "degraded")
+    assert result["reason"] == "fast_binding_unverified"
+    assert result["summary"] == ""
+    assert calls == {"authorize": [], "analyze": [], "audit": []}
+
+
+def test_matching_fast_envelope_proceeds_through_authorize_analyze_and_audit():
+    calls = {"authorize": 0, "analyze": 0, "audit": []}
+    lane = LiveMioModelLane(enabled=True,
+        analyze=lambda payload, remaining: calls.__setitem__("analyze", calls["analyze"] + 1) or {"summary": ""},
+        fast_snapshot=_fast,
+        frame_snapshot=lambda generation: {"frame_id": "frame-abc", "trace_id": "trace-abc"},
+        authorize=lambda payload: calls.__setitem__("authorize", calls["authorize"] + 1) or (True, ""),
+        audit_result=lambda trace_id, result: calls["audit"].append(trace_id))
+    lane.submit("7", "trace-abc")
+    _wait(lane, "degraded")
+    assert calls["authorize"] == 1 and calls["analyze"] == 1
+    assert calls["audit"] == ["trace-abc"]
 
 
 def test_model_error_is_degraded_without_persisting_raw_exception_text():
@@ -390,13 +662,14 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
                 "prompt_tokens": 11, "completion_tokens": 5}
     monkeypatch.setattr(agent, "_ollama_chat", fake_chat)
 
+    audit_records = []
     class Governance:
         def record_structured_result(self, **kwargs):
+            audit_records.append(kwargs)
             return True
     monkeypatch.setattr(agent, "AI_GOVERNANCE", Governance())
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "19", "is_current": True,
-                              "trace_id": "external-trace"},
+        fast_snapshot=lambda: _fast("19", "external-trace", mio_trace_id="trace-current", frame_id="frame-current"),
         frame_snapshot=lambda generation: frame)
     lane.submit("19", "external-trace")
     result = _wait(lane, "complete")
@@ -415,6 +688,13 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
     assert result["model"] == "fixture-model"
     assert result["prompt_tokens"] == 33 and result["completion_tokens"] == 15
     assert result["load_duration_ms"] == 21
+    assert result["usage_status"] == "complete"
+    assert [item["task"] for item in result["call_timings"]] == [item[0] for item in calls]
+    assert all(item["elapsed_ns"] >= 0 and item["outcome"] == "success"
+               for item in result["call_timings"])
+    # The durable governance schema has a closed metadata allowlist and does
+    # not persist task timings; they remain in the bounded lane result only.
+    assert "call_timings" not in audit_records[0]["metadata"]
     assert result["summary"] == "Shared M.I.O. analysis completed; hypotheses remain unverified."
     assert len(result["hypotheses"]) == 2
     assert [item["statement"] for item in result["hypotheses"]] == [
@@ -427,6 +707,41 @@ def test_valid_fake_transport_runs_full_shared_core_and_lane_preserves_validatio
     assert result["unknowns"][0] == "LIVE_ADAPTER_CONTEXT_LIMITED"
     assert len(result["unknowns"]) <= 12
     assert "action" not in result and "enforcement" not in result
+
+
+def test_malformed_unknowns_are_omitted_from_both_operator_views(monkeypatch):
+    import azazel_mio.assistant as mio_assistant
+    from azazel_edge_ai import agent
+
+    frame = {
+        "schema_version": "mio.situation_frame.v2", "frame_id": "frame-current",
+        "trace_id": "trace-current", "created_at": "2026-11-01T00:00:00Z",
+        "mission": "Provide a read-only explanation of this accepted Edge event.",
+        "current_defensive_state": "NOTIFY", "threat_level": "HIGH",
+        "noc_summary": "No NOC evaluation supplied to this bounded live adapter.",
+        "soc_summary": "Edge tactical scorer derived risk score: 72",
+        "known_facts": ["Observed Suricata SID: 42"], "unknowns": ["LIVE_ADAPTER_CONTEXT_LIMITED"],
+        "contradictions": [], "evidence_refs": ["suricata_sid:42"], "knowledge_refs": [],
+        "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"known_facts": ["caller"], "evidence_refs": ["caller"]},
+        "freshness_seconds": 0, "truncated": False, "actors": [], "actions": [],
+        "deception_context": None,
+    }
+    class Assistance:
+        def to_dict(self):
+            return {"generation_method": "model", "state": "complete",
+                    "unknowns": ["", "valid-looking but mixed with malformed item"],
+                    "summary": "bounded test result", "hypotheses": [], "next_checks": []}
+    class Core:
+        def __init__(self, model):
+            self.model = model
+        def explain(self, *_args, **_kwargs):
+            return Assistance()
+    monkeypatch.setattr(mio_assistant, "AssistantCore", Core)
+
+    result = agent._analyze_mio_fast_result(frame, 1.0)
+    assert "unknowns" not in result and "unknowns_total" not in result
+    assert result["uncertainties"] == []
 
 
 def test_reviewed_qwen_overclaim_is_replaced_by_frame_only_fallback_and_refs_stay_scoped():
@@ -522,7 +837,7 @@ def test_truncated_outer_usage_is_counted_once_and_core_error_fallback_is_partia
              (1421, 8, 1_409_958, "stop"),
              (1467, 384, 1_592_167, "length")]
     requests = []
-    def fake_post(_target, path, body, _timeout, deadline_monotonic=None):
+    def fake_post(_target, path, body, _timeout, deadline_monotonic=None, cancel_check=None):
         assert path == "/api/chat"
         request = json.loads(body)
         prompt = request["messages"][1]["content"]
@@ -553,8 +868,7 @@ def test_truncated_outer_usage_is_counted_once_and_core_error_fallback_is_partia
     monkeypatch.setattr(agent, "AI_GOVERNANCE", governance)
 
     lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-        fast_snapshot=lambda: {"status": "complete", "generation": "1", "is_current": True,
-                              "trace_id": "external-trace"},
+        fast_snapshot=lambda: _fast("1", "external-trace", mio_trace_id="trace-telemetry", frame_id="frame-telemetry"),
         frame_snapshot=lambda _generation: frame)
     lane.submit("1", "external-trace")
     result = _wait(lane, "partial")
@@ -742,7 +1056,8 @@ def _real_adapter_with_blocking_fake_core():
 
 def _accepted_event(trace):
     return {"normalized": {"event_type": "alert", "sid": 42},
-            "defense": {"action": "notify"}, "enforcement": {"trace_id": trace}}
+            "defense": {"action": "notify"}, "enforcement": {
+                "trace_id": trace, "mode": "dry_run", "result": "planned_not_applied"}}
 
 
 def test_real_auxiliary_pending_generation_waits_for_matching_fast_completion():
@@ -830,6 +1145,108 @@ def test_real_auxiliary_new_event_supersedes_old_slow_generation():
     assert adapter.snapshot()["generation"] == "2"
 
 
+def test_supersede_cancels_inflight_loopback_model_request_and_next_generation_runs():
+    import http.server
+    import threading
+    from azazel_edge_ai import agent
+
+    first_request_entered = threading.Event()
+    release_first_handler = threading.Event()
+    request_lock = threading.Lock()
+    request_count = 0
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            nonlocal request_count
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            with request_lock:
+                request_count += 1
+                number = request_count
+            if number == 1:
+                first_request_entered.set()
+                release_first_handler.wait(3)
+            body = b"{}"
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                # The first client is expected to close its socket on supersede.
+                pass
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serve_thread.start()
+    target = ("http", "127.0.0.1", ("127.0.0.1",), server.server_address[1], "")
+    fast = {"value": _fast("7", "trace-old", frame_id="frame-old")}
+    old_call_cancelled = threading.Event()
+    audited = []
+
+    def analyze(payload, remaining, stale_check):
+        try:
+            agent._post_to_llm_endpoint(
+                target, "/api/chat", b"{}", timeout_sec=remaining,
+                cancel_check=stale_check,
+            )
+        except TimeoutError:
+            if payload["frame_id"] == "frame-old" and stale_check():
+                old_call_cancelled.set()
+                return {
+                    "model": "fixture", "request_count": 1, "metered_request_count": 0,
+                    "unknown_usage_request_count": 1, "prompt_tokens": 0,
+                    "completion_tokens": 0, "truncated_count": 0,
+                    "call_timings": [{"task": "recommend", "elapsed_ns": 10_000,
+                                      "outcome": "failure"}],
+                    "outcome": "superseded", "mio_state": "error_fallback",
+                    "generation_method": "static_reference", "frame_id": payload["frame_id"],
+                    "trace_id": payload["trace_id"],
+                }
+            raise
+        return {
+            "summary": "current advisory", "model": "fixture",
+            "frame_id": payload["frame_id"], "trace_id": payload["trace_id"],
+            "mio_state": "complete", "generation_method": "model",
+            "outcome": "completed", "truncated_count": 0,
+            "request_count": 1, "metered_request_count": 1,
+        }
+
+    lane = LiveMioModelLane(
+        enabled=True, analyze=analyze, fast_snapshot=lambda: fast["value"],
+        frame_snapshot=lambda generation: {
+            "frame_id": "frame-old" if generation == "7" else "frame-new",
+            "trace_id": "trace-old" if generation == "7" else "trace-new",
+            "evidence_refs": [],
+        },
+        max_age_seconds=2,
+        audit_result=lambda _trace_id, result: audited.append(dict(result)),
+    )
+    try:
+        lane.submit("7", "trace-old")
+        assert first_request_entered.wait(1)
+        fast["value"] = _fast("8", "trace-new", frame_id="frame-new")
+        lane.submit("8", "trace-new")
+
+        assert old_call_cancelled.wait(0.5)
+        result = _wait(lane, "complete", timeout=1)
+        assert result["generation"] == "2"
+        assert result["frame_generation"] == "8"
+        assert request_count == 2
+        superseded = next(item for item in audited if item.get("reason") == "superseded")
+        assert superseded["request_count"] == 1
+        assert superseded["unknown_usage_request_count"] == 1
+        assert superseded["call_timings"][0]["outcome"] == "failure"
+    finally:
+        release_first_handler.set()
+        server.shutdown()
+        server.server_close()
+        serve_thread.join(timeout=1)
+
+
 def test_lane_skips_both_legacy_llm_and_ops_coach_queued_requests():
     from azazel_edge_ai import agent
 
@@ -851,11 +1268,13 @@ def test_accrued_failure_metrics_survive_governance_and_worker(monkeypatch):
         def fail(*args):
             raise MioModelFailure(reason, {"model": "fixture", "request_count": 2,
                 "metered_request_count": 1, "prompt_tokens": 37, "completion_tokens": 11,
+                "call_timings": [{"task": "recommend", "elapsed_ns": 1234,
+                                  "outcome": "failure", "prompt": "private prompt"}],
                 "summary": "private completion", "prompt": "private prompt"})
         monkeypatch.setattr(agent, "_analyze_mio_fast_result", fail)
         monkeypatch.setattr(agent, "_audit_mio_model_result", lambda trace, result: audits.append(result))
         lane = LiveMioModelLane(enabled=True, analyze=agent._governed_mio_model_analyze,
-            fast_snapshot=_fast, frame_snapshot=lambda _: {"trace_id": "trace-abc"})
+            fast_snapshot=_fast, frame_snapshot=lambda _: {"frame_id": "frame-abc", "trace_id": "trace-abc"})
         lane.submit("7", "trace-abc")
         result = _wait(lane, "degraded")
         assert result["reason"] == reason
@@ -865,6 +1284,8 @@ def test_accrued_failure_metrics_survive_governance_and_worker(monkeypatch):
             assert measured["prompt_tokens"] == 37
             assert measured["completion_tokens"] == 11
             assert measured["model"] == "fixture"
+            assert measured["call_timings"] == [{"task": "recommend", "elapsed_ns": 1234,
+                                                   "outcome": "failure"}]
             assert "private" not in json.dumps(measured)
         assert result["unknown_usage_request_count"] == 1
         assert result["summary"] == ""
@@ -910,7 +1331,7 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
         def explain(self, frame, **kwargs):
             assert kwargs.get("knowledge_attempted") is False
             # Exercise the real transport metadata callback before core failure.
-            self.model("hypotheses", "private request")
+            self.model("generate_hypotheses", "private request")
             raise failure
         def chat(*args, **kwargs):
             kwargs["metadata_callback"]({"model": "fixture", "prompt_tokens": 17,
@@ -926,7 +1347,72 @@ def test_analyzer_preserves_outer_usage_when_core_or_deadline_fails(monkeypatch)
         assert caught.value.metrics["prompt_tokens"] == 17
         assert caught.value.metrics["completion_tokens"] == 9
         assert caught.value.metrics["model"] == "fixture"
+        assert len(caught.value.metrics["call_timings"]) == 1
+        timing = caught.value.metrics["call_timings"][0]
+        assert timing["task"] == "generate_hypotheses"
+        assert timing["elapsed_ns"] >= 0 and timing["outcome"] == "success"
         assert caught.value.reason == ("deadline_exceeded" if isinstance(failure, TimeoutError) else "model_error")
+
+
+def test_measured_mio_transport_retains_failure_timing_without_payload(monkeypatch):
+    import json
+    import pytest
+    from azazel_edge_ai import agent
+    from azazel_edge_ai.mio_model_lane import MioModelFailure
+    from azazel_mio.assistant import AssistantCore
+
+    frame = {
+        "schema_version": "mio.situation_frame.v2", "frame_id": "frame-current",
+        "trace_id": "trace-current", "created_at": "2026-11-01T00:00:00Z",
+        "mission": "Provide a read-only explanation of this accepted Edge event.",
+        "current_defensive_state": "NOTIFY", "threat_level": "HIGH",
+        "noc_summary": "No NOC evaluation supplied to this bounded live adapter.",
+        "soc_summary": "Edge tactical scorer derived risk score: 72",
+        "known_facts": ["Observed Suricata SID: 42"], "unknowns": ["LIVE_ADAPTER_CONTEXT_LIMITED"],
+        "contradictions": [], "evidence_refs": ["suricata_sid:42"], "knowledge_refs": [],
+        "knowledge_status": "not_provided", "deception_status": "not_provided",
+        "provenance": {"known_facts": ["caller"], "evidence_refs": ["caller"]},
+        "freshness_seconds": 0, "truncated": False, "actors": [], "actions": [],
+        "deception_context": None,
+    }
+
+    def fail_explain(self, _frame, **_kwargs):
+        self.model("recommend", "private prompt")
+
+    def fail_chat(*_args, **_kwargs):
+        raise RuntimeError("private model response")
+
+    monkeypatch.setattr(AssistantCore, "explain", fail_explain)
+    monkeypatch.setattr(agent, "_ollama_chat", fail_chat)
+    import azazel_mio.playbook as playbook
+    monkeypatch.setattr(playbook, "compiled_model_response_schema", lambda *_args: {})
+
+    with pytest.raises(MioModelFailure) as caught:
+        agent._analyze_mio_fast_result(frame, 1.0)
+
+    timings = caught.value.metrics["call_timings"]
+    assert len(timings) == 1
+    assert timings[0]["task"] == "recommend"
+    assert timings[0]["elapsed_ns"] >= 0
+    assert timings[0]["outcome"] == "failure"
+    assert "private" not in json.dumps(timings)
+
+
+def test_bounded_call_timings_clamps_and_drops_untrusted_fields():
+    from azazel_edge_ai.mio_model_lane import bounded_call_timings, bounded_usage
+
+    values = [
+        {"task": "recommend", "elapsed_ns": 99_000_000_000, "outcome": "success",
+         "prompt": "private prompt", "response": "private completion"},
+        {"task": "private_task", "elapsed_ns": 1, "outcome": "success"},
+        {"task": "generate_hypotheses", "elapsed_ns": True, "outcome": "success"},
+        {"task": "identify_evidence_gaps", "elapsed_ns": 10, "outcome": "private error"},
+    ]
+    expected = [{"task": "recommend", "elapsed_ns": 10_000_000_000,
+                 "outcome": "success"}]
+    assert bounded_call_timings(values) == expected
+    assert bounded_usage({"request_count": 1, "metered_request_count": 1,
+                          "usage_status": "unknown", "call_timings": values})["call_timings"] == expected
 
 
 def test_validation_diagnostic_closed_vocabulary_and_strict_shape():

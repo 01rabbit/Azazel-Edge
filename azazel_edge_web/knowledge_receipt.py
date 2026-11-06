@@ -140,9 +140,41 @@ def _display_advisory(value):
     return result
 
 
-def _display_model(value):
+_MODEL_PROSE_KEYS = frozenset(('summary', 'hypotheses', 'next_checks', 'unknowns', 'unknowns_total', 'uncertainties',
+    'frame_id', 'trace_id', 'generation_method'))
+
+
+def _model_is_current(value, payload):
+    """Model prose is current only for the outer generation and the current advisory frame/trace."""
+    advisory = payload.get('advisory')
+    if value.get('is_current') is not True or not isinstance(advisory, dict):
+        return False
+    generation = payload.get('generation')
+    if type(generation) is not str or value.get('fast_generation') != generation:
+        return False
+    for key in ('frame_id', 'trace_id'):
+        current = advisory.get(key)
+        if type(current) is not str or not current or value.get(key) != current:
+            return False
+    return True
+
+
+def _display_model(value, payload):
     if type(value) is not dict:
         return None
+    result = _display_model_fields(value)
+    # Status-only states (disabled/queued/unavailable) carry no current model
+    # prose; preserve their established projection. Completed model results
+    # must satisfy the full outer-envelope binding before any prose is shown.
+    has_prose = any(key in result for key in _MODEL_PROSE_KEYS)
+    if (value.get('status') in {'complete', 'partial'} or value.get('is_current') is True or has_prose) and not _model_is_current(value, payload):
+        # Stale or unbound model prose must never read as current: keep only status and metrics.
+        result = {key: item for key, item in result.items() if key not in _MODEL_PROSE_KEYS}
+        result['is_current'] = False
+    return result
+
+
+def _display_model_fields(value):
     result = {}
     text_fields = {'schema_version': 48, 'status': 24,
         'summary': 480, 'mio_state': 48, 'model': 96, 'usage_status': 16,
@@ -164,7 +196,7 @@ def _display_model(value):
         number = value.get(key)
         if type(number) is int and 0 <= number <= cap:
             result[key] = number
-    for key, count, size in (('hypotheses', 4, 360), ('next_checks', 4, 200), ('unknowns', 12, 160), ('uncertainties', 3, 100)):
+    for key, count, size in (('hypotheses', 4, 360), ('next_checks', 4, 200), ('uncertainties', 3, 100)):
         raw = value.get(key)
         if type(raw) is list:
             items = []
@@ -173,6 +205,18 @@ def _display_model(value):
                 if text is not None:
                     items.append({'statement': text} if key == 'hypotheses' else text)
             result[key] = items
+    # Explicit [] means none reported. Non-list, non-string, or safety/length-rejected
+    # items must not read as "no gap", so the whole key is omitted in those cases.
+    raw_unknowns = value.get('unknowns')
+    if type(raw_unknowns) is list and len(raw_unknowns) <= 100:
+        texts = [_text(item, 160) for item in raw_unknowns[:12]]
+        total = value.get('unknowns_total')
+        if total is None and len(raw_unknowns) < 12 and 'unknowns_total' not in value:
+            total = len(raw_unknowns)
+        if (all(text is not None for text in texts) and type(total) is int
+                and len(raw_unknowns) <= total <= 100):
+            result['unknowns'] = texts
+            result['unknowns_total'] = total
     return result
 
 
@@ -237,11 +281,14 @@ def _display_payload(payload):
                     'already_held', 'applied', 'failed', 'uncertain'}:
                 binding['edge_result'] = raw_binding['edge_result']
             result['handoff_binding'] = binding
-    for key, project in (('advisory', _display_advisory), ('model_analysis', _display_model)):
-        if key in payload:
-            value = project(payload.get(key))
-            if value is not None:
-                result[key] = value
+    if 'advisory' in payload:
+        value = _display_advisory(payload.get('advisory'))
+        if value is not None:
+            result['advisory'] = value
+    if 'model_analysis' in payload:
+        value = _display_model(payload.get('model_analysis'), payload)
+        if value is not None:
+            result['model_analysis'] = value
     if 'knowledge' in payload:
         raw = payload.get('knowledge')
         if type(raw) is dict and _text(raw.get('status'), 32) is not None:

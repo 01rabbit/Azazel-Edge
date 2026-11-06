@@ -33,8 +33,9 @@ from azazel_edge.decision_layers import DecisionLayers
 from azazel_edge.ai_governance import AIGovernance
 from azazel_edge_ai.mio_live_auxiliary import LiveMioAuxiliary, MAX_RESULT_BYTES
 from azazel_edge_ai.mio_knowledge_lane import LiveMioKnowledgeLane
-from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_truncated_count,
-                                           bounded_usage, bounded_validation_diagnostic)
+from azazel_edge_ai.mio_model_lane import (LiveMioModelLane, MioModelFailure, bounded_call_timings,
+                                           bounded_truncated_count, bounded_usage,
+                                           bounded_validation_diagnostic)
 from azazel_edge.tactics_engine import ConfigHash, DecisionLogger, TacticalScorer
 from azazel_edge.tactics_engine.decision_logger import (
     ChosenAction,
@@ -2222,6 +2223,7 @@ class _PinnedHTTPSConnection(_DeadlineAwareConnection, http.client.HTTPSConnecti
 def _post_to_llm_endpoint(
     target: tuple[str, str, tuple[str, ...], int, str], path: str, body: bytes, timeout_sec: float,
     deadline_monotonic: float | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> bytes:
     scheme, server_name, addresses, port, base = target
     if deadline_monotonic is not None:
@@ -2252,6 +2254,36 @@ def _post_to_llm_endpoint(
             except OSError:
                 pass
 
+    cancelled = threading.Event()
+    cancel_monitor_stop = threading.Event()
+
+    def is_cancelled() -> bool:
+        if cancel_check is None:
+            return False
+        try:
+            return bool(cancel_check())
+        except Exception:
+            # A failed freshness check cannot authorize a late model result.
+            return True
+
+    def watch_cancellation() -> None:
+        while not cancel_monitor_stop.wait(0.02):
+            if is_cancelled():
+                cancelled.set()
+                expire_connection()
+                # During connect(), conn.sock may not be installed yet. Keep watching
+                # until it appears so a superseded TLS/HTTP request is still closed.
+                if conn.sock is not None:
+                    return
+
+    if is_cancelled():
+        raise TimeoutError("llm_request_superseded")
+    cancel_monitor: threading.Thread | None = None
+    if cancel_check is not None:
+        cancel_monitor = threading.Thread(target=watch_cancellation,
+                                          name="mio-model-cancel-watch", daemon=True)
+        cancel_monitor.start()
+
     timer: threading.Timer | None = None
     if deadline_monotonic is not None:
         timer = threading.Timer(max(0.0, deadline_monotonic - time.monotonic()), expire_connection)
@@ -2260,6 +2292,10 @@ def _post_to_llm_endpoint(
     try:
         conn.request("POST", base + path, body=body,
                      headers={"Content-Type": "application/json", "Host": host_header})
+        if cancelled.is_set() or is_cancelled():
+            cancelled.set()
+            expire_connection()
+            raise TimeoutError("llm_request_superseded")
         if deadline_monotonic is not None and conn.sock is not None:
             conn._set_remaining_timeout(conn.sock)
         resp = conn.getresponse()
@@ -2282,11 +2318,21 @@ def _post_to_llm_endpoint(
                     break
                 chunks.extend(block)
             data = bytes(chunks)
+        if cancelled.is_set() or is_cancelled():
+            cancelled.set()
+            expire_connection()
+            raise TimeoutError("llm_request_superseded")
     except (OSError, http.client.HTTPException) as exc:
+        if cancelled.is_set() or is_cancelled():
+            cancelled.set()
+            raise TimeoutError("llm_request_superseded") from None
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise TimeoutError("llm_deadline_exceeded") from None
         raise
     finally:
+        cancel_monitor_stop.set()
+        if cancel_monitor is not None:
+            cancel_monitor.join(timeout=0.1)
         if timer is not None:
             timer.cancel()
         conn.close()
@@ -2355,6 +2401,7 @@ def _ollama_chat(
     user_content: str | None = None,
     strict_object_decode: bool = False,
     metadata_callback: Callable[[Dict[str, Any]], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> Dict[str, Any]:
     req_body = {
         "model": model,
@@ -2378,8 +2425,11 @@ def _ollama_chat(
     # carries attacker-influenced EVE fields, so it only goes to loopback.
     target = target_override if target_override is not None else _llm_endpoint_target()
     raw = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
+    post_options = {"deadline_monotonic": deadline_monotonic}
+    if cancel_check is not None:
+        post_options["cancel_check"] = cancel_check
     data = json.loads(_post_to_llm_endpoint(target, "/api/chat", raw, timeout_sec,
-                                            deadline_monotonic=deadline_monotonic).decode("utf-8", errors="replace"))
+                                            **post_options).decode("utf-8", errors="replace"))
     # Capture only bounded outer-response measurements before strict inner
     # completion decoding. A truncated or invalid completion still consumed
     # prompt/completion tokens, but its text is never retained here.
@@ -2467,13 +2517,15 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     """Run the exact shared reasoning path over the accepted frame."""
     from azazel_mio.assistant import AssistantCore
     from azazel_mio.contracts import MioSituationFrame
+    from azazel_mio.model_adapter import MeasuredTransport
     from azazel_mio.playbook import compiled_model_response_schema
 
     started = time.monotonic()
     deadline = started + min(MIO_MODEL_TIMEOUT_SEC, max(0.0, float(remaining_seconds)))
     metrics = {"model": "", "request_count": 0, "metered_request_count": 0,
                "unknown_usage_request_count": 0, "truncated_count": 0,
-               "load_duration_ms": 0, "prompt_tokens": 0, "completion_tokens": 0}
+               "load_duration_ms": 0, "prompt_tokens": 0, "completion_tokens": 0,
+               "call_timings": []}
 
     def record_outer_metadata(metadata: Dict[str, Any]) -> None:
         metrics["model"] = str(metadata.get("model") or metrics["model"])[:96]
@@ -2512,7 +2564,8 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
             ), num_predict=512, num_ctx=min(LLM_NUM_CTX, 2048), timeout_sec=remaining,
                 required_keys=None, return_metadata=True, deadline_monotonic=deadline,
                 target_override=_mio_model_endpoint_target(), response_schema=schema, user_content=prompt,
-                strict_object_decode=True, metadata_callback=record_outer_metadata)
+                strict_object_decode=True, metadata_callback=record_outer_metadata,
+                cancel_check=stale_check)
             raw = result.get("parsed")
             if type(raw) is not dict:
                 raise ValueError("invalid_structured_response")
@@ -2520,18 +2573,34 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
             metrics["model"] = self.last_model or metrics["model"]
             return raw
 
+    measured_transport = MeasuredTransport(
+        StructuredTransport(),
+        allowed_tasks=("generate_hypotheses", "identify_evidence_gaps",
+                       "update_hypotheses", "recommend"),
+        max_records=4,
+    )
+
+    def measured_call_timings() -> list[dict[str, Any]]:
+        return bounded_call_timings([
+            {"task": record.task, "elapsed_ns": record.elapsed_ns,
+             "outcome": record.outcome}
+            for record in measured_transport.records()
+        ])
+
     frame = MioSituationFrame.from_dict(payload)
     if not frame.evidence_refs:
         raise ValueError("no_stable_frame_evidence")
-    core = AssistantCore(model=StructuredTransport())
+    core = AssistantCore(model=measured_transport)
     try:
         assistance = core.explain(frame, now=datetime.now(timezone.utc).isoformat(),
             knowledge_attempted=False,
             stale_check=lambda: time.monotonic() >= deadline or bool(stale_check and stale_check()))
+        metrics["call_timings"] = measured_call_timings()
         if time.monotonic() >= deadline:
             raise TimeoutError("deadline_exceeded")
         out = assistance.to_dict()
     except Exception as exc:
+        metrics["call_timings"] = measured_call_timings()
         reason = "deadline_exceeded" if isinstance(exc, TimeoutError) else "model_error"
         raise MioModelFailure(reason, metrics) from None
     model_accepted = out.get("generation_method") == "model"
@@ -2550,8 +2619,10 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
                                "source": "mio_validated_alternative"})
     checks = [item[:200] for item in out.get("next_checks", [])[:4]
               if type(item) is str] if isinstance(out.get("next_checks"), list) else []
-    unknowns = [item[:160] for item in out.get("unknowns", [])[:12]
-                if type(item) is str] if isinstance(out.get("unknowns"), list) else []
+    raw_unknowns = out.get("unknowns")
+    unknowns_valid = (isinstance(raw_unknowns, list) and len(raw_unknowns) <= 100
+                      and all(type(item) is str and item for item in raw_unknowns))
+    unknowns = [item[:160] for item in raw_unknowns[:12]] if unknowns_valid else None
     requests = metrics["request_count"]
     metered = metrics["metered_request_count"]
     metrics["unknown_usage_request_count"] = max(0, requests - metered)
@@ -2560,8 +2631,9 @@ def _analyze_mio_fast_result(payload: Dict[str, Any], remaining_seconds: float,
     complete = model_accepted and state == "complete"
     return {"summary": "Shared M.I.O. analysis completed; hypotheses remain unverified."
             if model_accepted and state == "complete" else "",
-        "uncertainties": [str(x)[:100] for x in out.get("unknowns", [])[:3] if type(x) is str],
-        "hypotheses": hypotheses, "next_checks": checks, "unknowns": unknowns,
+        "uncertainties": [x[:100] for x in raw_unknowns[:3]] if unknowns_valid else [],
+        "hypotheses": hypotheses, "next_checks": checks,
+        **({"unknowns": unknowns, "unknowns_total": len(raw_unknowns)} if unknowns_valid else {}),
         "confidence": 0.0, **metrics,
         "usage_status": usage_status,
         "duration_ms": max(0, min(int((time.monotonic() - started) * 1000), 600_000)),
@@ -2741,6 +2813,7 @@ def _production_mio_model_analyze(payload: Dict[str, Any], remaining_seconds: fl
 LIVE_MIO_MODEL_LANE = LiveMioModelLane(enabled=MIO_MODEL_ENABLED, analyze=_production_mio_model_analyze,
                                        audit_result=lambda trace_id, result: _audit_mio_model_result(trace_id, result),
                                        fast_snapshot=LIVE_MIO_AUXILIARY.snapshot,
+                                       current_fast_generation=LIVE_MIO_AUXILIARY.current_generation,
                                        frame_snapshot=LIVE_MIO_AUXILIARY.frame_snapshot,
                                        authorize=_authorize_mio_model_event)
 
@@ -3078,8 +3151,12 @@ def _update_ui_snapshot(advisory: Dict[str, Any], count_suricata: bool = True) -
         model["uncertainties"] = []
         model["hypotheses"] = []
         model["next_checks"] = []
-        model["unknowns"] = []
+        # Omit (never []): an empty list would tell the operator no evidence gap exists.
+        model.pop("unknowns", None)
+        model.pop("unknowns_total", None)
         model["reason"] = "envelope_size_limit"
+        model["status"] = "degraded"
+        model["is_current"] = False
         mio["model_analysis"] = model
     if len(json.dumps(mio, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")) > MAX_RESULT_BYTES:
         # Even the static result may nearly fill the cap. Fail to a typed,

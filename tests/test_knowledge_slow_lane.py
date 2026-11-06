@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -16,6 +18,32 @@ import time
 import pytest
 
 from azazel_edge_ai.agent import _knowledge_private_input as private_input, _query_knowledge_context as query_context
+
+# Opt-in local model lane (only used by the real-process test below). The
+# endpoint is fixed: no environment variable can point the model at another host.
+OLLAMA_LOOPBACK = ('127.0.0.1', 11434)
+OLLAMA_ENDPOINT = 'http://127.0.0.1:11434'
+OLLAMA_MODEL_PATTERN = re.compile(r'[A-Za-z0-9._:/-]{1,96}')
+
+
+def _assert_ollama_model_preinstalled(model):
+    """Read-only loopback check that the named model already exists locally."""
+    connection = http.client.HTTPConnection(*OLLAMA_LOOPBACK, timeout=3)
+    try:
+        connection.request('GET', '/api/tags')
+        response = connection.getresponse()
+        if response.status != 200:
+            pytest.fail('local Ollama on 127.0.0.1:11434 did not answer /api/tags')
+        listing = json.loads(response.read(1 << 20))
+    except (OSError, ValueError):
+        pytest.fail('EDGE_TEST_MIO_OLLAMA=1 requires a running local Ollama on 127.0.0.1:11434')
+    finally:
+        connection.close()
+    if not isinstance(listing, dict) or not isinstance(listing.get('models'), list):
+        pytest.fail('local Ollama /api/tags response has an unexpected shape')
+    names = {item.get('name') for item in listing['models'] if isinstance(item, dict)}
+    if model not in names:
+        pytest.fail('EDGE_TEST_OLLAMA_MODEL must name a model already installed locally; nothing is downloaded')
 
 
 @contextmanager
@@ -188,6 +216,14 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
     fabric = os.environ.get('EDGE_TEST_FABRIC_SOURCE')
     if not source or not fabric:
         pytest.skip('set EDGE_TEST_KNOWLEDGE_SOURCE and EDGE_TEST_FABRIC_SOURCE to local exact exports')
+    # Default-off: without EDGE_TEST_MIO_OLLAMA=1 no Ollama request is ever made.
+    model_switch = os.environ.get('EDGE_TEST_MIO_OLLAMA') == '1'
+    model_name = os.environ.get('EDGE_TEST_OLLAMA_MODEL', '')
+    if model_switch and not OLLAMA_MODEL_PATTERN.fullmatch(model_name):
+        pytest.fail('EDGE_TEST_MIO_OLLAMA=1 requires EDGE_TEST_OLLAMA_MODEL naming a preinstalled local model')
+    if model_switch:
+        # Fail before starting the Knowledge process or running the baselines.
+        _assert_ollama_model_preinstalled(model_name)
     source = Path(source)
     monkeypatch.syspath_prepend(str(Path(fabric) / 'src'))
     monkeypatch.syspath_prepend(str(source / 'src'))
@@ -303,11 +339,41 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             # fresh interpreters so those worker generations cannot leak into
             # other tests. All files remain under this test's temporary root.
             handler_script = textwrap.dedent('''\
-                import json, os, socket, threading, time
+                import json, os, socket, sys, threading, time
                 from pathlib import Path
                 connections = []
                 original_socket = socket.socket
                 knowledge_port = int(os.environ['EDGE_TEST_KNOWLEDGE_PORT'])
+                run_root = os.path.realpath(os.environ['EDGE_TEST_RUN_ROOT'])
+                loopback_ports = {knowledge_port}
+                if os.environ.get('EDGE_TEST_MIO_MODEL_RUN') == '1':
+                    loopback_ports.add(11434)
+                def audit_boundary(event, args):
+                    # Best-effort child boundary: writes stay under this run root, stream
+                    # connects use the loopback allowlist, and the child cannot spawn processes.
+                    if event in {"subprocess.Popen", "os.system", "os.exec", "os.spawn", "os.fork",
+                                 "os.forkpty", "os.posix_spawn", "socket.sendto", "socket.sendmsg"}:
+                        raise PermissionError('synthetic handler child may not spawn processes or send UDP')
+                    if event == 'open':
+                        path, mode, flags = args[0], args[1], args[2]
+                        if isinstance(path, int):
+                            return
+                        writable = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
+                            isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+                        if writable:
+                            target = os.path.realpath(os.fsdecode(path))
+                            if target != run_root and not target.startswith(run_root + os.sep):
+                                raise PermissionError('synthetic test write outside its temporary tree')
+                    elif event == 'socket.connect':
+                        address = args[1]
+                        if isinstance(address, str):
+                            allowed = address == run_root or address.startswith(run_root + os.sep)
+                        else:
+                            allowed = (isinstance(address, tuple) and len(address) >= 2
+                                       and address[0] == '127.0.0.1' and address[1] in loopback_ports)
+                        if not allowed:
+                            raise PermissionError('synthetic test connect outside loopback allowlist')
+                sys.addaudithook(audit_boundary)
                 class TrackedSocket(original_socket):
                     def _record_knowledge_attempt(self, address):
                         if (isinstance(address, tuple) and len(address) > 1 and address[1] == knowledge_port
@@ -323,6 +389,28 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 socket.socket = TrackedSocket
                 from azazel_edge_ai import agent
 
+                model_payload_checks = []
+                model_payload_violations = []
+                original_model_post = agent._post_to_llm_endpoint
+                def check_model_payload(target, path, body, timeout_sec, deadline_monotonic=None,
+                                        cancel_check=None):
+                    if path != "/api/chat":
+                        model_payload_violations.append("unexpected_model_path")
+                        raise RuntimeError("synthetic test permits only the model chat path")
+                    encoded = body.decode("utf-8", errors="strict")
+                    forbidden = (
+                        ("query_token", os.environ.get("AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN", "")),
+                        ("source_ip", "203.0.113.7"), ("source_subnet", "203.0.113.0/24"),
+                        ("destination_ip", "198.51.100.8"), ("destination_subnet", "198.51.100.0/24"),
+                    )
+                    for label, value in forbidden:
+                        if value and value in encoded:
+                            model_payload_violations.append(label)
+                            raise RuntimeError("synthetic model payload redaction check failed")
+                    model_payload_checks.append(path)
+                    return original_model_post(target, path, body, timeout_sec,
+                        deadline_monotonic=deadline_monotonic, cancel_check=cancel_check)
+                agent._post_to_llm_endpoint = check_model_payload
                 calls = []
                 original_query = agent.LIVE_MIO_KNOWLEDGE_LANE._query
                 def counted_query(*args, **kwargs):
@@ -338,7 +426,10 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 event = json.loads(os.environ["EDGE_TEST_EVENT_JSON"])
                 agent._handle_event(event)
                 snapshot_path = agent.SNAPSHOT_PATH
-                deadline = time.monotonic() + 6
+                deadline = time.monotonic() + float(os.environ.get("EDGE_TEST_HANDLER_SECONDS", "6"))
+                model_enabled = os.environ["AZAZEL_MIO_MODEL_ENABLED"] == "1"
+                knowledge_enabled = os.environ["AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED"] == "1"
+                model_terminal = {"complete", "partial", "degraded", "skipped", "disabled", "superseded"}
                 snapshot = {}
                 while time.monotonic() < deadline:
                     try:
@@ -348,13 +439,18 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                         continue
                     mio = snapshot.get("mio_auxiliary", {})
                     knowledge = mio.get("knowledge_analysis", {})
-                    if os.environ["AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED"] == "1":
-                        ready = (mio.get("trace_id") == event["enforcement"]["trace_id"]
-                                 and knowledge.get("status") == "projected"
+                    model = mio.get("model_analysis", {})
+                    trace_ready = mio.get("trace_id") == event["enforcement"]["trace_id"]
+                    if model_enabled:
+                        # The asynchronous lanes settle independently; assert their final
+                        # states together without claiming an ordering between poll observations.
+                        ready = (trace_ready and knowledge.get("status") == "projected"
+                                 and knowledge.get("is_current") is True and model.get("status") in model_terminal)
+                    elif knowledge_enabled:
+                        ready = (trace_ready and knowledge.get("status") == "projected"
                                  and knowledge.get("is_current") is True)
                     else:
-                        ready = (mio.get("trace_id") == event["enforcement"]["trace_id"]
-                                 and mio.get("status") == "complete"
+                        ready = (trace_ready and mio.get("status") == "complete"
                                  and knowledge.get("status") == "disabled")
                     if ready:
                         break
@@ -367,6 +463,8 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                 assert not writer.is_alive(), "snapshot worker did not stop before test process exit"
                 result = {"query_count": len(calls),
                           "knowledge_connection_count": len(connections),
+                          "model_payload_check_count": len(model_payload_checks),
+                          "model_payload_violations": model_payload_violations,
                           "risk_score": advisory["risk_score"],
                           "risk_level": advisory["risk_level"],
                           "recommendation": advisory["recommendation"],
@@ -383,7 +481,7 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                     os.environ.get('PYTHONPATH', '')])),
                 EDGE_TEST_EVENT_JSON=json.dumps(event))
             base_env['EDGE_TEST_KNOWLEDGE_PORT'] = str(port)
-            def run_normal_handler(enabled, trace_id):
+            def run_normal_handler(enabled, trace_id, model_enabled=False):
                 run_root = tmp_path / f'edge-{trace_id}'
                 run_root.mkdir()
                 child_env = {key: value for key, value in base_env.items() if not key.startswith('AZAZEL_')}
@@ -392,7 +490,10 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                     AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENABLED='1' if enabled else '0',
                     AZAZEL_MIO_KNOWLEDGE_CONTEXT_ENDPOINT=f'http://127.0.0.1:{port}',
                     AZAZEL_MIO_KNOWLEDGE_CONTEXT_QUERY_TOKEN=token,
-                    AZAZEL_LLM_ENABLED='0', AZAZEL_MIO_MODEL_ENABLED='0',
+                    AZAZEL_LLM_ENABLED='0', AZAZEL_MIO_MODEL_ENABLED='1' if model_enabled else '0',
+                    EDGE_TEST_RUN_ROOT=str(run_root),
+                    EDGE_TEST_MIO_MODEL_RUN='1' if model_enabled else '0',
+                    EDGE_TEST_HANDLER_SECONDS='12' if model_enabled else '6',
                     AZAZEL_AI_ADVISORY=str(run_root / 'advisory.json'),
                     AZAZEL_AI_EVENT_LOG=str(run_root / 'events.jsonl'),
                     AZAZEL_AI_DEFERRED_LOG=str(run_root / 'deferred.jsonl'),
@@ -403,12 +504,30 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                     AZAZEL_AI_SOCKET=str(run_root / 'ai-bridge.sock'),
                     AZAZEL_AI_QUERY_SOCKET=str(run_root / 'agent-query.sock'),
                     AZAZEL_NORMALIZED_EVENT_LOG=str(run_root / 'normalized-events.jsonl'),
-                    AZAZEL_DECISION_LOG_DIR=str(run_root / 'decisions'))
+                    AZAZEL_DECISION_LOG_DIR=str(run_root / 'decisions'),
+                    AZAZEL_LLM_NUM_CTX='2048', AZAZEL_LLM_KEEP_ALIVE='10s',
+                    AZAZEL_MIO_MODEL_TIMEOUT_SEC='8')
                 run_event = json.loads(json.dumps(event))
                 run_event['enforcement']['trace_id'] = trace_id
+                run_event['source'] = 'suricata_eve'
+                run_event['pipeline'] = 'rust_event_engine_v1'
+                run_event['normalized'].update(event_id=108, sid=9901221, severity=2,
+                    attack_type='Synthetic scan', category='network-scan', target_port=443,
+                    protocol='TCP', action='allowed', ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                run_event['defense']['action'] = 'notify'
+                run_event['enforcement_status'] = {
+                    'dry_run': True, 'enforce_enabled': False,
+                    'allowed_actions': ['observe', 'notify']}
                 child_env['EDGE_TEST_EVENT_JSON'] = json.dumps(run_event)
-                completed = subprocess.run([sys.executable, '-c', handler_script], cwd=Path.cwd(),
-                    env=child_env, capture_output=True, text=True, timeout=12)
+                if model_enabled:
+                    # Fixed loopback Ollama target and the exact preinstalled model for both model tiers.
+                    child_env.update(AZAZEL_OLLAMA_ENDPOINT=OLLAMA_ENDPOINT,
+                        AZAZEL_LLM_MODEL_PRIMARY=model_name, AZAZEL_LLM_MODEL_DEGRADED=model_name)
+                try:
+                    completed = subprocess.run([sys.executable, '-c', handler_script], cwd=Path.cwd(),
+                        env=child_env, capture_output=True, text=True, timeout=16 if model_enabled else 12)
+                except subprocess.TimeoutExpired:
+                    pytest.fail('ordinary handler child exceeded its 16-second model / 12-second baseline deadline')
                 assert completed.returncode == 0, completed.stderr[-2000:]
                 assert token not in completed.stdout + completed.stderr
                 return json.loads(completed.stdout.splitlines()[-1])
@@ -423,6 +542,10 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
             knowledge = enabled['knowledge']
             assert enabled['query_count'] == 1
             assert enabled['knowledge_connection_count'] == 1
+            for baseline in (disabled, enabled):
+                assert baseline['model_payload_check_count'] == 0
+                assert baseline['mio']['model_analysis']['status'] == 'disabled'
+                assert baseline['mio']['model_analysis']['reason'] == 'opt_in_off'
             assert knowledge['status'] == 'projected'
             assert knowledge['is_current'] is True
             assert knowledge['generation'] == enabled['mio']['generation']
@@ -465,6 +588,69 @@ def test_actual_knowledge_process_and_mio18_projection(monkeypatch, tmp_path, ca
                     captured = path.read_text(encoding='utf-8')
                     assert token not in captured
                     assert 'urlhaus' not in captured
+
+            if model_switch:
+                # Opt-in only: the model lane makes loopback Ollama requests for synthetic input.
+                modeled = run_normal_handler(True, 'trace-normal-model', model_enabled=True)
+                assert modeled['query_count'] == 1
+                assert modeled['knowledge_connection_count'] == 1
+                model_state = modeled['mio'].get('model_analysis', {})
+                assert modeled['model_payload_violations'] == []
+                assert modeled['model_payload_check_count'] == model_state.get('request_count') >= 1, {
+                    'edge_risk_score': modeled.get('risk_score'),
+                    'model_state': {key: model_state.get(key) for key in ('status', 'reason', 'mio_state',
+                        'generation_method', 'outcome', 'request_count', 'is_current',
+                        'fast_generation', 'frame_generation')}}
+                modeled_knowledge = modeled['knowledge']
+                assert modeled_knowledge['status'] == 'projected'
+                assert modeled_knowledge['is_current'] is True
+                assert modeled_knowledge['generation'] == modeled['mio']['generation']
+                assert modeled_knowledge['projection']['claim_status'] == 'reported_unverified'
+                model_result = modeled['mio']['model_analysis']
+                assert model_result['status'] == 'complete', model_result.get('reason')
+                assert model_result['mio_state'] == 'complete'
+                assert model_result['usage_status'] == 'complete'
+                assert model_result['truncated_count'] == 0
+                assert model_result['request_count'] >= 1
+                assert model_result['metered_request_count'] == model_result['request_count']
+                assert model_result['model'] == model_name
+                assert model_result['prompt_tokens'] > 0
+                assert model_result['completion_tokens'] > 0
+                assert model_result['duration_ms'] > 0
+                assert model_result['is_current'] is True
+                edge_handoff = modeled['advisory'].get('mio_auxiliary')
+                assert isinstance(edge_handoff, dict), 'Edge-to-MIO handoff is missing from the persisted advisory'
+                assert edge_handoff['generation'] == modeled['mio']['generation']
+                assert edge_handoff['trace_id'] == 'trace-normal-model'
+                assert modeled['mio']['trace_id'] == edge_handoff['trace_id']
+                assert modeled_knowledge['source_trace_id'] == edge_handoff['trace_id']
+                handoff_binding = modeled['mio'].get('handoff_binding')
+                assert isinstance(handoff_binding, dict) and handoff_binding.get('valid') is True
+                assert handoff_binding['edge_trace_id'] == edge_handoff['trace_id']
+                assert model_result['fast_generation'] == edge_handoff['generation']
+                assert model_result['frame_generation'] == edge_handoff['generation']
+                modeled_advisory = modeled['mio'].get('advisory')
+                assert isinstance(modeled_advisory, dict), 'model-enabled MIO frame advisory is missing'
+                assert model_result['frame_id'] == modeled_advisory['frame_id']
+                assert model_result['frame_trace_id'] == modeled_advisory['trace_id']
+                assert model_result['trace_id'] == model_result['frame_trace_id']
+                assert handoff_binding['mio_trace_id'] == model_result['frame_trace_id']
+                assert handoff_binding['frame_id'] == model_result['frame_id']
+                assert {field: modeled['advisory'].get(field) for field in score_fields} == {
+                    field: disabled['advisory'].get(field) for field in score_fields}
+                assert {field: modeled['advisory']['mio_score_comparison'].get(field) for field in comparison_fields} == {
+                    field: disabled['advisory']['mio_score_comparison'].get(field) for field in comparison_fields}
+                assert '203.0.113.7' not in json.dumps(modeled['mio'])
+                assert '198.51.100.8' not in json.dumps(modeled['mio'])
+                assert 'urlhaus' not in json.dumps(modeled['knowledge']) + json.dumps(model_result)
+                assert token not in json.dumps(modeled['mio']) + json.dumps(modeled['advisory'])
+                model_run_root = tmp_path / 'edge-trace-normal-model'
+                for filename in required_artifacts + optional_artifacts:
+                    path = model_run_root / filename
+                    if filename in required_artifacts or path.exists():
+                        captured = path.read_text(encoding='utf-8')
+                        assert token not in captured
+                        assert 'urlhaus' not in captured
         finally:
             process.send_signal(2)
             try:
