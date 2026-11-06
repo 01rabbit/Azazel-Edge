@@ -12,8 +12,8 @@ credential provisioning or production deployment is included.
 
 This remains a historical Edge #525 / MIO `b441d43` evidence snapshot. The
 current Edge #538 candidate pins MIO PR #47 head
-`ffac07cc9bf06d6904faa98001cfcfaea788bcf7`, package version
-`0.1.0.dev20261105+gitf5b0014`. The process evidence below is for the older
+`a1807bf7abb08788b834ae038f7a8b46d09d0acc`, package version
+`0.1.0.dev20261106+gitbb6dcfd`. The process evidence below is for the older
 MIO source and is not reused as evidence for the current pin.
 
 A separate latest-only Knowledge worker can make one authenticated

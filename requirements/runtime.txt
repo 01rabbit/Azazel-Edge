@@ -7,7 +7,7 @@ requests>=2.32,<3
 PyYAML>=6,<7
 # Shared M.I.O. core and advisory projection API: immutable Draft-candidate pin.
 # This uses the public MIO #47 source/package identity; it is not a release.
-azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@ffac07cc9bf06d6904faa98001cfcfaea788bcf7
+azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@a1807bf7abb08788b834ae038f7a8b46d09d0acc
 # Azazel-Fabric shared contracts are an OPTIONAL extra: see requirements/fabric.txt.
 # (Every Fabric integration point is a guarded no-op without the package, so the
 # deterministic path runs unchanged when it is absent. An earlier note here said

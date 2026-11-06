@@ -113,7 +113,7 @@ def test_runtime_mio_dependency_is_pinned_to_immutable_commit():
              if line.strip() and not line.lstrip().startswith("#")]
     pins = [line for line in lines if line.lower().startswith("azazel-mio ")]
     assert pins == [
-        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@ffac07cc9bf06d6904faa98001cfcfaea788bcf7"
+        "azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@a1807bf7abb08788b834ae038f7a8b46d09d0acc"
     ]
     assert not any(token in pins[0] for token in ("@main", "@master", "@latest"))
 

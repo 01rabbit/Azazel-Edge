@@ -95,8 +95,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - The Edge #538 candidate pins M.I.O. at immutable PR #47 head
-  `ffac07cc9bf06d6904faa98001cfcfaea788bcf7`, package version
-  `0.1.0.dev20261105+gitf5b0014`, matching the current public MIO #47 candidate.
+  `a1807bf7abb08788b834ae038f7a8b46d09d0acc`, package version
+  `0.1.0.dev20261106+gitbb6dcfd`, matching the current public MIO #47 candidate.
   The exact wheel built from that commit is recorded in the PR evidence. Edge's
   model lane keeps its product-owned transport, authorization, token/load
   measurements and decision authority. No Edge version or release was created.

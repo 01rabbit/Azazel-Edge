@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 
 HARNESS = Path(__file__).resolve().parents[1] / "tools/verification/mio_real_process.py"
-MIO_PIN = "ffac07cc9bf06d6904faa98001cfcfaea788bcf7"
+MIO_PIN = "a1807bf7abb08788b834ae038f7a8b46d09d0acc"
 PIN_LINE = f"azazel-mio @ git+https://github.com/01rabbit/Azazel-MIO.git@{MIO_PIN}"
 
 
