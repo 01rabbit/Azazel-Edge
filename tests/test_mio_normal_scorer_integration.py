@@ -40,7 +40,7 @@ def test_normal_advisory_path_uses_real_mio_fast_assessment() -> None:
 
     installed_mio = distribution("azazel-mio")
     assert installed_mio.version == "0.1.0.dev20261106+gitbb6dcfd", (
-        "Edge and Nexus must identify the same MIO development package"
+        "Edge must identify the MIO development package version for its immutable source pin"
     )
     direct_url_text = installed_mio.read_text("direct_url.json")
     assert direct_url_text is not None, "MIO must be installed from its immutable VCS source pin"
