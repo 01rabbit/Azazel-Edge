@@ -18,8 +18,9 @@ def test_fixture_anchor_refused_without_fixture_mode(tmp_path):
     bundle = tmp_path / "lite.tar.gz"
     anchor = tmp_path / "fixture-anchors.toml"
     state = tmp_path / "state.toml"
-    for path in (bundle, anchor, state):
-        path.write_bytes(b"placeholder")
+    bundle.write_bytes(b"placeholder")
+    state.write_bytes(b"placeholder")
+    anchor.write_text('threshold = 1\\n[keys]\\n"c561fa9f" = "' + module.KNOWN_FIXTURE_KEY + '"\\n')
     result = module.verify(bundle, anchor, state)
     assert result["ok"] is False
     assert result["status"] == "fixture_anchor_refused"
