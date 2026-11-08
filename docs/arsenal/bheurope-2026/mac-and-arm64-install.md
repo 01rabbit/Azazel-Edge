@@ -11,7 +11,7 @@ Live enforcement is deliberately out of scope for the recording.
 
 ## macOS demo setup
 
-Requirements: Git, Python >=3.10, internet access once for Python packages.
+Requirements: Git, Python >=3.11, internet access once for Python packages.
 After installation, replay and monitor require no network connection.
 
 ```bash
@@ -29,7 +29,7 @@ read-only, and has no login.
 
 ## Raspberry Pi / ARM64 Linux preparation
 
-Use 64-bit Raspberry Pi OS or Debian with Python >=3.10, Git and venv support.
+Use 64-bit Raspberry Pi OS or Debian with Python >=3.11, Git and venv support.
 Use the same commands above. This demo does not install systemd services,
 modify firewall rules, or alter interfaces. For a kiosk-style deployment,
 start the monitor in a user session; do not run as root.
