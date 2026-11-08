@@ -18,7 +18,7 @@ def _fixture(tmp_path):
                       "live_telemetry": False, "local_only": True, "trace_id": "demo:test"},
         "arbiter": {"action": "throttle"},
     }
-    explanation = {"selected_action": "throttle", "rejected_actions": [{"action": "isolate", "reason": "bounded"}],
+    explanation = {"selected_action": "throttle", "rejected_actions": ["isolate"], "why_not_others": [{"action": "isolate", "reason": "bounded"}],
                    "release_condition": "manual review", "policy_profile": "demo",
                    "config_hash": "abc", "trace_id": "demo:test"}
     return result, explanation, audit
