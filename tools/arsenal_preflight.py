@@ -17,7 +17,7 @@ def check() -> dict:
     files = {name: (ROOT / name).is_file() for name in (
         "bin/azazel-edge-scenario-replay", "config/soc_policy_profiles/demo.yaml",
         "tools/arsenal_bheurope_2026.py", "tools/arsenal_bheurope_monitor.py")}
-    python_ok = sys.version_info >= (3, 10)
+    python_ok = sys.version_info >= (3, 11)
     return {"ok": python_ok and all(available.values()) and all(files.values()),
             "python": platform.python_version(), "platform": platform.platform(),
             "architecture": platform.machine(), "python_compatible": python_ok,
