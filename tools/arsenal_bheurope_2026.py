@@ -30,6 +30,12 @@ def validate(result: dict, explanation: dict, audit_path: Path) -> dict:
             problems.append(f"missing explanation.{field}")
     if not explanation.get("rejected_actions"):
         problems.append("missing rejected_actions")
+    rejected = explanation.get("rejected_actions", [])
+    reasons = explanation.get("why_not_others", [])
+    if not isinstance(reasons, list) or any(not isinstance(item, dict) or not item.get("reason") for item in reasons):
+        problems.append("rejected alternatives must include reasons")
+    if rejected and not reasons:
+        problems.append("missing why_not_others explanations")
     if explanation.get("trace_id") != execution.get("trace_id"):
         problems.append("trace_id mismatch")
     if not audit_path.is_file():
