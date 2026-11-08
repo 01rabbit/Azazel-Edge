@@ -8,12 +8,23 @@ import argparse
 import json
 from pathlib import Path
 import tempfile
+import tomllib
+
+KNOWN_FIXTURE_KEY = "c561fa9f643fe5c60113cce9db282fde2b9e5ca5fc6b6fc0d1679bb339c9f72f"
 
 def verify(bundle: Path, anchors: Path, state: Path, *, fixture_mode: bool = False) -> dict:
     if not all(p.is_file() for p in (bundle, anchors, state)):
         return {"ok": False, "status": "missing_input"}
-    if not fixture_mode and "fixture" in str(anchors).lower():
-        return {"ok": False, "status": "fixture_anchor_refused"}
+    if not fixture_mode:
+        try:
+            anchor_data = tomllib.loads(anchors.read_text(encoding="utf-8"))
+            keys = anchor_data.get("keys", {})
+            if not isinstance(keys, dict):
+                return {"ok": False, "status": "invalid_anchors"}
+            if KNOWN_FIXTURE_KEY in [str(v).lower() for v in keys.values()]:
+                return {"ok": False, "status": "fixture_anchor_refused"}
+        except (OSError, ValueError, TypeError):
+            return {"ok": False, "status": "invalid_anchors"}
     try:
         from azazel_knowledge.bundle.verify import verify_bundle
     except ImportError:
