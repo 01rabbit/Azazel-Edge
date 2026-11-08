@@ -35,6 +35,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:400px;
 </div>
 <section><h2>Decision explanation</h2><div id="release" class="muted"></div><pre id="explanation">No replay yet</pre></section>
 <section><h2>Rejected alternatives</h2><pre id="rejected">—</pre></section>
+<section><h2>Optional resource verification</h2><pre id="resources">No resource report</pre></section>
 <section><h2>Audit evidence</h2><pre id="audit">—</pre></section>
 <small id="updated">Waiting for artifacts</small>
 <script>
@@ -51,6 +52,7 @@ try{
  show('explanation',JSON.stringify(e,null,2));
  show('rejected',JSON.stringify(e.rejected_actions||[],null,2));
  show('audit',JSON.stringify(d.audit_tail||[],null,2));
+ show('resources',JSON.stringify(d.resources||{},null,2));
  show('updated',d.updated_at+' | '+(d.available?'Artifacts loaded':'Run the replay gate first'));
 }catch(err){show('gate','UNAVAILABLE');show('updated',String(err));}
 }
@@ -77,7 +79,8 @@ def _tail_jsonl(path: Path, limit: int = 8):
 def status(directory: Path) -> dict:
     gate = _read_json(directory / "gate.json")
     explanations = _tail_jsonl(directory / "explanations.jsonl", 1)
-    return {"available": isinstance(gate, dict),
+    resources = _read_json(directory / "resource-status.json")
+    return {"resources": resources or {}, "available": isinstance(gate, dict),
             "gate": gate or {},
             "explanation": explanations[-1] if explanations else {},
             "audit_tail": _tail_jsonl(directory / "audit.jsonl"),
