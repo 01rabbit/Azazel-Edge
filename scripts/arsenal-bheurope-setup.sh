@@ -7,7 +7,7 @@ if [[ "$(uname -s)" != "Darwin" && "$(uname -s)" != "Linux" ]]; then
   echo "Unsupported host; expected macOS or Linux" >&2; exit 2
 fi
 PYTHON="${PYTHON:-python3}"
-"$PYTHON" -c 'import sys; assert sys.version_info >= (3, 10), "Python >=3.10 required"'
+"$PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "Python >=3.11 required"'
 if [[ ! -d .venv ]]; then "$PYTHON" -m venv .venv; fi
 .venv/bin/python -m pip install --upgrade pip
 # Replay-only dependency set, deliberately excluding the runtime MIO Git pin,
