@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'"><title>Offline operator task collector</title><link rel="stylesheet" href="style.css"><script src="collector.js" defer></script></head>
+<body><main><h1>Offline operator task collector</h1><p>This separate study page sends nothing. It stores only anonymous assignment IDs, closed answer choices and elapsed time in memory until export. Closing the page loses unsaved results. It does not score answers, prove consent or change any product state.</p>
+<label>Prepared collector plan <input id="plan" type="file" accept=".json,application/json"></label>
+<label>Anonymous participant ID <input id="participant" maxlength="18" placeholder="p-0000000000000000" autocomplete="off"></label>
+<label><input id="consent" type="checkbox"> I consent to this declared task study and the bounded local result export.</label>
+<label><input id="fixture" type="checkbox"> The facilitator has loaded the assigned offline fixture/layout separately, with the planned permissions.</label>
+<p id="status" role="status">Load a prepared plan. No names, tokens or raw logs belong here.</p>
+<section id="task" hidden><h2 id="title"></h2><p id="prompt"></p><div id="options"></div></section>
+<button id="start" type="button" disabled>Start next assigned task</button><button id="finish" type="button" disabled>Finish task</button><button id="export" type="button" disabled>Export unscored captures</button>
+<p id="progress"></p><p>Raw captures require a separate blinded reviewer and frozen rubric before analysis. Human usefulness, safety, hardware performance and preregistration are not established by this page.</p></main></body></html>

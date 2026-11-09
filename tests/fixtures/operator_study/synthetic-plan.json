@@ -1,0 +1,180 @@
+{
+  "analysis": {
+    "bootstrap_repeats": 100,
+    "max_correctness_loss": 0,
+    "max_handoff_loss": 0,
+    "minimum_participants": 2,
+    "minimum_time_gain_seconds": 5,
+    "seed": 42
+  },
+  "assignments": [
+    {
+      "arm": "classic",
+      "case": "case-0",
+      "id": "t-0-0-classic",
+      "order": 1,
+      "participant": "p-0000000000000000",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "overview",
+      "case": "case-0",
+      "id": "t-0-0-overview",
+      "order": 2,
+      "participant": "p-0000000000000000",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "classic",
+      "case": "case-1",
+      "id": "t-0-1-classic",
+      "order": 1,
+      "participant": "p-0000000000000000",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "overview",
+      "case": "case-1",
+      "id": "t-0-1-overview",
+      "order": 2,
+      "participant": "p-0000000000000000",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "classic",
+      "case": "case-0",
+      "id": "t-1-0-classic",
+      "order": 2,
+      "participant": "p-0000000000000001",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "overview",
+      "case": "case-0",
+      "id": "t-1-0-overview",
+      "order": 1,
+      "participant": "p-0000000000000001",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "classic",
+      "case": "case-1",
+      "id": "t-1-1-classic",
+      "order": 2,
+      "participant": "p-0000000000000001",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "overview",
+      "case": "case-1",
+      "id": "t-1-1-overview",
+      "order": 1,
+      "participant": "p-0000000000000001",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "classic",
+      "case": "case-0",
+      "id": "t-2-0-classic",
+      "order": 1,
+      "participant": "p-0000000000000002",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "overview",
+      "case": "case-0",
+      "id": "t-2-0-overview",
+      "order": 2,
+      "participant": "p-0000000000000002",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "classic",
+      "case": "case-1",
+      "id": "t-2-1-classic",
+      "order": 1,
+      "participant": "p-0000000000000002",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "overview",
+      "case": "case-1",
+      "id": "t-2-1-overview",
+      "order": 2,
+      "participant": "p-0000000000000002",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "classic",
+      "case": "case-0",
+      "id": "t-3-0-classic",
+      "order": 2,
+      "participant": "p-0000000000000003",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "overview",
+      "case": "case-0",
+      "id": "t-3-0-overview",
+      "order": 1,
+      "participant": "p-0000000000000003",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "arm": "classic",
+      "case": "case-1",
+      "id": "t-3-1-classic",
+      "order": 2,
+      "participant": "p-0000000000000003",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "arm": "overview",
+      "case": "case-1",
+      "id": "t-3-1-overview",
+      "order": 1,
+      "participant": "p-0000000000000003",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "evidence_kind": "synthetic",
+  "holdout_corpus_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "phase": "pilot",
+  "registration_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "render_sha256": {
+    "classic": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "overview": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sample_size_plan_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "schema_version": "azazel-operator-study/v1",
+  "task_cards": {
+    "case-0": {
+      "options": [
+        {
+          "id": "choice-unknown",
+          "label": "Unknown; verify evidence"
+        },
+        {
+          "id": "choice-executed",
+          "label": "Executed action is proven"
+        }
+      ],
+      "prompt": "Identify the current state and safe next step."
+    },
+    "case-1": {
+      "options": [
+        {
+          "id": "choice-unknown",
+          "label": "Unknown; verify evidence"
+        },
+        {
+          "id": "choice-executed",
+          "label": "Executed action is proven"
+        }
+      ],
+      "prompt": "Identify the current state and safe next step."
+    }
+  },
+  "task_horizon_seconds": 60
+}

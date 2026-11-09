@@ -1,0 +1,70 @@
+{
+  "both_correct_pairs": 8,
+  "complete_pairs": 8,
+  "effect_direction": "overview_minus_classic",
+  "effects": {
+    "both_correct_time": {
+      "interval_95": [
+        -10.0,
+        -10.0
+      ],
+      "mean": -10.0,
+      "pairs": 4,
+      "unit": "participant_cluster_mean"
+    },
+    "correctness": {
+      "interval_95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0,
+      "pairs": 4,
+      "unit": "participant_cluster_mean"
+    },
+    "handoff": {
+      "interval_95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0,
+      "pairs": 4,
+      "unit": "participant_cluster_mean"
+    },
+    "restricted_time": {
+      "interval_95": [
+        -10.0,
+        -10.0
+      ],
+      "mean": -10.0,
+      "pairs": 4,
+      "unit": "participant_cluster_mean"
+    }
+  },
+  "expected_pairs": 8,
+  "expected_receipts": 16,
+  "gates": {
+    "complete_consented_blinded_receipts": true,
+    "correctness_noninferiority": true,
+    "handoff_noninferiority": true,
+    "minimum_participants": true,
+    "no_unsafe_choice": true,
+    "practical_time_gain": true
+  },
+  "limitations": [
+    "digests and flags do not prove independent registration, consent or blinded truth",
+    "participant bootstrap does not replace sample-size, order, learning or multiplicity review",
+    "restricted task time assigns the common horizon to incorrect answers",
+    "no deployed analytics, authority, hardware support or external-tool superiority established"
+  ],
+  "missing_captures": 0,
+  "missing_receipts": 0,
+  "participant_clusters": 4,
+  "plan_sha256": "2fdd79b23519c27adc894c907228d8301ee8da11634f5e2d0a89a4429cc7f61f",
+  "received_captures": 16,
+  "received_receipts": 16,
+  "schema_version": "azazel-operator-study-report/v1",
+  "status": "mechanical_only",
+  "unblinded_receipts": 0,
+  "unconsented_receipts": 0,
+  "unsafe_choices": 0
+}

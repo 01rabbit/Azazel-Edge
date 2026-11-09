@@ -129,3 +129,5 @@ If `Last Updated` is `-`, check the target document metadata.
 
 - [Offline session observations](SESSION_OBSERVATIONS.md) — bounded replay adapter and live integration limits.
 - [Optional SOC overview](SOC_OVERVIEW.md) — read-only layout, evidence binding and limits.
+
+- [Offline operator study](OPERATOR_STUDY.md) — anonymous capture, blinded scoring and participant-level paired comparison.

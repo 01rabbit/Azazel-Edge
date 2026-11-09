@@ -1,0 +1,13 @@
+const assert=require('node:assert/strict');
+const {capture}=require('../tools/operator_study/collector.js');
+const plan=require('./fixtures/operator_study/synthetic-plan.json');
+const assignment=plan.assignments[0];
+const r=capture(assignment,100,10100,['choice-unknown'],plan);
+assert.equal(r.elapsed_seconds,10);assert.equal(r.timed_out,false);assert.deepEqual(r.answer_ids,['choice-unknown']);
+assert.equal(r.correct,undefined);assert.equal(r.blinded_scoring,undefined);
+const timeout=capture(assignment,0,61000,['choice-unknown'],plan);
+assert.equal(timeout.elapsed_seconds,60);assert.equal(timeout.timed_out,true);assert.deepEqual(timeout.answer_ids,[]);
+assert.throws(()=>capture(assignment,100,0,[],plan));
+assert.throws(()=>capture(assignment,0,10,['raw-secret-value'],plan));
+assert.throws(()=>capture(assignment,0,10,['choice-unknown','choice-unknown'],plan));
+console.log('Offline collector captures choices/time only; deadline and invalid data checks pass');
