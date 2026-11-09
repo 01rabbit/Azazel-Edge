@@ -128,3 +128,4 @@ Historical planning and issue-body artifacts retained for traceability. These do
 If `Last Updated` is `-`, check the target document metadata.
 
 - [Offline session observations](SESSION_OBSERVATIONS.md) — bounded replay adapter and live integration limits.
+- [Optional SOC overview](SOC_OVERVIEW.md) — read-only layout, evidence binding and limits.

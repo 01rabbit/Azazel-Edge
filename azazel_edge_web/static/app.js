@@ -733,6 +733,7 @@ async function refreshDashboardOnce() {
         const message = error.message || String(error);
         console.error('Dashboard refresh failed:', message);
         azConnSetState(false);
+        document.dispatchEvent(new CustomEvent('azazel:refresh-error'));
         // Tolerate a single transient slow poll before alarming, so a one-cycle
         // blip does not flicker a toast onto the booth screen.
         if (azConnConsecutiveFailures >= 2) {

@@ -6,6 +6,7 @@
     <title>{{ tr('dashboard.title', 'Azazel-Edge Command Dashboard') }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/sentinel.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/soc_overview.css?v={{ asset_version }}">
 </head>
 <body data-audience="temporary" data-page="dashboard" class="az-boot">
     <div class="topbar-attn-stack">
@@ -131,6 +132,24 @@
                     <span class="sentinel-stage__meta" id="pipelineAuditMeta">Trace</span>
                 </div>
             </div>
+        </section>
+        <button type="button" id="socOverviewToggle" class="soc-overview-toggle" data-tier="overview" aria-pressed="false" aria-controls="socOverview">{{ tr('overview.toggle', 'SOC overview layout') }}</button>
+        <section id="socOverview" class="soc-overview" data-tier="overview" hidden aria-labelledby="socOverviewTitle">
+            <header><div><h2 id="socOverviewTitle">{{ tr('overview.title', 'Security overview') }}</h2><p id="socOverviewScope" class="soc-overview-note"></p></div><p id="socOverviewFreshness" role="status"></p></header>
+            <div class="soc-overview-cards">
+                <article><h3>{{ tr('overview.queue', 'Priority queue') }}</h3><strong id="socOverviewQueueValue">—</strong><span>{{ tr('overview.snapshot_scope', 'Current snapshot only — not incident totals') }}</span></article>
+                <article><h3>{{ tr('overview.recent', 'Recent alerts') }}</h3><strong id="socOverviewRecentValue">—</strong><span>{{ tr('overview.snapshot_scope', 'Current snapshot only — not incident totals') }}</span></article>
+                <article><h3>{{ tr('overview.decision', 'Latest Edge decision') }}</h3><strong id="socOverviewDecisionValue">—</strong><span>{{ tr('overview.unverified', 'Not independently verified') }}</span></article>
+                <article><h3>{{ tr('overview.noc', 'NOC path') }}</h3><strong id="socOverviewNocValue">—</strong><span>{{ tr('overview.snapshot_scope', 'Current snapshot only — not incident totals') }}</span></article>
+            </div>
+            <div class="soc-overview-filters">
+                <label>{{ tr('overview.hours', 'Retained time range') }} <select id="socOverviewHours"><option value="1">1 h</option><option value="6">6 h</option><option value="24">24 h</option></select></label>
+                <label>{{ tr('overview.filter', 'Queue filter') }} <select id="socOverviewBand"><option value="all">{{ tr('overview.all', 'All bands') }}</option><option value="now">NOW</option><option value="watch">WATCH</option><option value="backlog">BACKLOG</option></select></label>
+            </div>
+            <section><h3>{{ tr('overview.trend', 'Processing queue depth — sampled history') }}</h3><p id="socOverviewHistoryState" class="soc-overview-note"></p><div id="socOverviewTrend"></div></section>
+            <section><h3>{{ tr('overview.queue', 'Priority queue') }}</h3><div class="soc-overview-table-wrap"><table><thead><tr><th>{{ tr('overview.time', 'Time') }}</th><th>{{ tr('overview.band', 'Priority band') }}</th><th>{{ tr('overview.source', 'Source / destination') }}</th><th>{{ tr('overview.reason', 'Detection reason') }}</th><th>{{ tr('overview.evidence', 'Evidence reference') }}</th></tr></thead><tbody id="socOverviewRows"></tbody></table></div></section>
+            <aside id="socOverviewDetail" tabindex="-1" aria-label="{{ tr('overview.evidence', 'Evidence reference') }}"></aside>
+            <button type="button" id="socOverviewEvidence">{{ tr('overview.open_evidence', 'Open evidence workspace') }}</button>
         </section>
         <section class="sentinel-console" id="sentinelOverviewConsole" data-tier="overview" aria-label="Decision console">
             <div class="sentinel-console__head">
@@ -1442,5 +1461,6 @@
     </script>
     <script src="/static/app.js?v={{ asset_version }}"></script>
     <script src="/static/sentinel.js?v={{ asset_version }}"></script>
+    <script src="/static/soc_overview.js?v={{ asset_version }}"></script>
 </body>
 </html>

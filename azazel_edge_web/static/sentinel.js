@@ -996,7 +996,7 @@
         txt('consoleDecisionState', action || (assurance.status ? upper(assurance.status === 'alert' ? 'critical' : assurance.status, 'UNKNOWN') : 'UNKNOWN'));
         fillList('consoleDecisionList', [
             ['Confidence', boothConf ? String(boothConf).toUpperCase() : confLabel(tp.confidence)],
-            ['Applied', (action || mode.current_mode) ? 'YES' : '—'],
+            ['Execution', (booth.safety || {}).dry_run === true ? 'DRY RUN / not applied' : 'UNVERIFIED'],
             ['Trust', capsule.tone ? String(capsule.tone).toUpperCase() : '—']
         ]);
         setToneClass('consoleDecision', actTone || postureTone);
