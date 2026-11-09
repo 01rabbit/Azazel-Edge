@@ -1,0 +1,74 @@
+{
+  "arms": [
+    {
+      "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "environment_id": "synthetic",
+      "id": "block",
+      "role": "bounded_block",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "environment_id": "synthetic",
+      "id": "candidate",
+      "role": "fixed_friction",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "assignments": [
+    {
+      "arm": "block",
+      "id": "0-block",
+      "order": 0,
+      "pair_id": "0",
+      "scenario": "auth",
+      "seed": 0
+    },
+    {
+      "arm": "candidate",
+      "id": "0-candidate",
+      "order": 1,
+      "pair_id": "0",
+      "scenario": "auth",
+      "seed": 0
+    },
+    {
+      "arm": "block",
+      "id": "1-block",
+      "order": 1,
+      "pair_id": "1",
+      "scenario": "auth",
+      "seed": 1
+    },
+    {
+      "arm": "candidate",
+      "id": "1-candidate",
+      "order": 0,
+      "pair_id": "1",
+      "scenario": "auth",
+      "seed": 1
+    }
+  ],
+  "baseline": "block",
+  "candidate": "candidate",
+  "evidence_kind": "synthetic",
+  "experiment_id": "mechanical-pilot",
+  "horizon_seconds": 60,
+  "phase": "pilot",
+  "plan": {
+    "analysis_seed": 17,
+    "bootstrap_repeats": 500,
+    "max_error_rate_increase": 0.01,
+    "max_latency_increase_ms": 2,
+    "minimum_gain_seconds": 5,
+    "minimum_pairs": 2
+  },
+  "provenance": {
+    "corpus_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "repo_commits": {
+      "01rabbit/Azazel-Edge": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "schema_version": "azazel-benefit-experiment/v1"
+}

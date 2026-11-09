@@ -31,6 +31,7 @@ Entry point for all documents in this directory.
 | [SOC_POLICY_GUIDE.md](SOC_POLICY_GUIDE.md) | Developer / Operator | Deterministic SOC policy tuning and safety constraints | 2026-05-12 |
 | [TACTICAL_SCORER_CALIBRATION.md](TACTICAL_SCORER_CALIBRATION.md) | Developer | Rule-based first-pass scorer model, detection gate, and calibration decisions | 2026-06-29 |
 | [ATTACK_MAPPING_GUIDE.md](ATTACK_MAPPING_GUIDE.md) | Developer / Operator | ATT&CK mapping rules, limits, and maintenance guidance | 2026-05-12 |
+| [BENEFIT_COMPARISON.md](BENEFIT_COMPARISON.md) | Developer / Reviewer | Offline paired benefit metrics, bounded independent capture and honest pilot gates (#393) | 2026-11-10 |
 | [BENCHMARK_DEFINITIONS.md](BENCHMARK_DEFINITIONS.md) | Developer / Operator | Reproducible benchmark definitions for operational, latency, power, and breach metrics | 2026-05-13 |
 | [BENCHMARK_SCOPE_AND_HIL_PLAN.md](BENCHMARK_SCOPE_AND_HIL_PLAN.md) | Developer / Operator | Benchmark claim boundary and staged hardware-in-the-loop plan | 2026-05-14 |
 | [POST_DEMO_MAIN_INTEGRATION_104.md](POST_DEMO_MAIN_INTEGRATION_104.md) | Developer | Integration boundary between exhibition-only assets and mainline | 2026-05-11 |

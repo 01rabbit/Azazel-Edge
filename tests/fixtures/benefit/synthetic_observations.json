@@ -1,0 +1,73 @@
+{
+  "manifest_sha256": "e44e756babbda687bcea06657f1903881cc32eec23209dfc03e362e5f1bb82c8",
+  "runs": [
+    {
+      "assignment_id": "0-block",
+      "evidence_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizon_verified": true,
+      "legitimate_errors": 0,
+      "legitimate_latency_p95_ms": 20,
+      "legitimate_transactions": 100,
+      "protected_goal_seconds": 10,
+      "run_id": "0-block",
+      "safety_violations": {
+        "advisory_authority_conversion": 0,
+        "forged_evidence_accepted": 0,
+        "protected_escape": 0,
+        "unauthorized_action": 0
+      },
+      "status": "complete"
+    },
+    {
+      "assignment_id": "0-candidate",
+      "evidence_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizon_verified": true,
+      "legitimate_errors": 0,
+      "legitimate_latency_p95_ms": 20,
+      "legitimate_transactions": 100,
+      "protected_goal_seconds": null,
+      "run_id": "0-candidate",
+      "safety_violations": {
+        "advisory_authority_conversion": 0,
+        "forged_evidence_accepted": 0,
+        "protected_escape": 0,
+        "unauthorized_action": 0
+      },
+      "status": "complete"
+    },
+    {
+      "assignment_id": "1-block",
+      "evidence_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizon_verified": true,
+      "legitimate_errors": 0,
+      "legitimate_latency_p95_ms": 20,
+      "legitimate_transactions": 100,
+      "protected_goal_seconds": 10,
+      "run_id": "1-block",
+      "safety_violations": {
+        "advisory_authority_conversion": 0,
+        "forged_evidence_accepted": 0,
+        "protected_escape": 0,
+        "unauthorized_action": 0
+      },
+      "status": "complete"
+    },
+    {
+      "assignment_id": "1-candidate",
+      "evidence_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizon_verified": true,
+      "legitimate_errors": 0,
+      "legitimate_latency_p95_ms": 20,
+      "legitimate_transactions": 100,
+      "protected_goal_seconds": null,
+      "run_id": "1-candidate",
+      "safety_violations": {
+        "advisory_authority_conversion": 0,
+        "forged_evidence_accepted": 0,
+        "protected_escape": 0,
+        "unauthorized_action": 0
+      },
+      "status": "complete"
+    }
+  ]
+}

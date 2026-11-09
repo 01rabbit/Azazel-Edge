@@ -1,0 +1,82 @@
+{
+  "arms": [
+    {
+      "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "environment_id": "synthetic",
+      "id": "block",
+      "role": "bounded_block",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "environment_id": "synthetic",
+      "id": "candidate",
+      "role": "fixed_friction",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "assigned_runs": 4,
+  "baseline": "block",
+  "candidate": "candidate",
+  "claim_status": "mechanical_only",
+  "complete_pairs": 2,
+  "evidence_kind": "synthetic",
+  "experiment_id": "mechanical-pilot",
+  "incomplete_pairs": 0,
+  "legitimate_error_rate_delta": {
+    "interval_95": [
+      0.0,
+      0.0
+    ],
+    "mean": 0.0,
+    "pairs": 2
+  },
+  "legitimate_p95_delta_ms": {
+    "interval_95": [
+      0.0,
+      0.0
+    ],
+    "mean": 0.0,
+    "pairs": 2
+  },
+  "limitations": [
+    "manifest binding is not independent preregistration",
+    "receipt hashes do not prove source truth",
+    "no runtime causal/effect/authority record is modified",
+    "administrative censoring only at fully observed common horizon",
+    "bootstrap intervals require independent sample-size and multiplicity review",
+    "no universal or unexecuted external-comparator superiority claim"
+  ],
+  "manifest_sha256": "e44e756babbda687bcea06657f1903881cc32eec23209dfc03e362e5f1bb82c8",
+  "measurement_gate": "recorded_thresholds_met_requires_independent_review",
+  "missing_runs": 0,
+  "phase": "pilot",
+  "protected_goals_completed": {
+    "block": 2,
+    "candidate": 0
+  },
+  "received_runs": 4,
+  "run_status_counts": {
+    "complete": 4,
+    "failed": 0,
+    "missing": 0
+  },
+  "scenario_strata": {
+    "auth": {
+      "pairs": 2,
+      "time_deltas_seconds": [
+        50.0,
+        50.0
+      ]
+    }
+  },
+  "schema_version": "azazel-benefit-report/v1",
+  "time_gain_seconds": {
+    "interval_95": [
+      50.0,
+      50.0
+    ],
+    "mean": 50.0,
+    "pairs": 2
+  }
+}
