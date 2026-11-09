@@ -47,7 +47,7 @@ from azazel_edge.outcome.postcondition import SubprocessReadOnlyRunner
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "outcome"
 INPUT = FIXTURES / "g5_golden_replay_input_v1.json"
-EXPECTED = FIXTURES / "g5_golden_replay_expected_v1.json"
+EXPECTED = FIXTURES / "g5_golden_replay_expected_v2.json"
 REPLAY_MODULES = (
     ROOT / "py" / "azazel_edge" / "outcome" / "golden_replay.py",
     ROOT / "py" / "azazel_edge" / "outcome" / "outcome_identity.py",
@@ -302,27 +302,15 @@ class GoldenReplaySemanticsTests(unittest.TestCase):
             [(trace["decision_id"], "pending_observation_lost_at_restart")],
         )
 
-    def test_lost_window_plus_redelivery_is_admitted_with_post_restart_window(self) -> None:
-        """Pins current G3 semantics (limitation, not a desired property).
-
-        The redirect record is re-delivered in boot-2. A fresh collector opens a
-        window at the boot-2 receipt time, after the owned mechanism was already
-        released, and the ledger admits it because no Outcome for that identity
-        was admitted before. The transcript must flag it.
-        """
-
+    def test_lost_window_redelivery_cannot_open_a_new_window(self) -> None:
         trace = self.by_action["redirect"]
-        stages = trace["stages"]
         self.assertEqual(trace["deliveries"], ["boot-1", "boot-2"])
-        self.assertIn("boot-2:outcome_window_from_post_restart_redelivery", trace["notes"])
-        admission = next(a for a in self.result["outcome_admissions"] if a["decision_id"] == trace["decision_id"])
-        self.assertEqual((admission["boot"], admission["status"]), ("boot-2", "admitted"))
-        release_epoch = stages["release"][0]["evidence"]["attempted_at_epoch"]
-        window = stages["outcome"]["observation_window"]
-        self.assertGreater(window["action_observed_epoch"], release_epoch)
-        self.assertEqual(stages["outcome"]["assessment"], "inconclusive")
-        self.assertEqual(stages["effect"]["assessment"], "inconclusive")
-        self.assertEqual(self.result["summary"]["outcomes_counted_from_post_restart_redelivery"], 1)
+        self.assertIsNone(trace["stages"]["outcome"])
+        self.assertIsNone(trace["stages"]["effect"])
+        self.assertFalse(any(a["decision_id"] == trace["decision_id"] for a in self.result["outcome_admissions"]))
+        self.assertEqual(self.result["summary"]["outcomes_counted_from_post_restart_redelivery"], 0)
+        self.assertEqual(self.result["summary"]["lost_window_deliveries_rejected"], 1)
+        self.assertEqual(self.result["outcome_ledger_status"]["lost_window_identities"], 1)
 
     def test_no_stage_claims_success_or_causality(self) -> None:
         for trace in self.result["decisions"]:
@@ -348,9 +336,9 @@ class CrossRestartOutcomeDedupTests(unittest.TestCase):
         self.assertEqual(len({a["outcome_id"] for a in admissions}), 2)
         self.assertEqual(len({a["identity_key"] for a in admissions}), 1)
         self.assertEqual(admissions[1]["retained_outcome_id"], admissions[0]["outcome_id"])
-        self.assertEqual(self.result["summary"]["outcomes_produced"], 3)
-        self.assertEqual(self.result["summary"]["outcomes_counted"], 2)
-        self.assertEqual(len(self.result["outcome_ledger"]["identities"]), 2)
+        self.assertEqual(self.result["summary"]["outcomes_produced"], 2)
+        self.assertEqual(self.result["summary"]["outcomes_counted"], 1)
+        self.assertEqual(len(self.result["outcome_ledger"]["identities"]), 1)
 
     def test_retained_outcome_is_the_pre_restart_one(self) -> None:
         throttle = next(item for item in self.result["decisions"] if item["action"] == "throttle")
@@ -373,17 +361,15 @@ class CrossRestartOutcomeDedupTests(unittest.TestCase):
             {"boot": f"{boot['boot']}-again", "steps": copy.deepcopy(boot["steps"])} for boot in boots
         ]
         result = normalize(run_golden_replay(fixture))
-        self.assertEqual(result["summary"]["outcomes_counted"], 2)
-        self.assertEqual(len(result["outcome_ledger"]["identities"]), 2)
+        self.assertEqual(result["summary"]["outcomes_counted"], 1)
+        self.assertEqual(len(result["outcome_ledger"]["identities"]), 1)
         self.assertEqual(
             [(a["boot"], a["decision_id"], a["status"]) for a in result["outcome_admissions"]],
             [
                 ("boot-1", "trace-golden-throttle-1", "admitted"),
                 ("boot-2", "trace-golden-throttle-1", "duplicate_suppressed"),
-                ("boot-2", "trace-golden-redirect-3", "admitted"),
                 ("boot-1-again", "trace-golden-throttle-1", "duplicate_suppressed"),
                 ("boot-2-again", "trace-golden-throttle-1", "duplicate_suppressed"),
-                ("boot-2-again", "trace-golden-redirect-3", "duplicate_suppressed"),
             ],
         )
         throttle = next(item for item in result["decisions"] if item["action"] == "throttle")

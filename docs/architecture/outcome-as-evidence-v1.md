@@ -241,7 +241,7 @@ tests/test_outcome_guardrails_v1.py
 tests/test_outcome_adapter_truthfulness_v1.py
 tests/test_outcome_golden_replay_g5.py
 tests/fixtures/outcome/g5_golden_replay_input_v1.json
-tests/fixtures/outcome/g5_golden_replay_expected_v1.json
+tests/fixtures/outcome/g5_golden_replay_expected_v2.json
 ```
 
 The focused test suite contains 24 semantic/authority/retention/guardrail/truthfulness cases covering execution-state normalization, requested-vs-applied separation, effect-proof prerequisites, correlation rejection, replay authority, bounded shadow output, guardrail failure, and uncalibrated-confidence behavior.

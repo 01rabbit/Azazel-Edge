@@ -25,17 +25,17 @@ from typing import Any, Mapping
 
 from .contracts import OutcomeRecord
 
-LEDGER_SCHEMA_VERSION = "outcome-identity-ledger/v1"
+LEDGER_SCHEMA_VERSION = "outcome-identity-ledger/v2"
 DEFAULT_MAX_IDENTITIES = 4096
 
 
 def outcome_identity_key(*, execution_id: str, objective_id: str) -> str:
     """Restart-independent identity of "the Outcome of this execution for this objective"."""
 
-    execution = str(execution_id or "").strip()
-    objective = str(objective_id or "").strip()
-    if not execution or not objective:
+    if any(type(value) is not str or not value.strip() or len(value) > 2048 for value in (execution_id, objective_id)):
         raise ValueError("outcome identity requires execution_id and objective_id")
+    execution = execution_id.strip()
+    objective = objective_id.strip()
     payload = f"{execution}\x1f{objective}".encode("utf-8")
     return f"outcome-identity-{hashlib.sha256(payload).hexdigest()[:24]}"
 
@@ -57,6 +57,7 @@ class AdmissionStatus(str, Enum):
     # Bounded ledger is full: the new identity is not admitted (fail closed)
     # rather than forgetting an older identity and re-opening double counting.
     CAPACITY_EXHAUSTED = "capacity_exhausted"
+    WINDOW_LOST = "window_lost"
 
 
 @dataclass(frozen=True)
@@ -90,11 +91,71 @@ class OutcomeIdentityLedger:
     def __init__(self, *, max_identities: int = DEFAULT_MAX_IDENTITIES) -> None:
         self.max_identities = _positive_int(max_identities)
         self._entries: dict[str, dict[str, str]] = {}
+        self._lost_windows: dict[str, dict[str, str]] = {}
+        self._counters = {status.value: 0 for status in AdmissionStatus}
+        self._sealed = False
 
     def __len__(self) -> int:
         return len(self._entries)
 
+    def mark_window_lost(self, *, execution_id: str, objective_id: str, decision_id: str) -> None:
+        """Retain a tombstone, never let later telemetry replace a lost window.
+
+        On saturation, seal admission of all new identities rather than evicting
+        an identity or losing a tombstone. Already retained duplicates still work.
+        """
+        key = outcome_identity_key(execution_id=execution_id, objective_id=objective_id)
+        if type(decision_id) is not str or not decision_id or len(decision_id) > 2048:
+            raise ValueError("lost window requires decision_id")
+        existing = self._entries.get(key) or self._lost_windows.get(key)
+        if existing is not None:
+            if existing["decision_id"] != decision_id:
+                raise ValueError("outcome identity collision across decisions")
+            return
+        if self._sealed or len(self._entries) + len(self._lost_windows) >= self.max_identities:
+            self._sealed = True
+            return
+        self._lost_windows[key] = {
+            "decision_id": decision_id, "execution_id": execution_id, "objective_id": objective_id,
+        }
+
+    def status(self) -> dict[str, Any]:
+        used = len(self._entries) + len(self._lost_windows)
+        return {
+            "capacity": self.max_identities, "used": used,
+            "remaining": self.max_identities - used,
+            "admitted_identities": len(self._entries),
+            "lost_window_identities": len(self._lost_windows),
+            "new_admission_closed": self._sealed or used >= self.max_identities,
+            "counters": dict(self._counters),
+        }
+
+    def window_lost(self, *, execution_id: str, objective_id: str) -> bool:
+        key = outcome_identity_key(execution_id=execution_id, objective_id=objective_id)
+        return key in self._lost_windows or (self._sealed and key not in self._entries)
+
+    def checkpoint(self) -> dict[str, Any]:
+        state = self.to_dict()
+        digest = hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return {"state": state, "sha256": digest}
+
+    @classmethod
+    def from_checkpoint(cls, payload: Mapping[str, Any], *, max_identities: int = DEFAULT_MAX_IDENTITIES) -> "OutcomeIdentityLedger":
+        if not isinstance(payload, Mapping) or set(payload) != {"state", "sha256"}:
+            raise ValueError("invalid ledger checkpoint")
+        state = payload["state"]
+        ledger = cls.from_mapping(state, max_identities=max_identities)
+        digest = hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if payload["sha256"] != digest:
+            raise ValueError("ledger checkpoint digest mismatch")
+        return ledger
+
     def admit(self, outcome: OutcomeRecord) -> Admission:
+        admission = self._admit(outcome)
+        self._counters[admission.status.value] += 1
+        return admission
+
+    def _admit(self, outcome: OutcomeRecord) -> Admission:
         key = outcome_identity_key(execution_id=outcome.execution_id, objective_id=outcome.objective_id)
         digest = outcome_content_digest(outcome)
         existing = self._entries.get(key)
@@ -108,7 +169,12 @@ class OutcomeIdentityLedger:
                 outcome_id=outcome.outcome_id,
                 retained_outcome_id=existing["outcome_id"],
             )
-        if len(self._entries) >= self.max_identities:
+        lost = self._lost_windows.get(key)
+        if lost is not None:
+            if lost["decision_id"] != outcome.decision_id:
+                raise ValueError("outcome identity collision across decisions")
+            return Admission(AdmissionStatus.WINDOW_LOST, key, outcome.outcome_id, "")
+        if self._sealed or len(self._entries) + len(self._lost_windows) >= self.max_identities:
             return Admission(
                 status=AdmissionStatus.CAPACITY_EXHAUSTED,
                 identity_key=key,
@@ -133,6 +199,11 @@ class OutcomeIdentityLedger:
         return {
             "schema_version": LEDGER_SCHEMA_VERSION,
             "max_identities": self.max_identities,
+            "sealed": self._sealed,
+            "counters": dict(self._counters),
+            "lost_windows": [
+                {"identity_key": key, **self._lost_windows[key]} for key in sorted(self._lost_windows)
+            ],
             "identities": [
                 {"identity_key": key, **self._entries[key]} for key in sorted(self._entries)
             ],
@@ -153,19 +224,32 @@ class OutcomeIdentityLedger:
 
         if not isinstance(payload, Mapping) or payload.get("schema_version") != LEDGER_SCHEMA_VERSION:
             raise ValueError("unsupported outcome identity ledger schema")
-        _positive_int(payload.get("max_identities"))
+        recorded_bound = _positive_int(payload.get("max_identities"))
         ledger = cls(max_identities=max_identities)
+        if type(payload.get("sealed")) is not bool:
+            raise ValueError("ledger requires sealed state")
+        ledger._sealed = payload["sealed"]
+        counters = payload.get("counters")
+        if not isinstance(counters, Mapping) or set(counters) != set(ledger._counters):
+            raise ValueError("ledger requires admission counters")
+        for name, value in counters.items():
+            if type(value) is not int or value < 0:
+                raise ValueError("invalid admission counter")
+            ledger._counters[name] = value
         identities = payload.get("identities")
         if not isinstance(identities, list):
             raise ValueError("outcome identity ledger requires identities list")
-        if len(identities) > ledger.max_identities:
+        lost_windows = payload.get("lost_windows")
+        if not isinstance(lost_windows, list):
+            raise ValueError("ledger requires lost windows")
+        if len(identities) + len(lost_windows) > min(recorded_bound, ledger.max_identities):
             raise ValueError("outcome identity ledger exceeds its bound")
         fields = ("decision_id", "execution_id", "objective_id", "outcome_id", "content_digest")
         for raw in identities:
             if not isinstance(raw, Mapping):
                 raise ValueError("malformed outcome identity entry")
-            entry = {name: str(raw.get(name) or "") for name in fields}
-            if not all(entry.values()):
+            entry = {name: raw.get(name) for name in fields}
+            if any(not isinstance(value, str) or not value or len(value) > 2048 for value in entry.values()):
                 raise ValueError("incomplete outcome identity entry")
             key = str(raw.get("identity_key") or "")
             expected = outcome_identity_key(execution_id=entry["execution_id"], objective_id=entry["objective_id"])
@@ -174,6 +258,16 @@ class OutcomeIdentityLedger:
             if key in ledger._entries:
                 raise ValueError("duplicate outcome identity entry")
             ledger._entries[key] = entry
+        for raw in lost_windows:
+            if not isinstance(raw, Mapping):
+                raise ValueError("malformed lost window")
+            entry = {name: raw.get(name) for name in ("decision_id", "execution_id", "objective_id")}
+            if any(type(value) is not str or not value or len(value) > 2048 for value in entry.values()):
+                raise ValueError("invalid lost window identity")
+            key = outcome_identity_key(execution_id=entry["execution_id"], objective_id=entry["objective_id"])
+            if raw.get("identity_key") != key or key in ledger._entries or key in ledger._lost_windows:
+                raise ValueError("conflicting lost window identity")
+            ledger._lost_windows[key] = entry
         return ledger
 
 
