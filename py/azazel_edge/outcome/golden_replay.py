@@ -45,7 +45,7 @@ from .replay import ReplayExecutionProvider
 from .telemetry import OutcomeTelemetryCollector, OutcomeTelemetryPolicy, TelemetrySample
 
 INPUT_SCHEMA_VERSION = "outcome-golden-replay-input/v1"
-RESULT_SCHEMA_VERSION = "outcome-golden-replay-result/v1"
+RESULT_SCHEMA_VERSION = "outcome-golden-replay-result/v2"
 _RELEASE_PIPELINE = "rust_release_engine_v1"
 
 
@@ -181,7 +181,10 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
     max_identities = int(fixture.get("max_outcome_identities") or 4096)
 
     traces: dict[str, _DecisionTrace] = {}
-    ledger_state = OutcomeIdentityLedger(max_identities=max_identities).to_dict()
+    ledger_checkpoint = OutcomeIdentityLedger(max_identities=max_identities).checkpoint()
+    ledger_state = ledger_checkpoint["state"]
+    ledger = OutcomeIdentityLedger(max_identities=max_identities)
+    lost_window_deliveries = 0
     admissions: list[dict[str, Any]] = []
     restart_gaps: list[dict[str, Any]] = []
     rejected_inputs: list[dict[str, Any]] = []
@@ -196,8 +199,8 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
         boots_seen.append(boot_id)
         # A restart loses all in-memory collector state; only the durable
         # ledger state (round-tripped through JSON) survives.
-        ledger = OutcomeIdentityLedger.from_mapping(
-            json.loads(json.dumps(ledger_state)), max_identities=max_identities
+        ledger = OutcomeIdentityLedger.from_checkpoint(
+            json.loads(json.dumps(ledger_checkpoint)), max_identities=max_identities
         )
         source = RecordedTelemetrySource()
         collector = OutcomeTelemetryCollector(
@@ -205,6 +208,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
             policy=policy,
             interface=interface,
             sample_interval_seconds=sample_interval,
+            identity_ledger=ledger,
         )
 
         for step in boot.get("steps") or ():
@@ -223,7 +227,11 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
                     _replay_release(event, traces, rejected_inputs, boot_id)
                 else:
                     activity_only += _replay_decision(event, traces, rejected_inputs, boot_id)
+                before = collector.lost_window_deliveries
                 collector.observe_event(event, observed_epoch=epoch)
+                if collector.lost_window_deliveries > before:
+                    lost_window_deliveries += 1
+                    rejected_inputs.append({"boot": boot_id, "kind": "outcome_window", "error": "window_lost"})
             elif op == "probe":
                 trace = traces.get(str(step.get("decision_id") or ""))
                 if trace is None:
@@ -257,13 +265,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
                     if objective is None or objective.objective_id != outcome.objective_id:
                         raise GoldenReplayError("outcome objective is not the policy objective")
                     if trace.first_boot != boot_id:
-                        # Current G3 semantics: a record re-delivered after a
-                        # restart opens a window at the new receipt time. The
-                        # ledger only dedups identities already admitted, so
-                        # an Outcome lost at restart is admitted here with
-                        # post-restart telemetry. Flag it; do not hide it.
-                        trace.notes.append(f"{boot_id}:outcome_window_from_post_restart_redelivery")
-                        redelivered_windows += 1
+                        raise GoldenReplayError("an unretained pre-restart outcome window cannot be replaced")
                     trace.stages["objective"] = objective.to_dict()
                     trace.stages["outcome"] = outcome.to_dict()
                     trace.stages["outcome_identity_key"] = admission.identity_key
@@ -293,7 +295,9 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
             trace = traces.get(pending.decision_id)
             if trace is not None:
                 trace.notes.append(f"{boot_id}:pending_observation_lost_at_restart")
-        ledger_state = ledger.to_dict()
+        collector.invalidate_pending_windows()
+        ledger_checkpoint = ledger.checkpoint()
+        ledger_state = ledger_checkpoint["state"]
 
     for trace in traces.values():
         trace.stages.setdefault("outcome", None)
@@ -308,6 +312,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
         "decisions": [trace.to_dict() for trace in traces.values()],
         "outcome_admissions": admissions,
         "outcome_ledger": ledger_state,
+        "outcome_ledger_status": ledger.status(),
         "restart_gaps": restart_gaps,
         "rejected_inputs": rejected_inputs,
         "summary": {
@@ -316,6 +321,7 @@ def run_golden_replay(fixture: Mapping[str, Any]) -> dict[str, Any]:
             "outcomes_produced": len(admissions),
             "outcomes_counted": counted,
             "outcomes_counted_from_post_restart_redelivery": redelivered_windows,
+            "lost_window_deliveries_rejected": lost_window_deliveries,
             "replay_execution_records": len(replay_provider.records),
         },
     }

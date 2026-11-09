@@ -15,7 +15,7 @@ and that one execution's Outcome is identified and counted once across a process
 
 ## What is replayed
 
-`py/azazel_edge/outcome/golden_replay.py::run_golden_replay(fixture)` reads a recorded timeline (`outcome-golden-replay-input/v1`) and returns a transcript (`outcome-golden-replay-result/v1`). A fixture is data only:
+`py/azazel_edge/outcome/golden_replay.py::run_golden_replay(fixture)` reads a recorded timeline (`outcome-golden-replay-input/v1`) and returns a transcript (`outcome-golden-replay-result/v2`). A fixture is data only:
 
 | Step | Recorded input | Code path exercised |
 |---|---|---|
@@ -25,7 +25,7 @@ and that one execution's Outcome is identified and counted once across a process
 | `sample` | recorded procfs telemetry values | `OutcomeTelemetryCollector.record_sample()` through `RecordedTelemetrySource` |
 | `finalize` | replay time | `OutcomeTelemetryCollector.finalize_due()` -> `OutcomeIdentityLedger.admit()` -> `assess_tactical_effect()` |
 
-`boots` split the timeline into process lifetimes. At a boot boundary the collector (and its in-memory seen-execution guard and pending windows) is discarded, exactly as a real restart would; only the Outcome identity ledger state survives, carried through a JSON round trip.
+`boots` split the timeline into process lifetimes. At a boot boundary the collector (and its in-memory seen-execution guard and pending windows) is discarded, exactly as a real restart would; the Outcome identity ledger (including lost-window tombstones) survives, carried through a JSON round trip.
 
 The Decision stage is the recorded Rust `decide_defense()` result. Replay never re-decides; it does not call the Python `ActionArbiter`.
 
@@ -33,7 +33,7 @@ The Decision stage is the recorded Rust `decide_defense()` result. Replay never 
 
 ```text
 tests/fixtures/outcome/g5_golden_replay_input_v1.json      recorded input
-tests/fixtures/outcome/g5_golden_replay_expected_v1.json   golden transcript
+tests/fixtures/outcome/g5_golden_replay_expected_v2.json   golden transcript
 tests/test_outcome_golden_replay_g5.py                     stage-by-stage comparison and boundary tests
 ```
 
@@ -43,7 +43,11 @@ The input is a synthetic recording built from the shapes the G1a/G1b/G3 tests al
 2. **isolate** — provider failure; execution `failed`, mechanism `not_observed`, no Outcome, no Effect;
 3. **redirect** — applied and observed in boot 1; the process restarts before its post window ends, so the pending observation is lost and reported in `restart_gaps`; its verified owned release arrives in boot 2 and is still reconciled to the boot-1 execution;
 4. **re-delivery after restart, Outcome already admitted** — the throttle record is delivered again in boot 2. A fresh collector observes it and produces a second OutcomeRecord with a different `outcome_id` (the G3 id depends on collector receipt time). The identity ledger suppresses it; the Outcome is counted once;
-5. **re-delivery after restart, window lost** — the redirect record is also delivered again in boot 2. Under current G3 semantics a fresh collector opens a new window at the boot-2 receipt time (here even after the owned mechanism was released) and, because no Outcome for that identity was admitted before, the ledger admits it. The golden pins this behaviour and the transcript flags it (`outcome_window_from_post_restart_redelivery` note, `summary.outcomes_counted_from_post_restart_redelivery`). See "Limitations".
+5. **re-delivery after restart, window lost** — before dropping collector state,
+   pending windows are tombstoned in the ledger. The fresh collector refuses the
+   redirect redelivery, opens no new window and emits no Outcome/Effect for it.
+   The transcript records `window_lost` and the rejection count. The lost
+   pre-restart observation cannot be replaced by later telemetry.
 
 The test compares every stage of every decision (`decision`, `correlation`, `execution`, `mechanism`, `mechanism_postcondition`, `release`, `execution_final`, `mechanism_final`, `objective`, `outcome`, `outcome_identity_key`, `effect`) and the replay-level records (`outcome_admissions`, `outcome_ledger`, `restart_gaps`, `rejected_inputs`, `summary`) with the golden file, and also asserts the #400 semantics directly so a regenerated golden cannot silently accept a success or causal claim.
 
@@ -69,17 +73,32 @@ outcome_identity_key = H(execution_id, objective_id)
 
 Both inputs are restart-independent: `execution_id` derives from the Rust trace, `objective_id` from the policy template instantiated for that decision. Collector receipt time does not enter the key.
 
-`OutcomeIdentityLedger` is first-wins and bounded. It only prevents counting an identity twice; it does not know whether a window was lost, so it cannot stop the first Outcome of an identity from being built after a restart (scenario 5).
-
+`OutcomeIdentityLedger` is first-wins and bounded. Its v2 state also retains
+lost-window identities. A lost window cannot later be counted, even if a caller
+bypasses the collector guard and submits a fabricated new Outcome for that
+identity. If capacity prevents recording a lost-window identity, the ledger
+seals **all new admissions**, preserving duplicates of already retained facts.
+A seal survives restoration even under a larger configured capacity.
 | Case | Admission | Counted |
 |---|---|---|
 | new identity | `admitted` | yes |
 | identical record again (e.g. rotated file read twice) | `duplicate_identical` | no |
 | same identity, different record (e.g. re-observed after restart) | `duplicate_suppressed` | no; first record retained |
+| lost window | `window_lost` | no; no replacement window |
 | ledger full | `capacity_exhausted` | no; fail closed, no identity is forgotten |
 | same identity claimed by a different decision | rejected (`ValueError`) | no |
 
 Ledger state is a plain mapping (`to_dict` / `from_mapping`). `from_mapping` restores under the caller's configured bound: the bound stored in the state is validated (missing, `None` or non-integer is rejected) but never replaces the configured one. It also rejects a wrong schema, an entry whose key does not match its execution/objective, duplicates and state larger than the configured bound.
+
+The checkpoint envelope adds a SHA-256 digest of canonical state. The digest
+detects accidental corruption, not malicious rewriting or source truth. Strict
+restoration validates counters, tombstones, bounds and identity overlaps; v1
+state is refused because it cannot establish lost-window continuity. No
+in-place migration that silently clears the ledger is permitted.
+
+`status()` exposes capacity/used/remaining, retained and lost identities,
+admission counters and whether new admission is closed. These are offline
+read-model values, not new Web API endpoints.
 
 The ledger is not wired into the live G3 CLI. The live CLI still avoids historical replay by starting at EOF. Persisting the ledger on the device (path, fsync, growth, wear) is a G6 decision.
 
@@ -103,18 +122,39 @@ The Rust enforcement and release engines are not part of the Python process and 
 
 G5 adds no decision or enforcement authority, no approval flag, no environment-variable bypass and no live hook. M.I.O. is not involved. `ActionArbiter` and Rust `decide_defense()` behaviour are unchanged. Every Outcome remains `assessment=inconclusive`, `causal_support=inconclusive`; no Effect is `supported`.
 
-## Limitations (G3 semantics, unchanged)
+## Limitations and recovery
 
-**Re-delivery after a lost window.** G5 does not reconstruct a lost window itself, but if the Rust record of that execution is delivered again after the restart (re-read input, `--from-start`, a replay harness), the G3 collector opens a window at the new receipt time and builds an Outcome from post-restart telemetry. The ledger admits it because the identity has no Outcome yet. Such an Outcome is not evidence about the original action window. Replay flags it, and it stays `inconclusive`; changing G3 to refuse it (for example, by comparing receipt time with the provider timestamp, or by recording lost windows durably) would change G3 evidence semantics and is left to an owner decision. The live G3 CLI starts at EOF, so it does not re-read old records on its own.
+Retention is the entire declared recording/evaluation scope: no time-based
+pruning or automatic replenishment. At capacity, keep the checkpoint and
+original input. Reconstruct it from the complete original recording under a
+reviewed larger bound, retaining all identities/tombstones. A seal caused by a
+lost tombstone cannot be cleared by raising a bound; a complete replay must
+reconstruct the missing identity. If evidence is incomplete, leave admissions
+closed. A new empty ledger is valid only for a separately identified new
+experiment with no prior identities reused.
 
-**Mechanism status in the Outcome.** The G3 collector records the mechanism status known when the Rust record arrived (`unverified` for a disruptive action), so the golden Outcome carries the `mechanism_postcondition_not_observed` confounder even though the G1a probe later observed the owned mechanism. Replay reproduces this faithfully; joining G1a results into G3 confounders would change G3 evidence semantics and is not done here.
+The replay knows which windows were pending at each recorded boot boundary.
+This is not crash-safe persistence for a deployed collector: wiring durable
+before-window journaling/fsync, boot recovery and storage budgets into the live
+CLI still requires separate implementation/review and G6 evidence. Abrupt
+loss without a complete checkpoint must be treated as unknown continuity;
+never manufacture post-restart success. The default live observer remains
+unchanged and begins at EOF.
 
-## Not solved by G5
+No Pi/HIL measurement, comparative defensive benefit, causal claim, automatic
+activation or model admission follows from these software tests. Every retained
+Outcome and Effect remains inconclusive under the existing contracts.
 
-- Raspberry Pi/HIL validation, restart cadence, disk growth/wear, CPU/RSS (G6);
-- persisting the identity ledger in the live collector (G6);
-- how ledger exhaustion is surfaced and how capacity is reclaimed once it is wired in: today a full ledger refuses every new identity permanently and the only signal is the `capacity_exhausted` admission (G6);
-- refusing an Outcome whose window was opened by a post-restart re-delivery (see "Limitations");
-- long-term release tombstone compaction / trace-id migration (needs an explicitly approved storage migration design);
-- authoritative actor/session identity;
-- any new tactical-effect rule.
+## Source-to-gate audit (base df4ed2229e457ab80c86630659d78061895aa8ce)
+
+| Gate | Existing source/test | Evidence and remaining owner boundary |
+| --- | --- | --- |
+| G1a | `postcondition.py`, `ownership.py`; `test_outcome_postcondition_v1.py`, `test_outcome_tc_options_readback.py` | Read-only postcondition code; real device evidence remains G6 |
+| G1b | Rust `src/release.rs`, `release_evidence.py`; `test_outcome_release_g1b.py` | Existing owned release authority, not reimplemented here |
+| G3 | `telemetry.py`; `test_outcome_telemetry_g3*.py` | Receipt-time windows, procfs/activity observations; no causal support |
+| G5 | `golden_replay.py`, `outcome_identity.py`; `test_outcome_golden_replay_g5.py`, `test_outcome_window_recovery.py` | Offline replay rejects lost windows; v2 counters/checkpoint tests, not deployed crash recovery |
+| G6 | #400 / #372 | Pi resource/retention/restart measurements outstanding; no hardware evidence in this change |
+| Comparative measurements | #393 / Azazel#67 | Independent protected-goal and service-cost collector and experiments remain separate |
+
+This table records software inspection and declared test scope, not a statement
+that all historical gates or the full #400 issue are complete.

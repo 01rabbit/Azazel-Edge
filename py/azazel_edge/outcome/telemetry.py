@@ -15,6 +15,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from .adapter import from_rust_event
 from .contracts import CausalSupport, EffectObjective, ExecutionStatus, OutcomeAssessment, OutcomeRecord
+from .outcome_identity import OutcomeIdentityLedger
 from .observer import DEFAULT_INPUT, DEFAULT_MAX_OUTPUT_BYTES, append_jsonl
 from .release_evidence import ReleaseEvidenceStatus, from_rust_release_event
 
@@ -268,6 +269,7 @@ class OutcomeTelemetryCollector:
         max_activity_events: int = DEFAULT_MAX_ACTIVITY_EVENTS,
         max_pending: int = DEFAULT_MAX_PENDING,
         max_seen_executions: int = DEFAULT_MAX_SEEN_EXECUTIONS,
+        identity_ledger: OutcomeIdentityLedger | None = None,
     ) -> None:
         if not _valid_interface(interface):
             raise ValueError("invalid telemetry interface")
@@ -290,6 +292,8 @@ class OutcomeTelemetryCollector:
         self.seen_execution_ids: set[str] = set()
         self.max_pending = max_pending
         self.max_seen_executions = max_seen_executions
+        self.identity_ledger = identity_ledger
+        self.lost_window_deliveries = 0
 
     def record_sample(self, *, epoch: float | None = None) -> TelemetrySample | None:
         now = time.time() if epoch is None else float(epoch)
@@ -320,6 +324,11 @@ class OutcomeTelemetryCollector:
             return False
         objective = self.policy.objective_for(action, execution.decision_id)
         if objective is None or objective.decision_id != execution.decision_id:
+            return False
+        if self.identity_ledger is not None and self.identity_ledger.window_lost(
+            execution_id=execution.execution_id, objective_id=objective.objective_id
+        ):
+            self.lost_window_deliveries += 1
             return False
         if execution.execution_id in self.seen_execution_ids:
             return False
@@ -361,6 +370,22 @@ class OutcomeTelemetryCollector:
         records = [self._build_outcome(self.pending.pop(key), now) for key in due]
         self._prune(now)
         return tuple(records)
+
+    def invalidate_pending_windows(self) -> None:
+        """Checkpoint pending-window loss before discarding collector state.
+
+        The caller owns durable storage; this method neither writes nor grants
+        any control authority. Without a ledger no continuity claim is possible.
+        """
+        if self.identity_ledger is None:
+            raise ValueError("window invalidation requires an identity ledger")
+        for pending in self.pending.values():
+            self.identity_ledger.mark_window_lost(
+                execution_id=pending.execution_id,
+                objective_id=pending.objective.objective_id,
+                decision_id=pending.decision_id,
+            )
+        self.pending.clear()
 
     def _observe_release(self, event: Mapping[str, Any]) -> bool:
         try:
