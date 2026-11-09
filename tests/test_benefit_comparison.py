@@ -129,7 +129,7 @@ def test_analysis_is_deterministic_immutable_and_has_no_network_or_execution():
 def test_capture_ground_truth_uses_verified_horizon_and_does_not_use_alert_counts():
     from azazel_edge.benchmark.benefit_receipt import build_receipt
     m = manifest()
-    capture = {"source": "isolated_scenario_controller", "run_id": "capture-1", "boot_id": "boot-a", "clock_id": "clock-a", "clock_kind": "monotonic_elapsed",
+    capture = {"manifest_sha256": manifest_digest(m), "assignment_id": "0-block", "scenario": "auth", "seed": 0, "source": "isolated_scenario_controller", "run_id": "capture-1", "boot_id": "boot-a", "clock_id": "clock-a", "clock_kind": "monotonic_elapsed",
                "milestones": [{"id": "s", "kind": "run_start", "elapsed_seconds": 0},
                               {"id": "g", "kind": "protected_goal", "elapsed_seconds": 30},
                               {"id": "e", "kind": "run_end", "elapsed_seconds": 60}],
@@ -143,7 +143,7 @@ def test_capture_ground_truth_uses_verified_horizon_and_does_not_use_alert_count
     lost = build_receipt(m, "0-block", gap)
     assert not lost["horizon_verified"]
     assert lost["protected_goal_seconds"] is None
-    for fault in ("order", "clock", "duplicate", "short", "alert"):
+    for fault in ("order", "clock", "duplicate", "short", "alert", "manifest", "boot"):
         bad = copy.deepcopy(capture)
         if fault == "order":
             bad["milestones"].reverse()
@@ -153,6 +153,10 @@ def test_capture_ground_truth_uses_verified_horizon_and_does_not_use_alert_count
             bad["legitimate_transactions"].append(bad["legitimate_transactions"][0])
         elif fault == "short":
             bad["milestones"][-1]["elapsed_seconds"] = 50
+        elif fault == "manifest":
+            bad["manifest_sha256"] = "f" * 64
+        elif fault == "boot":
+            bad["milestones"][1]["boot_id"] = "other"
         else:
             bad["milestones"][1]["kind"] = "IDS_alert"
         with pytest.raises(BenefitInputError):

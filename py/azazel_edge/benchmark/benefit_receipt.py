@@ -11,13 +11,18 @@ import json
 import math
 from typing import Any, Mapping
 
-from .benefit import BenefitInputError, SAFETY_FIELDS, _number, _text, validate_manifest
+from .benefit import BenefitInputError, SAFETY_FIELDS, _number, _text, manifest_digest, validate_manifest
 
 
 def build_receipt(manifest: Mapping[str, Any], assignment_id: str, capture: Mapping[str, Any]) -> dict[str, Any]:
     assignments = validate_manifest(manifest)
     if assignment_id not in assignments:
         raise BenefitInputError("unknown assignment")
+    assignment = assignments[assignment_id]
+    if capture.get("manifest_sha256") != manifest_digest(manifest) or capture.get("assignment_id") != assignment_id:
+        raise BenefitInputError("capture manifest/assignment binding mismatch")
+    if capture.get("scenario") != assignment["scenario"] or capture.get("seed") != assignment["seed"]:
+        raise BenefitInputError("capture scenario/seed mismatch")
     if capture.get("source") != "isolated_scenario_controller":
         raise BenefitInputError("milestones require independent scenario provenance")
     _text(capture.get("run_id"))
@@ -37,6 +42,8 @@ def build_receipt(manifest: Mapping[str, Any], assignment_id: str, capture: Mapp
     for event in events:
         if not isinstance(event, Mapping):
             raise BenefitInputError("invalid milestone")
+        if any(event.get(name, capture[name]) != capture[name] for name in ("boot_id", "clock_id")):
+            raise BenefitInputError("cross-boot or cross-clock milestone")
         key = _text(event.get("id"))
         if key in seen:
             raise BenefitInputError("duplicate milestone")
