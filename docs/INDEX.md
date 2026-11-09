@@ -128,3 +128,5 @@ Historical planning and issue-body artifacts retained for traceability. These do
 If `Last Updated` is `-`, check the target document metadata.
 
 - [Optional SOC overview](SOC_OVERVIEW.md) — read-only layout, evidence binding and limits.
+
+- [Offline operator study](OPERATOR_STUDY.md) — anonymous capture, blinded scoring and participant-level paired comparison.

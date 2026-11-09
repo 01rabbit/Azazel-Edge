@@ -1,0 +1,407 @@
+{
+  "captures": [
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-0-0-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-0-0-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-0-1-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-0-1-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-1-0-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-1-0-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-1-1-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-1-1-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-2-0-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-2-0-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-2-1-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-2-1-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-3-0-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-3-0-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-3-1-classic",
+      "consented": true,
+      "elapsed_seconds": 30,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    },
+    {
+      "answer_ids": [
+        "choice-unknown"
+      ],
+      "assignment_id": "t-3-1-overview",
+      "consented": true,
+      "elapsed_seconds": 20,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "timed_out": false
+    }
+  ],
+  "plan_sha256": "2fdd79b23519c27adc894c907228d8301ee8da11634f5e2d0a89a4429cc7f61f",
+  "receipts": [
+    {
+      "assignment_id": "t-0-0-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "8c820b642dad7184ebf6ba6dcfc9c58ed0932fcf31e31797d911d7145a274021",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-0-0-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "c72ed2186c7eef375693e6a509290474396a19eb50cbf87a363eb4f1123257d1",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-0-1-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "3c23494cd87272fb743a8f8e1537373e8a7cc4011a287c68213468765e0c651d",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-0-1-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "a60fd9b43e645455f3528fc9c9f1716cef2b70fce44b5e1273e6206f9412e337",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-1-0-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "7633ddbcf6c1368cfc7965c407d585dd30a3eaff8ced68f388a26bbf4b6881e9",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-1-0-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "501af1efc3d4bef065b6220cd6b92cb0444fb621a8ffa66a7f306e0bc14c18fa",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-1-1-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "b808b0103af741e3016ee5077faf8a5ac94d2019d1173be6de450b14831ae2b3",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-1-1-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "e5bedbb9bb4be5b70632287223f48f4bc2e574db507959d7fa15e723c721d937",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-2-0-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "3100265f6dcf695cd4925d2c5336e482a11cad2232f3ca401715e4bd7d94d5eb",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-2-0-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "f2ee7d7094bc9f8c3389f06e8e5d341eacd50086065e639a2281e86149eaec34",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-2-1-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "89f4970589ce2e33b9079a6dad12c114588d86feda10a6bab4243186a5311019",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-2-1-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "52f2c7133572c30dc52035384d888a0310c3a9c860b8b5bb970cc9bb7b2d254b",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-3-0-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "3e6b2adda3d455400e73845b27c593ac150ea20352980f7163d9f8ab1e952c00",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-3-0-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "3a7aab385d141860042dd167c52476e0d7bff33e4c7b1a6fc3d13f764d9e1997",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-3-1-classic",
+      "blinded_scoring": true,
+      "capture_sha256": "b4cd8155dbf05cb3bdd7ea3a3563fb5978e400017ac03f957ad76a330f45d356",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 30,
+      "handoff_score": 1,
+      "render_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    },
+    {
+      "assignment_id": "t-3-1-overview",
+      "blinded_scoring": true,
+      "capture_sha256": "58dc248a8e0bb7eea144b2754e241d6f214a45ffb9d6c67b5201461efa627d66",
+      "consented": true,
+      "correct": true,
+      "elapsed_seconds": 20,
+      "handoff_score": 1,
+      "render_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rubric_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timed_out": false,
+      "unsafe_choice": false
+    }
+  ]
+}
