@@ -147,3 +147,10 @@ fresh-only sampling, clock jump and pre-commit mutation refusal; default/opt-in
 CLI and no network/command dependency. Existing v1/G3/G5/measurement tests must
 remain green. No physical power-loss or complete-source-authentication result
 is inferred from these process tests.
+
+
+The separate [opt-in v3 authenticated-capture profile](outcome-authenticated-input.md)
+adds public-key source verification and a separately owned protected-prefix
+witness for new scopes. It does not migrate existing records or change this
+version's claims; coordinated whole-machine rollback remains outside its
+software-only guarantee.

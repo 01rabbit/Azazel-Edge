@@ -352,3 +352,23 @@ The separate `input_resume` foreground driver owns loss-before-cursor ordering,
 fresh-only warmup/time filters, prefix checks before commit and clock checks.
 It adds no Web endpoint, executor, network client, history reconstruction or
 source mutation. See the [v2 contract](architecture/outcome-input-resume.md).
+
+### Authenticated input and witness (optional v3)
+
+`TrustPolicy.from_file(..., role=...)` loads an immutable public trust context
+with ownership, key, path, UID and budget checks. `SignedCaptureWriter` is an
+explicit origin-capture producer API; its signer/key is never loaded by the
+consumer. `InputAuthentication` plugs public verification and a fresh-nonce
+Unix witness client into the existing bounded input/journal adapters.
+
+The separately launched `input_witness` process signs only bounded high-water
+anchors and nonce-bound responses for two fixed read-only paths. Its only
+requests are `read` and compare-and-`advance`; there is no payload signing,
+arbitrary file, repair, reset, executor or IP endpoint. Every observer journal
+append requires the witness's durable exact-head acknowledgement. Reopen
+requires an exact protected head before recovery writes. Non-matching evidence
+withholds admission; it does not upgrade outcomes or reconstruct telemetry.
+
+See the [v3 protocol and guarantee boundary](architecture/outcome-authenticated-input.md).
+V1/v2 APIs and default behavior remain available for their original scopes;
+v3 cannot silently reopen under either older profile.

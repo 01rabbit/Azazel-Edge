@@ -1,0 +1,4 @@
+# Explicit opt-in only. Provision wheels before offline use; never installed by runtime.
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12

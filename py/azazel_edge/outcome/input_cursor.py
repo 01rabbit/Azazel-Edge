@@ -31,7 +31,12 @@ class BoundedInput:
     """
 
     def __init__(
-        self, path, *, max_bytes=DEFAULT_INPUT_BYTES, max_records=DEFAULT_INPUT_RECORDS
+        self,
+        path,
+        *,
+        max_bytes=DEFAULT_INPUT_BYTES,
+        max_records=DEFAULT_INPUT_RECORDS,
+        authentication=None,
     ):
         path = Path(path)
         if not path.is_absolute() or ".." in path.parts:
@@ -43,6 +48,21 @@ class BoundedInput:
             raise OutcomeJournalError("invalid input byte budget")
         if type(max_records) is not int or not 1 <= max_records <= 32768:
             raise OutcomeJournalError("invalid input record budget")
+        self.authentication = authentication
+        if authentication is not None:
+            from .input_witness import InputAuthentication
+
+            if type(authentication) is not InputAuthentication:
+                raise OutcomeJournalError(
+                    "explicit input authentication profile required"
+                )
+            p = authentication.policy.data
+            if (
+                str(path) != p["source_path"]
+                or max_bytes != p["input_max_bytes"]
+                or max_records != p["input_max_records"]
+            ):
+                raise OutcomeJournalError("input authentication path/budget mismatch")
         self.fd = None
         self.parent = None
         self.path = path
@@ -78,17 +98,23 @@ class BoundedInput:
                 max_bytes=max_bytes,
                 max_records=max_records,
             )
+            if authentication is not None:
+                self.config["authentication"] = authentication.binding()
             self._namespace()
         except BaseException:
             self.close()
             raise
 
-    @staticmethod
-    def _safe(info):
+    def _safe(self, info):
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_nlink != 1
-            or info.st_uid not in (0, os.geteuid())
+            or info.st_uid
+            not in (
+                (self.authentication.policy.data["producer_uid"],)
+                if self.authentication
+                else (0, os.geteuid())
+            )
             or info.st_mode & 0o022
         ):
             raise OutcomeJournalError(
@@ -154,6 +180,8 @@ class BoundedInput:
             raise OutcomeJournalError("incomplete input tail; automatic resume refused")
         if size - end > MAX_LINE_BYTES:
             raise OutcomeJournalError("oversized incomplete input record")
+        if self.authentication is not None:
+            self.authentication.verify(data[:end])
         self._candidate = None
         self._snapshot_data = data[:end]
         self._snapshot_position = dict(position)
@@ -177,7 +205,10 @@ class BoundedInput:
             offset += len(raw)
             digest.update(raw)
             self._candidate = dict(offset=offset, sha256=digest.hexdigest())
-            yield InputLine(raw=raw, position=dict(self._candidate))
+            yield InputLine(
+                raw=self.authentication.unwrap(raw) if self.authentication else raw,
+                position=dict(self._candidate),
+            )
 
     def validate_candidate(self, previous, candidate):
         self.position(candidate)

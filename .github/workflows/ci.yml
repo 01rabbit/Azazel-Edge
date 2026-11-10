@@ -46,6 +46,8 @@ jobs:
           # Fabric remains optional at runtime, but CI installs the exact pin so
           # AZ-06 shadow/replay contract integration is exercised on every change.
           pip install -r requirements/fabric.txt
+          # Optional auth is installed here so signature tests cannot silently skip.
+          pip install -r requirements/input-auth.txt
           pip install pytest
 
       - name: Normalize local tooling permissions
@@ -63,6 +65,16 @@ jobs:
         run: |
           node tests/touch_console_logic.test.js
           node tests/sentinel_console_logic.test.js
+
+      - name: Authenticated input with actual separate UIDs (offline witness)
+        run: |
+          # Search permission on this disposable runner only; checkout is readable.
+          sudo chmod o+x "$HOME"
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_outcome_input_auth_linux.py | tee input-auth-uids.log
+          grep -Eq "^[0-9]+ passed" input-auth-uids.log
+          ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
       - name: Run tests
         run: |
@@ -479,6 +491,11 @@ jobs:
         run: |
           pip-audit -r requirements/runtime.txt -f json -o pip-audit-runtime.json
 
+      - name: Optional authenticated-input dependency gate and SBOM
+        run: |
+          cyclonedx-py requirements requirements/input-auth.txt --output-file sbom-input-auth.cdx.json
+          pip-audit -r requirements/input-auth.txt -f json -o pip-audit-input-auth.json
+
       - name: Upload supply-chain artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -486,6 +503,8 @@ jobs:
           path: |
             sbom-runtime.cdx.json
             pip-audit-runtime.json
+            sbom-input-auth.cdx.json
+            pip-audit-input-auth.json
 
       - name: Generate SHA-256 checksums for key artifacts
         run: |
