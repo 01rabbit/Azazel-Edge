@@ -94,7 +94,8 @@ def _join(manifest, assignment, record):
         raise BenefitInputError('invalid closed confounders')
     reasons.extend(confounders)
     clock = linkage.get('clock')
-    if not isinstance(clock, Mapping): raise BenefitInputError('explicit clock mapping required')
+    if not isinstance(clock, Mapping) or set(clock) != {'edge_epoch_origin','controller_epoch_origin','uncertainty_ms'}:
+        raise BenefitInputError('explicit minimized clock mapping required')
     edge_origin = _number(clock.get('edge_epoch_origin'))
     controller_origin = _number(clock.get('controller_epoch_origin'))
     uncertainty = _number(clock.get('uncertainty_ms'))
@@ -186,6 +187,13 @@ def _join(manifest, assignment, record):
 def measure_experiment(manifest, inputs):
     _bounded(manifest); _bounded(inputs)
     assignments = validate_manifest(manifest)
+    _ref(manifest['experiment_id'])
+    for arm in manifest['arms']:
+        if set(arm) != {'id','role','source_commit','config_sha256','environment_id'}:
+            raise BenefitInputError('unexpected arm metadata cannot enter minimized reports')
+        for field in ('id','role','environment_id'): _ref(arm[field])
+    for assignment in assignments.values():
+        for field in ('id','pair_id','arm','scenario'): _ref(assignment[field])
     if len(assignments) > LIMITS['max_runs']:
         raise BenefitInputError('measurement run budget exceeded')
     if not isinstance(inputs, Mapping) or inputs.get('manifest_sha256') != manifest_digest(manifest):

@@ -200,3 +200,15 @@ def test_unsafe_capture_with_missing_run_id_still_fails_safety():
     assert out['integrity_rejections']==1 and out['comparison']['measurement_gate']=='safety_failed'
     rejected=next(row for row in out['ledger'] if row['status']=='rejected')
     assert rejected['receipt_identity_basis']=='local_rejected_assignment_not_source_run'
+
+
+def test_metadata_cannot_echo_secrets_into_minimized_bundle():
+    m,rs=data();m['arms'][0]['raw_owner_token']='not-for-public-output'
+    rs['manifest_sha256']=manifest_digest(m)
+    with pytest.raises(BenefitInputError,match='metadata'):measure_experiment(m,rs)
+    m,rs=data();rs['records'][0]['linkage']['clock']['raw_payload']='not-for-public-output'
+    result=measure_experiment(m,rs)
+    assert result['integrity_rejections']==1 and 'not-for-public-output' not in json.dumps(result)
+    m,rs=data();m['assignments'][0]['scenario']='secret-account';rs['manifest_sha256']=manifest_digest(m)
+    # Pair validation or safe-reference validation refuses the secret-shaped ID.
+    with pytest.raises(BenefitInputError):measure_experiment(m,rs)
