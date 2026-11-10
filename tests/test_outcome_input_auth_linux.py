@@ -753,6 +753,14 @@ from azazel_edge.outcome.input_origin import RegisteredOrigin
 try:
  p=TrustPolicy.from_file(Path(sys.argv[1]),role='producer')
  origin=RegisteredOrigin(p,Path(sys.argv[3]))
+ if len(sys.argv)>4 and sys.argv[4]=='hold-transform':
+  real=origin.transform
+  def held(line):
+   event=real(line)
+   print('{"holding":true}',flush=True)
+   sys.stdin.readline()
+   return event
+  origin.transform=held
  with SignedCaptureWriter(p,Path(sys.argv[2]),boot_ref='origin-boot') as writer:
   origin.bind(writer)
   print('{"ready":true}',flush=True)
@@ -813,7 +821,7 @@ def register_origin(f):
 
 
 class OriginChild:
-    def __init__(self, f):
+    def __init__(self, f, mode="normal"):
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -822,6 +830,7 @@ class OriginChild:
                 str(f.policy_file),
                 str(f.pk),
                 str(f.registration),
+                mode,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1151,3 +1160,23 @@ def test_real_origin_ignores_enforcement_environment_and_never_enters_runtime(
             assert result.returncode != 0
         assert not unexpected.exists()
         assert f.source.read_bytes() == b""
+
+
+def test_origin_rechecks_raw_identity_after_real_core_before_signing(registered):
+    f = registered
+    origin = OriginChild(f, "hold-transform")
+    try:
+        assert origin.initial.get("ready"), origin.initial
+        append_raw(f)
+        origin.process.stdin.write("poll\n")
+        origin.process.stdin.flush()
+        assert origin.read() == {"holding": True}
+        previous = f.root / "rotated-while-calculating"
+        f.raw.rename(previous)
+        f.raw.write_bytes(previous.read_bytes())
+        origin.process.stdin.write("continue\n")
+        origin.process.stdin.flush()
+        assert origin.read().get("refused")
+        assert f.source.read_bytes() == b""
+    finally:
+        origin.close()

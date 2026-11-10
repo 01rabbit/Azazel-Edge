@@ -260,8 +260,11 @@ class RegisteredOrigin:
             raise OutcomeJournalError("partial raw origin record too large")
         for line in suffix[:end].splitlines(keepends=True):
             event = self.transform(line)
+            prefix = self.raw + line
+            latest, _ = self.snapshot()
+            if not latest.startswith(prefix):
+                raise OutcomeJournalError("raw origin changed during calculation")
             if event is not None:
-                prefix = self.raw + line
                 event["capture_origin"] = dict(
                     schema_version="outcome-registered-origin/v1",
                     registration_sha256=self.digest,

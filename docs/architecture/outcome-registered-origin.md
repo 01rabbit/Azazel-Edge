@@ -92,6 +92,8 @@ Signed sequence/chain and raw offsets continue; only newly completed raw lines
 can be signed. Live partial lines wait for newline within the bound; partial
 startup records refuse. Invalid raw/child output, capacity, deadline, signature,
 fsync or path failure stops the foreground producer and poisons that session.
+Raw namespace and consumed bytes are checked again after the Rust calculation,
+before signing, so rotation/change during that calculation refuses the append.
 No signed position advances before signed source fsync. Earlier acknowledged
 records are preserved. An observer independently requires its fresh matching
 protected witness head before resumption; producer availability is no proof
