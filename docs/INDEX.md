@@ -131,3 +131,5 @@ If `Last Updated` is `-`, check the target document metadata.
 - [Optional SOC overview](SOC_OVERVIEW.md) — read-only layout, evidence binding and limits.
 
 - [Offline operator study](OPERATOR_STUDY.md) — anonymous capture, blinded scoring and participant-level paired comparison.
+
+- [Recorded measurement path](MEASUREMENT_PATH.md) — frozen software pilot, independent capture API and exact evidence joins.
