@@ -75,7 +75,7 @@ jobs:
           sudo chmod o+x "$HOME"
           set -o pipefail
           sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
-            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py | tee input-auth-uids.log
+            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py tests/test_outcome_native_confinement_linux.py | tee input-auth-uids.log
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [baseline, apparmor]
+        flavor: [baseline, apparmor, native-apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -99,7 +99,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-venv
-          if [ '${{ matrix.flavor }}' = apparmor ]; then
+          if [ '${{ matrix.flavor }}' != baseline ]; then
             sudo apt-get install -y -qq apparmor apparmor-utils libapparmor1
           fi
           test ! -e /etc/systemd/system/azazel-edge-core.service
@@ -127,11 +127,13 @@ jobs:
           # Namespace only the driver, never alter runner networking. Lab
           # services independently restrict sockets to AF_UNIX. No reboot here.
           driver=guest.py
-          if [ '${{ matrix.flavor }}' = apparmor ]; then driver=armor.py; fi
+          if [ '${{ matrix.flavor }}' != baseline ]; then driver=armor.py; fi
+          native_args=
+          if [ '${{ matrix.flavor }}' = native-apparmor ]; then native_args=--native-core; fi
           for phase in prepare exercise smoke-finish; do
             sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
               /opt/edge400-runtime/bin/python -I "/opt/edge400-src/tests/real_systemd/$driver" \
-              "$phase" --allow-disposable-vm
+              "$phase" --allow-disposable-vm $native_args
           done
       - name: Collect minimized lab evidence
         if: always()

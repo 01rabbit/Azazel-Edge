@@ -249,9 +249,8 @@ class Systemd:
     def capture_ready(self, bundle, p, main_pid, after_seq):
         from .input_live import registration
 
-        expected_armor = registration(p, bundle / "origin.json").get(
-            "capture_apparmor_profile"
-        )
+        registered = registration(p, bundle / "origin.json")
+        expected_armor = registered.get("capture_apparmor_profile")
         raw, _ = read_regular(
             p.data["source_path"],
             owner=p.data["producer_uid"],
@@ -271,11 +270,27 @@ class Systemd:
         if len(children) > 16:
             raise OutcomeJournalError("service child inventory bound")
         signers = 0
+        natives = 0
         for child in children:
             try:
                 status = Path(f"/proc/{child}/status").read_text()
                 uid = int(status.split("Uid:", 1)[1].split()[0])
                 command = Path(f"/proc/{child}/cmdline").read_bytes().split(b"\0")
+                if (
+                    "native_apparmor_profile" in registered
+                    and b"--live-origin-fd" in command
+                ):
+                    if (
+                        uid != 0
+                        or Path(f"/proc/{child}/attr/apparmor/current")
+                        .read_text()
+                        .strip()
+                        != registered["native_apparmor_profile"] + " (enforce)"
+                    ):
+                        raise OutcomeJournalError(
+                            "live native AppArmor context unavailable"
+                        )
+                    natives += 1
                 if (
                     uid == p.data["producer_uid"]
                     and b"--receive-fd" in command
@@ -294,15 +309,19 @@ class Systemd:
                     signers += 1
             except FileNotFoundError:
                 continue
+        if "native_apparmor_profile" in registered and natives != 1:
+            raise OutcomeJournalError("registered confined native process not alive")
         if signers != 1:
             raise OutcomeJournalError("registered signer process not alive")
         self.witness(bundle, p)
 
     def native(self, r):
+        from .input_live import native_arguments
+
         image = sealed_image(r)
         try:
             result = subprocess.run(
-                [f"/proc/self/fd/{image}", "--health"],
+                [f"/proc/self/fd/{image}", "--health", *native_arguments(r)],
                 pass_fds=(image,),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
@@ -328,7 +347,22 @@ class Systemd:
             raise OutcomeJournalError(
                 "registered native lacks shared instance/capture contract"
             )
-        return dict(version=report["version"], capture_service=expected)
+        if "native_apparmor_profile" in r and report.get("native_apparmor") != dict(
+            schema_version="azazel-edge-core/native-apparmor/v1",
+            sealed_memfd=True,
+            early_transition=True,
+            enforced_profile=r["native_apparmor_profile"],
+        ):
+            raise OutcomeJournalError("registered native AppArmor gate unavailable")
+        return dict(
+            version=report["version"],
+            capture_service=expected,
+            **(
+                {"native_apparmor": report["native_apparmor"]}
+                if "native_apparmor_profile" in r
+                else {}
+            ),
+        )
 
     def runtime(self, python, package):
         script = "from pathlib import Path;from azazel_edge.outcome import service_entry;from azazel_edge.outcome.input_auth import crypto;crypto();print(Path(service_entry.__file__).resolve().parent)"
