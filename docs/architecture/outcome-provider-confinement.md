@@ -108,3 +108,20 @@ reboots the hosted runner. Actual OS reboot evidence comes from the dedicated
 local VM; physical Pi/storage/power-cut/resource/hostile-load and independent
 comparative-effect gates remain open. Failed fixtures and evidence are retained;
 no missing observation is filled in or promoted to execution/effect proof.
+
+## Native nft release input compatibility
+
+The real-provider regression exposed a legacy assumption in the read-only
+release adapter: every throttle release required a tc handle. Native nft flow
+limits have no tc handle. The adapter now accepts only the exact
+`nft:inet:azazel_edge:throttle:SOURCE>DESTINATION:PROTOCOL:PORT` identity with
+validated same-family addresses, supported protocol/port semantics, no zone or
+ambiguous port syntax, empty tc handle and a bounded owner matching its release
+task. Other nft chains/opaque resources cannot masquerade as this mechanism;
+legacy tc releases still require their valid handle. Release ownership uses the
+nft comment, and exact execution/task/resource/observed-owner correlations remain.
+Retry-pending/unverified release cannot become released evidence, and an
+unobserved mechanism is never promoted retrospectively. No command is executed
+by this adapter and no missing telemetry is reconstructed. A previously blocked
+valid signed record can be decoded at its preserved cursor after the code fix;
+continuity/witness verification and recovery-loss accounting remain mandatory.
