@@ -102,6 +102,11 @@ jobs:
           sudo chown -R root:root /opt/edge400-src
           sudo chmod -R go-w /opt/edge400-src
           git rev-parse HEAD | sudo tee /opt/edge400-src/SOURCE_REVISION >/dev/null
+          # Hosted image tool directories can be runner-owned/group-writable.
+          # Commission this disposable job's exact binary ancestors as root;
+          # production preflight must continue to reject unprotected parents.
+          sudo chown root:root /usr/local /usr/local/bin
+          sudo chmod go-w /usr/local /usr/local/bin
           sudo install -m 755 rust/azazel-edge-core/target/debug/azazel-edge-core /usr/local/bin/azazel-edge-core
           sudo /usr/bin/python3 -m venv --copies /opt/edge400-runtime
           sudo /opt/edge400-runtime/bin/pip install -r requirements/input-auth.txt pytest
