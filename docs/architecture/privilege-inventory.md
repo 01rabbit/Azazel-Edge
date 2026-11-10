@@ -1340,3 +1340,15 @@ this change; commissioning must separately review that read boundary and
 measure target-device costs. Whole-host/witness compromise or coordinated
 rollback of source, journal and protected anchor remains outside the software
 claim; independent monotonic anchoring is still required for that threat.
+
+The [optional registered origin](outcome-registered-origin.md) runs only in the
+non-root capture-producer UID. It reads one operator-enrolled raw EVE source and
+one witness-owned hash-pinned ELF image, then executes a sealed copy with the
+fixed `--capture-origin-once` argument and a minimal environment. This specific
+mode returns before normal configuration/main startup and cannot enter apply,
+release reconciliation, forwarding or spooling. Anonymous pipes join only that
+producer and child. The child shares the trusted producer UID; it is not a new
+key-isolation boundary. The observer/witness gains no subprocess or arbitrary
+file/signing endpoint. `input_enroll` emits public candidates without writes,
+private keys or provisioning. Installed live-core authority remains as above;
+this optional connection has not been activated on a device.

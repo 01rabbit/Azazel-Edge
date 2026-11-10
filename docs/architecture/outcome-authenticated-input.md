@@ -18,7 +18,9 @@ truth. No signature upgrades an Outcome, causal-support or tactical assessment.
 The existing G1/G3/G5 contracts remain authoritative and inconclusive where
 proof is missing. `SignedCaptureWriter` is an explicit producer API accepting
 origin-capture facts; it never automatically tails/re-signs an unauthenticated
-log. It is not wired into the Rust hot path by this PR.
+log. The [registered read-only Rust origin](outcome-registered-origin.md) adds
+an explicitly enrolled private-pipe connection outside the enforcing hot path;
+ordinary v1 trust scopes retain this API-only contract.
 
 The implementation uses the PyCA [Ed25519 API](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/).
 No cryptographic primitive is implemented locally. Source, anchor and response
@@ -204,3 +206,13 @@ and no automatic catch-up of an unacknowledged journal tail. CI explicitly runs
 the separate-UID tests as root and rejects a skipped run. Software evidence is
 not physical power-loss, SD wear/cache, peak RSS/CPU, latency, hostile-load or
 live-source enrollment acceptance. #400/G6 and #393 retain those owners/gates.
+
+## Optional registered-origin policy
+
+New scopes may select `outcome-input-trust/v2`, which adds the exact public
+`origin_registration_sha256` field. The existing v3 journal binds that entire
+policy digest. Every signed event must then carry the matching registered
+read-only origin and strictly increasing raw prefix cursor; an otherwise valid
+signature without enrollment is refused. There is no v1 policy fallback for an
+existing registered scope. See the [enrollment and real Rust connection
+contract](outcome-registered-origin.md) for setup, tests and remaining gates.

@@ -1953,7 +1953,56 @@ fn health_report(cfg: &Config) -> Value {
     })
 }
 
+/// Private-pipe origin protocol: one bounded EVE record, no runtime setup,
+/// configuration load, executor, release reconciliation, log or AI forwarding.
+/// This reports a read-only core calculation, never a live execution receipt.
+fn capture_origin_once<R: std::io::Read, W: Write>(reader: R, mut writer: W) -> Result<(), String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader.take(65537).read_to_end(&mut bytes).map_err(|_| "origin read")?;
+    if bytes.len() > 65536 || !bytes.ends_with(b"\n") || bytes[..bytes.len() - 1].contains(&b'\n') {
+        return Err("origin framing".into());
+    }
+    let parsed: Value = serde_json::from_slice(&bytes).map_err(|_| "origin JSON")?;
+    let event_type = parsed.get("event_type").and_then(Value::as_str).ok_or("origin event type")?;
+    let event = match build_normalized_event(&parsed) {
+        None if event_type != "alert" => Value::Null,
+        None => return Err("origin malformed alert".into()),
+        Some(normalized) => {
+            let decision = decide_defense(&normalized);
+            json!({
+                "source": "suricata_eve", "pipeline": "rust_event_engine_v1",
+                "enforcement_status": {"enforce_enabled": false, "enforce_level": "advisory",
+                    "dry_run": true, "high_impact_auto": false, "allowed_actions": []},
+                "enforcement": {"mode": "dry_run", "trace_id": calc_trace_id(&normalized, &decision),
+                    "selected_action": decision.action, "target": decision.target,
+                    "policy_reason": decision.policy_reason, "command_plan": [], "rollback_plan": [],
+                    "executed_count": 0, "failed_count": 0, "errors": [],
+                    "rollback_hint": "capture-only; no execution or release",
+                    "result": "dry_run", "metadata": {"capture_only": true}},
+                "normalized": normalized, "defense": decision,
+            })
+        }
+    };
+    let mut output = serde_json::to_vec(&event).map_err(|_| "origin serialize")?;
+    output.push(b'\n');
+    if output.len() > 65536 {
+        return Err("origin output bound".into());
+    }
+    writer.write_all(&output).map_err(|_| "origin write".into())
+}
+
 fn main() {
+    let origin_args: Vec<String> = env::args().collect();
+    if origin_args.iter().any(|a| a == "--capture-origin-once") {
+        if origin_args.len() != 2
+            || capture_origin_once(std::io::stdin().lock(), std::io::stdout().lock()).is_err()
+        {
+            eprintln!("capture origin refused");
+            std::process::exit(1);
+        }
+        return;
+    }
     let cfg = load_config();
 
     // The contract subcommands return before anything else happens. They read
@@ -3844,5 +3893,33 @@ mod tests {
         let _ = before;
         undelivered::finish();
         let _ = fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod capture_origin_tests {
+    use super::*;
+    #[test]
+    fn bounded_readonly_origin() {
+        let raw = br#"{"event_type":"alert","alert":{"severity":1,"signature_id":10}}"#;
+        let mut input = raw.to_vec();
+        input.push(b'\n');
+        let mut out = Vec::new();
+        capture_origin_once(&input[..], &mut out).unwrap();
+        let value: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["defense"]["action"], "throttle");
+        assert_eq!(value["enforcement"]["executed_count"], 0);
+        assert_eq!(value["enforcement"]["result"], "dry_run");
+        assert_eq!(value["enforcement_status"]["enforce_enabled"], false);
+        assert_eq!(value["enforcement"]["command_plan"], json!([]));
+        for bad in [
+            b"{}".to_vec(), b"{}\n{}\n".to_vec(), vec![b'x'; 65537],
+            b"bad\n".to_vec(), b"{}\n".to_vec(), b"{\"event_type\":\"alert\"}\n".to_vec(),
+        ] {
+            assert!(capture_origin_once(&bad[..], Vec::new()).is_err());
+        }
+        let mut out = Vec::new();
+        capture_origin_once(&b"{\"event_type\":\"stats\"}\n"[..], &mut out).unwrap();
+        assert_eq!(out, b"null\n");
     }
 }

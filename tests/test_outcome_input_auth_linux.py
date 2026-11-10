@@ -741,3 +741,413 @@ def test_root_owned_anchor_below_observer_writable_ancestor_is_refused():
         assert list(protected.iterdir()) == []
     finally:
         f.clean()
+
+
+# Registered origin uses the real compiled core, not a Python look-alike. CI
+# builds it explicitly; root-stage absence is a failure, never a skipped pass.
+ORIGIN_WORKER = r"""
+import sys,json
+from pathlib import Path
+from azazel_edge.outcome.input_auth import TrustPolicy,SignedCaptureWriter
+from azazel_edge.outcome.input_origin import RegisteredOrigin
+try:
+ p=TrustPolicy.from_file(Path(sys.argv[1]),role='producer')
+ origin=RegisteredOrigin(p,Path(sys.argv[3]))
+ with SignedCaptureWriter(p,Path(sys.argv[2]),boot_ref='origin-boot') as writer:
+  origin.bind(writer)
+  print('{"ready":true}',flush=True)
+  for command in sys.stdin:
+   if command.strip()=='close': break
+   origin.poll(writer)
+   print(json.dumps({'seq':writer.verifier.seq}),flush=True)
+ origin.close()
+except Exception as e:
+ print(json.dumps({'refused':True,'error':str(e)}),flush=True)
+ sys.exit(1)
+"""
+
+
+def register_origin(f):
+    import hashlib
+
+    core = Path(
+        os.environ.get(
+            "EDGE_ORIGIN_TEST_CORE",
+            str(ROOT / "rust/azazel-edge-core/target/debug/azazel-edge-core"),
+        )
+    )
+    assert core.is_file(), "real Rust origin must be built for this stage"
+    f.binary = f.root / "core"
+    shutil.copyfile(core, f.binary)
+    f.binary.chmod(0o755)
+    f.raw = f.root / "eve.json"
+    f.raw.write_bytes(b'{"event_type":"stats"}\n')
+    f.raw.chmod(0o644)
+    info = f.raw.stat()
+    r = dict(
+        schema_version="outcome-origin-registration/v1",
+        mode="readonly-core",
+        **{
+            k: f.p.data[k]
+            for k in ("scope_ref", "producer_ref", "stream_ref", "producer_public_key")
+        },
+        binary_path=str(f.binary),
+        binary_sha256=hashlib.sha256(f.binary.read_bytes()).hexdigest(),
+        raw_path=str(f.raw),
+        raw_uid=0,
+        raw_device=info.st_dev,
+        raw_inode=info.st_ino
+    )
+    f.registration = f.root / "registration.json"
+    data = _json(r)
+    f.registration.write_bytes(data)
+    f.registration.chmod(0o644)
+    f.p = TrustPolicy(
+        {
+            **dict(f.p.data),
+            "schema_version": "outcome-input-trust/v2",
+            "origin_registration_sha256": hashlib.sha256(data).hexdigest(),
+        }
+    )
+    f.policy_file.write_bytes(_json(dict(f.p.data)))
+
+
+class OriginChild:
+    def __init__(self, f):
+        self.process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                ORIGIN_WORKER,
+                str(f.policy_file),
+                str(f.pk),
+                str(f.registration),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ, PYTHONPATH=str(ROOT) + ":" + str(ROOT / "py")),
+            user=1000,
+            group=1000,
+            extra_groups=[],
+        )
+        self.initial = self.read()
+
+    def read(self):
+        assert select.select([self.process.stdout], [], [], 15)[0], "origin timed out"
+        line = self.process.stdout.readline()
+        assert line, self.process.stderr.read()
+        return json.loads(line)
+
+    def poll(self):
+        self.process.stdin.write("poll\n")
+        self.process.stdin.flush()
+        return self.read()
+
+    def close(self):
+        if self.process.poll() is None:
+            try:
+                self.process.stdin.write("close\n")
+                self.process.stdin.flush()
+            except BrokenPipeError:
+                pass
+        self.process.wait(timeout=15)
+        self.process.stdin.close()
+        self.process.stdout.close()
+        self.process.stderr.close()
+
+
+@pytest.fixture
+def registered():
+    f = Fixture()
+    try:
+        register_origin(f)
+        yield f
+    finally:
+        f.clean()
+
+
+def append_raw(f, suffix=b"\n"):
+    with f.raw.open("ab") as raw:
+        raw.write(
+            b'{"event_type":"alert","timestamp":"2026-11-10T00:00:00Z","alert":{"severity":1,"signature_id":42}}'
+            + suffix
+        )
+        raw.flush()
+        os.fsync(raw.fileno())
+
+
+def test_registered_real_core_pipe_signs_and_witness_reopens_without_backfill(
+    registered,
+):
+    f = registered
+    f.start(initialize=True)
+    observer = Child(f, True)
+    assert observer.initial.get("ready")
+    origin = OriginChild(f)
+    try:
+        assert origin.initial.get("ready"), origin.initial
+        assert origin.poll() == {"seq": 0}  # Pre-start stats never replayed.
+        append_raw(f)
+        assert origin.poll() == {"seq": 1}
+        wire = json.loads(f.source.read_bytes())
+        assert wire["event"]["normalized"]["sid"] == 42
+        assert wire["event"]["enforcement"]["executed_count"] == 0
+        assert (
+            wire["event"]["capture_origin"]["raw_cursor"]["offset"]
+            == f.raw.stat().st_size
+        )
+        assert SourceVerifier(f.p).verify(f.source.read_bytes())["seq"] == 1
+    finally:
+        origin.close()
+        observer.close()
+    # Verified raw prefix and signed sequence survive a new producer. Bytes
+    # arriving while it was absent are excluded, not re-signed or reconstructed.
+    append_raw(f)
+    origin = OriginChild(f)
+    try:
+        assert origin.initial.get("ready"), origin.initial
+        assert origin.poll() == {"seq": 1}
+        append_raw(f)
+        assert origin.poll() == {"seq": 2}
+    finally:
+        origin.close()
+    observer = Child(f)
+    try:
+        assert observer.initial.get("ready"), observer.initial
+    finally:
+        observer.close()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_registration",
+        "digest",
+        "binary",
+        "key",
+        "owner",
+        "symlink",
+        "raw_identity",
+        "partial",
+        "malformed",
+        "legacy",
+    ],
+)
+def test_origin_registration_refuses_without_signed_append(registered, fault):
+    f = registered
+    if fault == "missing_registration":
+        f.registration.unlink()
+    elif fault == "digest":
+        f.registration.write_bytes(f.registration.read_bytes() + b" ")
+    elif fault == "binary":
+        f.binary.write_bytes(b"\x7fELFbad")
+    elif fault == "key":
+        f.pk.write_bytes(b"x" * 32)
+    elif fault == "owner":
+        os.chown(f.registration, 1000, 1000)
+    elif fault == "symlink":
+        target = f.root / "real-registration"
+        f.registration.rename(target)
+        f.registration.symlink_to(target)
+    elif fault == "raw_identity":
+        f.raw.rename(f.root / "old-eve")
+        f.raw.write_bytes(b"{}\n")
+    elif fault == "partial":
+        f.raw.write_bytes(b"{")
+    elif fault == "malformed":
+        f.raw.write_bytes(b'{"duplicate":1,"duplicate":2}\n')
+    elif fault == "legacy":
+        d = dict(f.p.data)
+        d.pop("origin_registration_sha256")
+        d["schema_version"] = "outcome-input-trust/v1"
+        f.policy_file.write_bytes(_json(d))
+    origin = OriginChild(f)
+    try:
+        assert origin.initial.get("refused"), origin.initial
+    finally:
+        origin.close()
+    assert f.source.read_bytes() == b""
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "rewrite",
+        "truncate",
+        "replace",
+        "malformed",
+        "oversize",
+        "partial",
+        "binary_replaced",
+        "restart_rewind",
+    ],
+)
+def test_origin_live_failure_and_sealed_binary(registered, fault):
+    f = registered
+    origin = OriginChild(f)
+    try:
+        assert origin.initial.get("ready"), origin.initial
+        append_raw(f)
+        assert origin.poll() == {"seq": 1}
+        before = f.source.read_bytes()
+        if fault == "rewrite":
+            f.raw.write_bytes(
+                b'{"event_type":"other"}\n' + f.raw.read_bytes().split(b"\n", 1)[1]
+            )
+        elif fault == "truncate":
+            f.raw.write_bytes(b"")
+        elif fault == "replace":
+            old = f.root / "old-eve"
+            f.raw.rename(old)
+            f.raw.write_bytes(old.read_bytes())
+        elif fault == "malformed":
+            with f.raw.open("ab") as out:
+                out.write(b'{"duplicate":1,"duplicate":2}\n')
+        elif fault == "oversize":
+            with f.raw.open("ab") as out:
+                out.write(b"x" * 65537)
+        elif fault == "partial":
+            append_raw(f, b"")
+            assert origin.poll() == {"seq": 1}
+            with f.raw.open("ab") as out:
+                out.write(b"\n")
+            assert origin.poll() == {"seq": 2}
+            return
+        elif fault == "binary_replaced":
+            f.binary.write_bytes(b"\x7fELFbad")
+            append_raw(f)
+            assert origin.poll() == {"seq": 2}  # Already sealed enrolled image only.
+            origin.close()
+            origin = OriginChild(f)
+            assert origin.initial.get("refused")
+            return
+        elif fault == "restart_rewind":
+            origin.close()
+            f.raw.write_bytes(b'{"event_type":"stats"}\n')
+            origin = OriginChild(f)
+            assert origin.initial.get("refused")
+            assert f.source.read_bytes() == before
+            return
+        assert origin.poll().get("refused")
+        assert f.source.read_bytes() == before
+    finally:
+        origin.close()
+
+
+def test_offline_enrollment_candidate_pins_key_binary_and_raw_without_writes(
+    registered,
+):
+    import hashlib
+    from azazel_edge.outcome.input_enroll import prepare
+
+    f = registered
+    d = dict(f.p.data)
+    d.pop("origin_registration_sha256")
+    d["schema_version"] = "outcome-input-trust/v1"
+    p = TrustPolicy(d)
+    before = {
+        path: path.read_bytes()
+        for path in (f.source, f.policy_file, f.registration, f.pk, f.binary, f.raw)
+    }
+    candidate = prepare(p, f.binary, f.raw, 0)
+    assert candidate["trust_policy"] == dict(f.p.data)
+    assert (
+        hashlib.sha256(_json(candidate["registration"])).hexdigest()
+        == f.p.data["origin_registration_sha256"]
+    )
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+    with pytest.raises(OSError):
+        prepare(f.p, f.binary, f.raw, 0)
+    f.source.write_bytes(b"not-empty")
+    with pytest.raises(OSError):
+        prepare(p, f.binary, f.raw, 0)
+
+
+def test_registered_observer_cannot_downgrade_existing_journal(registered):
+    f = registered
+    f.start(initialize=True)
+    c = Child(f, True)
+    assert c.initial.get("ready")
+    c.close()
+    before = f.journal.read_bytes()
+    anchors = f.anchors.read_bytes()
+    d = dict(f.p.data)
+    d.pop("origin_registration_sha256")
+    d["schema_version"] = "outcome-input-trust/v1"
+    f.policy_file.write_bytes(_json(d))
+    c = Child(f)
+    try:
+        assert c.initial.get("startup_refused"), c.initial
+    finally:
+        c.close()
+    assert f.journal.read_bytes() == before and f.anchors.read_bytes() == anchors
+
+
+def test_unregistered_direct_capture_api_never_writes_source(registered):
+    f = registered
+    script = r"""
+from pathlib import Path
+import sys
+from azazel_edge.outcome.input_auth import TrustPolicy,SignedCaptureWriter
+p=TrustPolicy.from_file(Path(sys.argv[1]),role='producer')
+with SignedCaptureWriter(p,Path(sys.argv[2]),boot_ref='boot') as writer:
+ try:writer.append({'pipeline':'rust_event_engine_v1'})
+ except OSError:print('refused')
+ else:raise AssertionError('unsigned enrollment bypass')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(f.policy_file), str(f.pk)],
+        env=dict(os.environ, PYTHONPATH=str(ROOT) + ":" + str(ROOT / "py")),
+        capture_output=True,
+        text=True,
+        user=1000,
+        group=1000,
+        extra_groups=[],
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "refused"
+    assert f.source.read_bytes() == b""
+
+
+def test_real_origin_ignores_enforcement_environment_and_never_enters_runtime(
+    registered,
+):
+    f = registered
+    unexpected = f.root / "must-not-create"
+    env = dict(
+        os.environ,
+        AZAZEL_DEFENSE_ENFORCE="1",
+        AZAZEL_DEFENSE_DRY_RUN="0",
+        AZAZEL_FORWARD_AI="1",
+        AZAZEL_FORWARD_LOG="1",
+        AZAZEL_EVENT_STDOUT="off",
+        AZAZEL_DEFENSE_RELEASE_LEDGER=str(unexpected),
+        AZAZEL_NORMALIZED_EVENT_LOG=str(unexpected),
+        AZAZEL_REDIRECT_POLICY_PATH=str(unexpected),
+        AZAZEL_EVE_PATH=str(unexpected),
+    )
+    for args in (["--capture-origin-once"], ["--capture-origin-once", "--from-start"]):
+        result = subprocess.run(
+            [str(f.binary), *args],
+            input='{"event_type":"alert","alert":{"severity":1,"signature_id":42}}\n',
+            env=env,
+            capture_output=True,
+            text=True,
+            user=1000,
+            group=1000,
+            extra_groups=[],
+            timeout=15,
+        )
+        if len(args) == 1:
+            assert result.returncode == 0, result.stderr
+            event = json.loads(result.stdout)
+            assert event["enforcement_status"]["enforce_enabled"] is False
+            assert event["enforcement"]["executed_count"] == 0
+            assert event["enforcement"]["command_plan"] == []
+        else:
+            assert result.returncode != 0
+        assert not unexpected.exists()
+        assert f.source.read_bytes() == b""

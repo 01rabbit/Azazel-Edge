@@ -372,3 +372,11 @@ withholds admission; it does not upgrade outcomes or reconstruct telemetry.
 See the [v3 protocol and guarantee boundary](architecture/outcome-authenticated-input.md).
 V1/v2 APIs and default behavior remain available for their original scopes;
 v3 cannot silently reopen under either older profile.
+
+`input_enroll.prepare` returns public new-scope registration/policy candidates
+without writes or private keys. `input_origin.RegisteredOrigin` validates the
+operator-pinned Rust image/raw source and supervises its fixed read-only origin
+protocol through private pipes. `outcome-input-trust/v2` requires the matching
+registration and signed raw cursor on every event. See the [registered-origin
+contract](architecture/outcome-registered-origin.md); this is not a live executor
+connection or service activation.
