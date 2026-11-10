@@ -333,3 +333,22 @@ Use the same scope, collector context and budgets on recovery; callers must
 close the journal. Opening is a recovery operation that may append tombstones
 and a seal; it is not a read-only inspection endpoint. Do not use this adapter
 from the deterministic control path or replay.
+
+### Verified input cursor (optional v2)
+
+`ObservationJournal(..., input_source=BoundedInput(...))` binds a new v2 scope
+to the read-only bounded input. `input_position()` returns the last acknowledged
+byte boundary/digest. `retained_identity_state(...)` supplies a bounded
+read-only duplicate/loss check before adding collector activity. `advance_input(position, missed=...)` requires the next
+line actually yielded by the current verified snapshot and syncs it before
+acknowledgement. `finish_input_recovery()` verifies the fully excluded startup
+snapshot and syncs its readiness fence; it returns false if new startup bytes
+require further loss-only processing. The driver allows at most four catch-up
+passes. Observation begins remain closed until a completed fence. `status()` adds input position, total/missed input counts, startup/restart
+gap count and recovery-pending state. I/O-poisoned instances expose last known
+status only, not recovered results or a usable cursor.
+
+The separate `input_resume` foreground driver owns loss-before-cursor ordering,
+fresh-only warmup/time filters, prefix checks before commit and clock checks.
+It adds no Web endpoint, executor, network client, history reconstruction or
+source mutation. See the [v2 contract](architecture/outcome-input-resume.md).

@@ -371,3 +371,10 @@ or recovery. An unclean session seals new admissions because its unknown input
 tail cannot be reconstructed. No historical procfs sampling, executor, network
 client or background service is added. G6 physical storage and resource tests
 remain required before installation/activation.
+
+
+The separate [v2 verified-input driver](outcome-input-resume.md) adds explicitly
+selected byte-position recovery for new scopes. It discards startup input as
+loss and starts fresh sampling only after a durable recovery fence. Existing
+v1 behavior and the volatile default are preserved; no historical telemetry is
+reconstructed and no causal-support rule changes.

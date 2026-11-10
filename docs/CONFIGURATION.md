@@ -198,3 +198,26 @@ saved. The CLI refuses a sealed journal before reading procfs/input. See the
 This opt-in has software/process fault coverage only. Device power-loss,
 filesystem behavior, write latency/wear and concurrent defense overhead are
 still G6 acceptance work; it is not installed or enabled by this change.
+
+### Verified input resumption (new v2 scope only)
+
+Add `--journal-resume-input` together with the journal directory/scope/boot flags
+for a new, explicitly initialized scope. Input must initially be empty, at a
+physical absolute path with a trusted append-only producer. `--input-max-bytes`
+defaults to 16777216 (65536..67108864); `--input-max-records` defaults to 8192
+(1..32768). These exact budgets and input identity/path bind the header and
+cannot be changed during recovery. Normal reopen omits `--journal-initialize`
+and keeps `--journal-resume-input` and the same scope/policy/input/budgets.
+
+V2 verifies the durable byte position and prefix, tombstones pending windows,
+discards the bounded startup backlog as loss, then fences a fresh telemetry
+segment before new observations. Warmup, stale/delayed/unclocked/future input
+cannot become replacement windows. File rotation/replacement/truncation,
+partial restart tail, corruption or mismatch stop resumption. Live incomplete
+lines wait, without moving the saved position. Capacity closes admission.
+
+V1 is not migrated or unsealed; selecting the new flag for an old scope is
+refused. Trusted append-only producer/parent and clock/boot identity remain
+operator preconditions, not cryptographic authentication. Read the
+[resumption contract and limitations](architecture/outcome-input-resume.md)
+before use. No installer/service or default activation changes.
