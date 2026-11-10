@@ -9,6 +9,7 @@ from types import MappingProxyType
 from pathlib import Path
 import stat
 
+from .live_protocol import LiveState, signed_live_event
 from .journal import OutcomeJournalError, _json, _parse, _ref, ZERO_HASH
 
 SOURCE_SCHEMA = "outcome-signed-input/v1"
@@ -193,14 +194,21 @@ class TrustPolicy:
             "anchor_max_records",
         }
         d = self.data
-        if type(d) is dict and d.get("schema_version") == "outcome-input-trust/v2":
+        if type(d) is dict and d.get("schema_version") in (
+            "outcome-input-trust/v2",
+            "outcome-input-trust/v3",
+        ):
             fields.add("origin_registration_sha256")
             hex_bytes(d.get("origin_registration_sha256"), 32)
         if (
             type(d) is not dict
             or set(d) != fields
             or d["schema_version"]
-            not in ("outcome-input-trust/v1", "outcome-input-trust/v2")
+            not in (
+                "outcome-input-trust/v1",
+                "outcome-input-trust/v2",
+                "outcome-input-trust/v3",
+            )
         ):
             raise OutcomeJournalError("invalid input trust policy")
         for key in ("scope_ref", "producer_ref", "stream_ref", "witness_ref"):
@@ -320,6 +328,7 @@ class SourceVerifier:
         self.seq = 0
         self.head = ZERO_HASH
         self.origin_offset = 0
+        self.live_state = LiveState()
 
     def verify(self, data):
         p = self.policy.data
@@ -334,6 +343,7 @@ class SourceVerifier:
         seq = self.seq
         head = self.head
         origin_offset = self.origin_offset
+        live_state = self.live_state
         for line in data[len(self.raw) :].splitlines(keepends=True):
             if len(line) > 65536:
                 raise OutcomeJournalError("signed input frame too large")
@@ -369,7 +379,9 @@ class SourceVerifier:
                 raise OutcomeJournalError("signed input identity/sequence mismatch")
             _ref(wire["boot_ref"])
             registration = p.get("origin_registration_sha256")
-            if registration is not None:
+            if p["schema_version"] == "outcome-input-trust/v3":
+                live_state = signed_live_event(wire["event"], registration, live_state)
+            elif registration is not None:
                 validate_readonly_origin_event(wire["event"])
                 origin = wire["event"].get("capture_origin")
                 if (
@@ -402,6 +414,7 @@ class SourceVerifier:
         self.seq = seq
         self.head = head
         self.origin_offset = origin_offset
+        self.live_state = live_state
         return self.tip()
 
     def tip(self):
@@ -484,6 +497,7 @@ class SignedCaptureWriter:
         checked = SourceVerifier(self.policy)
         checked.raw, checked.seq, checked.head = v.raw, v.seq, v.head
         checked.origin_offset = v.origin_offset
+        checked.live_state = v.live_state
         checked.verify(v.raw + line)
         try:
             raw, info = read_regular(

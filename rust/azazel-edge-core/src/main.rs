@@ -1,5 +1,6 @@
 mod audit_chain;
 mod ingress;
+mod live_origin;
 mod release;
 mod safety;
 mod undelivered;
@@ -1554,6 +1555,7 @@ fn process_value(cfg: &Config, parsed: &Value) {
     let decision = decide_defense(&normalized);
     let enforcement = maybe_enforce(&normalized, &decision, cfg);
     let event = core_event(&normalized, &decision, &enforcement, cfg);
+    live_origin::record("decision_execution", &event);
     if enforcement_evidence_due(&enforcement, cfg) {
         spool_enforcement_evidence(cfg, &event);
     }
@@ -1578,6 +1580,7 @@ fn process_release_events(cfg: &Config) {
                     "source": "release_ledger",
                     "pipeline": "rust_release_engine_v1",
                 });
+                live_origin::record("release", &event);
                 spool_enforcement_evidence(cfg, &event);
                 if cfg.forward_log {
                     append_json_line(&cfg.normalized_log_path, &event);
@@ -2003,6 +2006,10 @@ fn main() {
         }
         return;
     }
+    if let Err(error) = live_origin::install(&origin_args) {
+        eprintln!("{}", error);
+        std::process::exit(2);
+    }
     let cfg = load_config();
 
     // The contract subcommands return before anything else happens. They read
@@ -2128,6 +2135,7 @@ fn main() {
         }
     }
     let _ = sweeper.join();
+    live_origin::finish();
     eprintln!("azazel-edge-core stopping: {} ingress summary record(s) written for the last interval", written);
 }
 

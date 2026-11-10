@@ -380,3 +380,10 @@ protocol through private pipes. `outcome-input-trust/v2` requires the matching
 registration and signed raw cursor on every event. See the [registered-origin
 contract](architecture/outcome-registered-origin.md); this is not a live executor
 connection or service activation.
+
+`input_live_enroll.prepare` prepares public new-scope live-core enrollment.
+`input_live` explicitly launches the enrolled normal core and separate-UID signer
+through a private inherited channel; provider and release facts are preserved,
+not recalculated. Trust policy v3 requires producer preparation and verified
+clean closure before another launch. Lifecycle boundaries stop live observation
+until verified loss/fresh-segment recovery. See the [live-origin contract](architecture/outcome-live-origin.md).

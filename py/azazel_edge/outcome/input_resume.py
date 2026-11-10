@@ -25,13 +25,35 @@ MAX_BATCH_RECORDS = 256
 MAX_RECOVERY_PASSES = 4
 
 
-def decode_input(raw):
+def decode_input(raw, *, allow_live_lifecycle=False):
     event = _parse(raw)
     _json(event)  # Reject overflowed numeric literals even in unused source fields.
     if type(event) is not dict:
         raise OutcomeJournalError("input record must be an object")
     try:
-        if event.get("pipeline") == "rust_release_engine_v1":
+        if event.get("pipeline") == "rust_live_origin_v1":
+            origin = event.get("capture_origin", {})
+            kind = origin.get("kind") if type(origin) is dict else None
+            if (
+                not allow_live_lifecycle
+                or set(event)
+                != {"pipeline", "source", "capture_lifecycle", "capture_origin"}
+                or event.get("source")
+                != ("capture_producer" if kind == "session_prepare" else "rust_core")
+                or kind not in ("session_prepare", "session_start", "session_end")
+                or origin.get("schema_version") != "outcome-registered-origin/v2"
+                or origin.get("mode") != "live-core"
+                or event.get("capture_lifecycle")
+                != {
+                    "state": {
+                        "session_prepare": "prepare",
+                        "session_start": "start",
+                        "session_end": "end",
+                    }.get(kind)
+                }
+            ):
+                raise ValueError("unverified live lifecycle input")
+        elif event.get("pipeline") == "rust_release_engine_v1":
             from_rust_release_event(event)
         elif (
             event.get("pipeline") == "rust_event_engine_v1"
@@ -50,7 +72,7 @@ def decode_input(raw):
 
 
 def objective_identity(event, policy):
-    if event.get("pipeline") == "rust_release_engine_v1":
+    if event.get("pipeline") in ("rust_release_engine_v1", "rust_live_origin_v1"):
         return None, None
     execution = from_rust_event(event).execution
     if (
@@ -80,8 +102,18 @@ def _open_admission(journal):
         )
 
 
+def _live_lifecycle_allowed(journal):
+    authentication = journal.input_source.authentication
+    return (
+        authentication is not None
+        and authentication.policy.data["schema_version"] == "outcome-input-trust/v3"
+    )
+
+
 def miss_record(line, journal, policy):
-    event = decode_input(line.raw)
+    event = decode_input(
+        line.raw, allow_live_lifecycle=_live_lifecycle_allowed(journal)
+    )
     identity, _ = objective_identity(event, policy)
     if identity is not None:
         journal.lose_window(**identity, reason="restart_input_missed")
@@ -118,7 +150,16 @@ def _event_epoch(event):
 
 
 def observe_input(line, journal, collector, *, live_floor, now):
-    event = decode_input(line.raw)
+    event = decode_input(
+        line.raw, allow_live_lifecycle=_live_lifecycle_allowed(journal)
+    )
+    if event.get("pipeline") == "rust_live_origin_v1":
+        # The live source's process boundary cannot preserve a pre/post window.
+        # Stop before cursor/activity changes. Verified observer reopen applies
+        # the existing durable pending-loss, backlog exclusion and fresh fence.
+        raise OutcomeJournalError(
+            "live core boundary requires verified observer recovery; no window continuation"
+        )
     identity, objective = objective_identity(event, collector.policy)
     if identity is not None and journal.retained_identity_state(**identity) is not None:
         # Do not let a re-dated retained execution add even activity/baseline
