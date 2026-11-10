@@ -1,8 +1,10 @@
 # Offline key provisioning and single-service capture handoff
 
 Tracking: #400. Software implementation and offline tests only. **No production
-service/key has been changed by these tests.** Real host systemd stop/start,
-reboot, actual account/policy commissioning and G6 device acceptance remain open.
+service/key has been changed by these tests.** A disposable QEMU VM now exercises
+real PID1 systemd handoff and OS reboots; see the
+[virtual-systemd protocol](outcome-systemd-vm.md). Target-host account/policy/LSM
+commissioning and G6 physical-device acceptance remain open.
 The [normal-core capture contract](outcome-live-origin.md) remains authoritative;
 this layer neither creates provider facts nor fills observation gaps.
 
@@ -238,10 +240,19 @@ explicit restore. This model is **not a real PID-1/systemd service stop/start**.
 The native singleton, peer/key permission and fresh-proof paths are exercised
 separately with real processes. No production files/accounts/services change.
 
-Real systemd cgroup/stop/reboot/SELinux/AppArmor/capability/account integration,
+Target-host systemd cgroup/stop/reboot/SELinux/AppArmor/capability/account integration,
 artifact/dependency/permission commissioning, native workload/availability and
 release readback on target, physical power cuts/storage/cache/wear and Pi
 CPU/RSS/disk/latency remain #400/G6 gates. Root/key compromise, coordinated
 whole-store rollback, trusted clocks/boot and external monotonic anchoring retain
 the earlier limits. #393 retains independent service measurement. Keep #400 open;
 software passes alone do not prove physical effect or comparative/causal benefit.
+
+The earlier modeled-manager evidence remains separate from the new actual-PID1
+VM checks. Service snapshots additionally require the local `/usr/bin/busctl`
+typed lifecycle properties: `systemctl show` suppresses empty Exec arrays even
+with `--all`; missing/unsupported D-Bus data is never inferred to be empty.
+The opt-in witness CLI supports `--systemd-notify` for `Type=notify`, gracefully
+closes its endpoint on TERM/INT and retires a dead socket only after acquiring
+and validating the same protected store. Neither readiness nor transport cleanup
+initializes/repairs evidence or permits unverified connected restarts.

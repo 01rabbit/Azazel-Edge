@@ -23,6 +23,7 @@ from .instance import CoreLease
 
 UNIT = "azazel-edge-core.service"
 DROPIN = "90-signed-input.conf"
+HOOKS = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost")
 PROPERTIES = (
     "LoadState",
     "ActiveState",
@@ -98,13 +99,20 @@ class Systemd:
     def snapshot(self):
         if Path("/proc/1/comm").read_text().strip() != "systemd":
             raise OutcomeJournalError("host systemd PID namespace required")
-        raw = self.command("show", UNIT, *["--property=" + key for key in PROPERTIES])
+        # systemctl suppresses empty Exec* arrays even with --all. Read these
+        # through typed local D-Bus properties; never infer absent == empty.
+        raw = self.command(
+            "show",
+            UNIT,
+            *["--property=" + key for key in PROPERTIES if key not in HOOKS],
+        )
         state = {}
         for line in raw.decode().splitlines():
             key, sep, value = line.partition("=")
             if not sep or key not in PROPERTIES or key in state:
                 raise OutcomeJournalError("ambiguous service manager state")
             state[key] = value
+        state.update(self.hooks())
         if (
             set(state) != set(PROPERTIES)
             or state["LoadState"] != "loaded"
@@ -119,6 +127,41 @@ class Systemd:
             state["fragments"][str(path)] = hashlib.sha256(raw).hexdigest()
         state["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         return state
+
+    def hooks(self):
+        result = subprocess.run(
+            [
+                "/usr/bin/busctl",
+                "--system",
+                "--json=short",
+                "get-property",
+                "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1/unit/azazel_2dedge_2dcore_2eservice",
+                "org.freedesktop.systemd1.Service",
+                *HOOKS,
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=5,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"},
+        )
+        lines = result.stdout.splitlines()
+        if result.returncode or len(result.stdout) > 65536 or len(lines) != len(HOOKS):
+            raise OutcomeJournalError("typed service lifecycle properties unavailable")
+        values = {}
+        for key, line in zip(HOOKS, lines):
+            value = _parse(line)
+            if (
+                type(value) is not dict
+                or set(value) != {"type", "data"}
+                or value["type"] != "a(sasbttttuii)"
+                or type(value["data"]) is not list
+            ):
+                raise OutcomeJournalError(
+                    "unrecognized service lifecycle property type"
+                )
+            values[key] = "" if not value["data"] else _json(value["data"]).decode()
+        return values
 
     def cores(self):
         result = []

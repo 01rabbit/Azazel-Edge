@@ -1384,3 +1384,12 @@ invokes provider commands directly. An explicit restore removes only its exact
 owned profile and starts nothing. Default unit ledger selection is unchanged;
 exit 3 suppresses restart loops on exclusion. Root authority, real service/cgroup
 commissioning and G6 limits remain as documented.
+
+The witness's explicit `--systemd-notify` uses only a local readiness datagram;
+it grants no new signing/control/provider capability. Its graceful stop and
+verified-store-only stale-socket retirement affect transport, never evidence
+repair. The root controller additionally reads typed lifecycle arrays through
+fixed local `busctl get-property`; unavailable/unknown types fail closed. The
+disposable virtual-systemd test profile uses Wants+After readiness ordering,
+without witness-to-core stop propagation. Production units/accounts/keys remain
+operator-commissioned; the test driver is not a production installer.

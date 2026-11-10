@@ -7,14 +7,17 @@ No command, arbitrary request path, IP listener, repair, reset or rotation.
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import os
 from pathlib import Path
 import secrets
+import signal
 import socket
 import stat
 import struct
+import threading
 
 from .input_auth import (
     TrustPolicy,
@@ -25,7 +28,6 @@ from .input_auth import (
     verify_signature,
     read_regular,
     open_parent,
-    EMPTY_SHA,
 )
 from .journal import OutcomeJournalError, _json, _parse, ZERO_HASH
 
@@ -630,6 +632,56 @@ class InputAuthentication:
         self.client.advance(seq, head, size)
 
 
+def retire_stale_endpoint(policy, parent, name):
+    """Only after the protected store is verified and exclusively locked.
+
+    A socket inode can survive process/OS death. Never remove evidence, a live
+    endpoint, a non-socket, or another owner's namespace to make startup work.
+    """
+    try:
+        old = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(old.st_mode) or old.st_uid != policy.data["witness_uid"]:
+        raise OutcomeJournalError("untrusted witness endpoint; no cleanup")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.2)
+        try:
+            probe.connect(policy.data["socket_path"])
+        except OSError as exc:
+            if exc.errno != errno.ECONNREFUSED:
+                raise OutcomeJournalError(
+                    "witness endpoint liveness uncertain"
+                ) from exc
+        else:
+            raise OutcomeJournalError("live witness endpoint; no takeover")
+    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (old.st_dev, old.st_ino) != (current.st_dev, current.st_ino):
+        raise OutcomeJournalError("witness endpoint changed; no cleanup")
+    os.unlink(name, dir_fd=parent)
+    os.fsync(parent)
+
+
+class SystemdReady:
+    """Explicit local readiness only; no evidence/signing/control authority."""
+
+    def __init__(self):
+        address = os.environ.get("NOTIFY_SOCKET", "")
+        if (
+            not address.startswith(("/", "@"))
+            or not 1 < len(address.encode()) <= 107
+            or any(c in address for c in ("\x00", "\n", "\r"))
+        ):
+            raise OutcomeJournalError("explicit local systemd notify socket required")
+        self.address = "\x00" + address[1:] if address.startswith("@") else address
+
+    def set(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+            notify.settimeout(1)
+            if notify.sendto(b"READY=1", self.address) != 7:
+                raise OutcomeJournalError("witness readiness notification failed")
+
+
 def serve(
     policy, key_path, *, initialize=False, stop=None, ready=None, max_requests=131072
 ):
@@ -643,17 +695,21 @@ def serve(
             raise OutcomeJournalError(
                 "private witness socket parent ownership required"
             )
-        with WitnessStore(
-            policy, key_path, initialize=initialize
-        ) as store, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        with (
+            WitnessStore(policy, key_path, initialize=initialize) as store,
+            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server,
+        ):
+            retire_stale_endpoint(policy, parent, name)
             server.bind(p["socket_path"])
             os.chmod(p["socket_path"], 0o666)
             inode = os.stat(name, dir_fd=parent, follow_symlinks=False)
             server.listen(4)
             server.settimeout(0.2)
-            if ready is not None:
-                ready.set()
             try:
+                if stop is not None and stop.is_set():
+                    return
+                if ready is not None:
+                    ready.set()
                 accepted = 0
                 while accepted < max_requests:
                     if stop is not None and stop.is_set():
@@ -696,12 +752,24 @@ def main(argv=None):
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--initialize", action="store_true")
+    parser.add_argument("--systemd-notify", action="store_true")
     args = parser.parse_args(argv)
-    serve(
-        TrustPolicy.from_file(args.policy, role="witness"),
-        args.private_key,
-        initialize=args.initialize,
-    )
+    ready = SystemdReady() if args.systemd_notify else None
+    stop = threading.Event()
+    previous = {}
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            previous[sig] = signal.signal(sig, lambda *_: stop.set())
+        serve(
+            TrustPolicy.from_file(args.policy, role="witness"),
+            args.private_key,
+            initialize=args.initialize,
+            stop=stop,
+            ready=ready,
+        )
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     return 0
 
 
