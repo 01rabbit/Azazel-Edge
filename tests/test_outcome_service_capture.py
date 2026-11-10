@@ -11,6 +11,9 @@ def test_profile_keeps_single_unit_and_explicit_stopping_semantics():
     ).decode()
     assert UNIT == "azazel-edge-core.service"
     assert "Restart=no\n" in body and "KillMode=mixed\n" in body
+    # Preserve the already verified root service identity. Forcing User=root
+    # under NoNewPrivileges can discard effective SETUID during systemd setup.
+    assert "User=" not in body and "Group=" not in body
     assert "-I -m azazel_edge.outcome.service_entry" in body
     assert "--boot-ref %b" in body and "ExecStart=\n" in body
     assert "LD_PRELOAD" in body and "WantedBy" not in body
@@ -57,9 +60,12 @@ def test_managed_start_cannot_bypass_proof_when_not_called_by_switch_controller(
     from unittest.mock import patch
     from azazel_edge.outcome import service_entry
 
-    with patch.object(
-        service_entry, "ready", side_effect=OSError("missing protected proof")
-    ), patch.object(service_entry, "launch") as launch:
+    with (
+        patch.object(
+            service_entry, "ready", side_effect=OSError("missing protected proof")
+        ),
+        patch.object(service_entry, "launch") as launch,
+    ):
         assert (
             service_entry.main(["--bundle", "/unverified", "--boot-ref", "boot"]) == 1
         )

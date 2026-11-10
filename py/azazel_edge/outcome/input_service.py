@@ -145,7 +145,15 @@ def _write(path, data, owner, mode):
         os.close(parent)
 
 
-def prepare(root, template_path, binary, environment_path, *, ai_socket_uid=None):
+def prepare(
+    root,
+    template_path,
+    binary,
+    environment_path,
+    *,
+    ai_socket_uid=None,
+    capture_apparmor_profile=None,
+):
     require_root()
     root = Path(root)
     template = TrustPolicy.from_file(template_path, role="witness")
@@ -182,12 +190,18 @@ def prepare(root, template_path, binary, environment_path, *, ai_socket_uid=None
         binary_path=str(binary),
         binary_sha256=hashlib.sha256(image).hexdigest(),
         launcher_uid=0,
-        environment=_parse(raw)
+        environment=_parse(raw),
     )
     if ai_socket_uid is not None:
         r.update(
             schema_version="outcome-live-origin-registration/v2",
             ai_socket_uid=ai_socket_uid,
+        )
+    if capture_apparmor_profile is not None:
+        r.update(
+            schema_version="outcome-live-origin-registration/v3",
+            ai_socket_uid=ai_socket_uid if ai_socket_uid is not None else 0,
+            capture_apparmor_profile=capture_apparmor_profile,
         )
     d = dict(template.data)
     d.update(
@@ -290,6 +304,7 @@ def main(argv=None):
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--environment", type=Path)
     parser.add_argument("--ai-socket-uid", type=int)
+    parser.add_argument("--capture-apparmor-profile")
     args = parser.parse_args(argv)
     try:
         if args.operation == "prepare":
@@ -309,6 +324,7 @@ def main(argv=None):
                 args.binary,
                 args.environment,
                 ai_socket_uid=args.ai_socket_uid,
+                capture_apparmor_profile=args.capture_apparmor_profile,
             )
         elif args.operation == "verify":
             p, r = verify(args.bundle)

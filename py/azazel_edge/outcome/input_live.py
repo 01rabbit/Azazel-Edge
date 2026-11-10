@@ -65,20 +65,34 @@ def validate_registration(policy, r):
         "launcher_uid",
         "environment",
     }
-    if (
-        type(r) is dict
-        and r.get("schema_version") == "outcome-live-origin-registration/v2"
+    if type(r) is dict and r.get("schema_version") in (
+        "outcome-live-origin-registration/v2",
+        "outcome-live-origin-registration/v3",
     ):
         fields.add("ai_socket_uid")
     if (
+        type(r) is dict
+        and r.get("schema_version") == "outcome-live-origin-registration/v3"
+    ):
+        fields.add("capture_apparmor_profile")
+    if (
         type(r) is not dict
         or set(r) != fields
-        or r["schema_version"] not in (SCHEMA, "outcome-live-origin-registration/v2")
+        or r["schema_version"]
+        not in (
+            SCHEMA,
+            "outcome-live-origin-registration/v2",
+            "outcome-live-origin-registration/v3",
+        )
         or r["mode"] != "live-core"
         or type(r["launcher_uid"]) is not int
         or r["launcher_uid"] != 0
     ):
         raise OutcomeJournalError("invalid live origin registration")
+    if "capture_apparmor_profile" in r:
+        from .confinement import profile_name
+
+        profile_name(r["capture_apparmor_profile"])
     if any(
         r[k] != d[k]
         for k in ("scope_ref", "producer_ref", "stream_ref", "producer_public_key")
@@ -244,6 +258,10 @@ def receive(policy, r, key_path, boot_ref, fd, session):
     if sys.platform != "linux" or os.geteuid() != policy.data["producer_uid"]:
         raise OutcomeJournalError("registered non-root Linux receiver required")
     harden_receiver(policy.data["producer_uid"])
+    if "capture_apparmor_profile" in r:
+        from .confinement import enforce_capture
+
+        enforce_capture(r["capture_apparmor_profile"])
     with socket.socket(fileno=fd) as channel:
         os.set_inheritable(channel.fileno(), False)
         if channel.family != socket.AF_UNIX or channel.type != socket.SOCK_STREAM:
@@ -321,6 +339,11 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     _ref(boot_ref)
     p = TrustPolicy.from_file(policy_path, role="witness")
     r = registration(p, registration_path)
+    capture_python = sys.executable
+    if "capture_apparmor_profile" in r:
+        from .confinement import capture_image
+
+        capture_python, _ = capture_image(sys.executable, r["capture_apparmor_profile"])
     lease = CoreLease(r["environment"]["AZAZEL_DEFENSE_RELEASE_LEDGER"])
     try:
         image = sealed_image(r)
@@ -345,7 +368,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
         # private channel and drops supplementary groups/UID before key use.
         worker = subprocess.Popen(
             [
-                sys.executable,
+                str(capture_python),
                 "-m",
                 "azazel_edge.outcome.input_live",
                 "--policy",

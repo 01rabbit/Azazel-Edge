@@ -52,6 +52,7 @@ PROPERTIES = (
     "ExecStartPost",
     "ExecStop",
     "ExecStopPost",
+    "AppArmorProfile",
 )
 
 
@@ -67,7 +68,7 @@ def profile(bundle, python):
         "# Azazel registered signed input; explicit operator profile\n[Service]\n"
         "ExecStart=\n"
         f"ExecStart={python} -I -m azazel_edge.outcome.service_entry --bundle {bundle} --boot-ref %b\n"
-        "User=root\nGroup=root\nRestart=no\nKillMode=mixed\nTimeoutStopSec=90s\n"
+        "Restart=no\nKillMode=mixed\nTimeoutStopSec=90s\n"
         "UnsetEnvironment=PYTHONPATH PYTHONHOME LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT\n"
     ).encode()
 
@@ -104,7 +105,11 @@ class Systemd:
         raw = self.command(
             "show",
             UNIT,
-            *["--property=" + key for key in PROPERTIES if key not in HOOKS],
+            *[
+                "--property=" + key
+                for key in PROPERTIES
+                if key not in (*HOOKS, "AppArmorProfile")
+            ],
         )
         state = {}
         for line in raw.decode().splitlines():
@@ -139,6 +144,7 @@ class Systemd:
                 "/org/freedesktop/systemd1/unit/azazel_2dedge_2dcore_2eservice",
                 "org.freedesktop.systemd1.Service",
                 *HOOKS,
+                "AppArmorProfile",
             ],
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -146,10 +152,14 @@ class Systemd:
             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"},
         )
         lines = result.stdout.splitlines()
-        if result.returncode or len(result.stdout) > 65536 or len(lines) != len(HOOKS):
+        if (
+            result.returncode
+            or len(result.stdout) > 65536
+            or len(lines) != len(HOOKS) + 1
+        ):
             raise OutcomeJournalError("typed service lifecycle properties unavailable")
         values = {}
-        for key, line in zip(HOOKS, lines):
+        for key, line in zip(HOOKS, lines[: len(HOOKS)]):
             value = _parse(line)
             if (
                 type(value) is not dict
@@ -161,6 +171,20 @@ class Systemd:
                     "unrecognized service lifecycle property type"
                 )
             values[key] = "" if not value["data"] else _json(value["data"]).decode()
+        armor = _parse(lines[-1])
+        if (
+            type(armor) is not dict
+            or set(armor) != {"type", "data"}
+            or armor["type"] != "(bs)"
+            or type(armor["data"]) is not list
+            or len(armor["data"]) != 2
+            or type(armor["data"][0]) is not bool
+            or type(armor["data"][1]) is not str
+        ):
+            raise OutcomeJournalError("typed core AppArmor property unavailable")
+        values["AppArmorProfile"] = (
+            _json(armor["data"]).decode() if any(armor["data"]) else ""
+        )
         return values
 
     def cores(self):
@@ -223,6 +247,11 @@ class Systemd:
         return result
 
     def capture_ready(self, bundle, p, main_pid, after_seq):
+        from .input_live import registration
+
+        expected_armor = registration(p, bundle / "origin.json").get(
+            "capture_apparmor_profile"
+        )
         raw, _ = read_regular(
             p.data["source_path"],
             owner=p.data["producer_uid"],
@@ -252,6 +281,16 @@ class Systemd:
                     and b"--receive-fd" in command
                     and str(bundle / POLICY).encode() in command
                 ):
+                    if (
+                        expected_armor is not None
+                        and Path(f"/proc/{child}/attr/apparmor/current")
+                        .read_text()
+                        .strip()
+                        != expected_armor + " (enforce)"
+                    ):
+                        raise OutcomeJournalError(
+                            "live signer AppArmor context unavailable"
+                        )
                     signers += 1
             except FileNotFoundError:
                 continue
@@ -302,6 +341,21 @@ class Systemd:
         )
         if result.returncode or result.stdout != (str(package) + "\n").encode():
             raise OutcomeJournalError("isolated installed service runtime unavailable")
+
+    def capture_runtime(self, python, package, p, expected):
+        script = "import sys;from pathlib import Path;from azazel_edge.outcome.confinement import enforce_capture;from azazel_edge.outcome import input_live;input_live.harden_receiver(int(sys.argv[2]));enforce_capture(sys.argv[1]);print(Path(input_live.__file__).resolve().parent)"
+        result = subprocess.run(
+            [str(python), "-I", "-c", script, expected, str(p.data["producer_uid"])],
+            user=p.data["producer_uid"],
+            group=p.data["producer_uid"],
+            extra_groups=[],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=5,
+            env={"PATH": "/nonexistent"},
+        )
+        if result.returncode or result.stdout != (str(package) + "\n").encode():
+            raise OutcomeJournalError("registered capture AppArmor runtime unavailable")
 
     def stop(self):
         self.command("stop", UNIT)
@@ -369,6 +423,10 @@ print('verified')
 
 
 def _security(state):
+    if state.get("AppArmorProfile", "") != "":
+        raise OutcomeJournalError(
+            "confined sealed native exec needs separate commissioning; no debug flag or unconfined fallback"
+        )
     if state.get("Type") not in ("simple", "exec") or any(
         state.get(k) != ""
         for k in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost")
@@ -510,6 +568,15 @@ def ready(bundle, python, system):
         data, _ = read_regular(file, owner=0, max_bytes=1024 * 1024)
         code_refs[str(file)] = hashlib.sha256(data).hexdigest()
     system.runtime(python, package)
+    if "capture_apparmor_profile" in r:
+        from .confinement import capture_image
+
+        capture_python, code_refs["capture_confinement"] = capture_image(
+            python, r["capture_apparmor_profile"]
+        )
+        system.capture_runtime(
+            capture_python, package, p, r["capture_apparmor_profile"]
+        )
     code_refs["native_health"] = system.native(r)
     system.witness(bundle, p)
     return p, r, python, code_refs

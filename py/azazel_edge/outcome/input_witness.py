@@ -753,7 +753,12 @@ def main(argv=None):
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--initialize", action="store_true")
     parser.add_argument("--systemd-notify", action="store_true")
+    parser.add_argument("--apparmor-profile")
     args = parser.parse_args(argv)
+    if args.apparmor_profile is not None:
+        from .confinement import enforce_capture
+
+        enforce_capture(args.apparmor_profile)
     ready = SystemdReady() if args.systemd_notify else None
     stop = threading.Event()
     previous = {}
