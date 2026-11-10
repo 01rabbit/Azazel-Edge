@@ -153,6 +153,7 @@ def prepare(
     *,
     ai_socket_uid=None,
     capture_apparmor_profile=None,
+    native_apparmor_profile=None,
 ):
     require_root()
     root = Path(root)
@@ -202,6 +203,15 @@ def prepare(
             schema_version="outcome-live-origin-registration/v3",
             ai_socket_uid=ai_socket_uid if ai_socket_uid is not None else 0,
             capture_apparmor_profile=capture_apparmor_profile,
+        )
+    if native_apparmor_profile is not None:
+        if capture_apparmor_profile is None:
+            raise OutcomeJournalError(
+                "native confinement requires registered capture confinement"
+            )
+        r.update(
+            schema_version="outcome-live-origin-registration/v4",
+            native_apparmor_profile=native_apparmor_profile,
         )
     d = dict(template.data)
     d.update(
@@ -305,6 +315,7 @@ def main(argv=None):
     parser.add_argument("--environment", type=Path)
     parser.add_argument("--ai-socket-uid", type=int)
     parser.add_argument("--capture-apparmor-profile")
+    parser.add_argument("--native-apparmor-profile")
     args = parser.parse_args(argv)
     try:
         if args.operation == "prepare":
@@ -325,6 +336,7 @@ def main(argv=None):
                 args.environment,
                 ai_socket_uid=args.ai_socket_uid,
                 capture_apparmor_profile=args.capture_apparmor_profile,
+                native_apparmor_profile=args.native_apparmor_profile,
             )
         elif args.operation == "verify":
             p, r = verify(args.bundle)

@@ -33,6 +33,7 @@ profile edge400-capture /opt/edge400-runtime/bin/edge-capture {
   audit deny network inet6,
   signal (receive) peer=unconfined,
   audit deny signal (send) set=(exists) peer=unconfined,
+  audit deny signal (send) set=(exists) peer=edge400-native,
   ptrace (readby) peer=unconfined,
 }
 profile edge400-witness {
@@ -75,6 +76,7 @@ profile edge400-witness {
   audit deny network inet6,
   signal (receive) peer=unconfined,
   audit deny signal (send) set=(exists) peer=unconfined,
+  audit deny signal (send) set=(exists) peer=edge400-native,
   ptrace (readby) peer=unconfined,
 }
 profile edge400-observer /opt/edge400-runtime/bin/edge-observe {
@@ -112,5 +114,29 @@ profile edge400-observer /opt/edge400-runtime/bin/edge-observe {
   audit deny network inet6,
   signal (receive) peer=unconfined,
   audit deny signal (send) set=(exists) peer=unconfined,
+  audit deny signal (send) set=(exists) peer=edge400-native,
+  ptrace (readby) peer=unconfined,
+}
+
+# Entered by sealed Rust bootstrap before configuration/threads/native start.
+# No exec, profile change, policy management or role-key/evidence permissions.
+profile edge400-native {
+  #include <abstractions/base>
+  / r,
+  /var/ r,
+  /var/lib/ r,
+  /var/lib/edge400-systemd-lab/ r,
+  /var/lib/edge400-systemd-lab/eve.json r,
+  /var/lib/edge400-systemd-lab/native/ r,
+  /var/lib/edge400-systemd-lab/native/** rwk,
+  /proc/*/attr/apparmor/current r,
+  /proc/*/status r,
+  /proc/*/stat r,
+  /proc/sys/kernel/random/boot_id r,
+  /dev/fd/* rwk,
+  network unix,
+  audit deny network inet,
+  audit deny network inet6,
+  signal (receive) peer=unconfined,
   ptrace (readby) peer=unconfined,
 }

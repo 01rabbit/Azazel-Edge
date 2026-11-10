@@ -68,13 +68,19 @@ def validate_registration(policy, r):
     if type(r) is dict and r.get("schema_version") in (
         "outcome-live-origin-registration/v2",
         "outcome-live-origin-registration/v3",
+        "outcome-live-origin-registration/v4",
     ):
         fields.add("ai_socket_uid")
-    if (
-        type(r) is dict
-        and r.get("schema_version") == "outcome-live-origin-registration/v3"
+    if type(r) is dict and r.get("schema_version") in (
+        "outcome-live-origin-registration/v3",
+        "outcome-live-origin-registration/v4",
     ):
         fields.add("capture_apparmor_profile")
+    if (
+        type(r) is dict
+        and r.get("schema_version") == "outcome-live-origin-registration/v4"
+    ):
+        fields.add("native_apparmor_profile")
     if (
         type(r) is not dict
         or set(r) != fields
@@ -83,6 +89,7 @@ def validate_registration(policy, r):
             SCHEMA,
             "outcome-live-origin-registration/v2",
             "outcome-live-origin-registration/v3",
+            "outcome-live-origin-registration/v4",
         )
         or r["mode"] != "live-core"
         or type(r["launcher_uid"]) is not int
@@ -93,6 +100,10 @@ def validate_registration(policy, r):
         from .confinement import profile_name
 
         profile_name(r["capture_apparmor_profile"])
+    if "native_apparmor_profile" in r:
+        profile_name(r["native_apparmor_profile"])
+        if r["native_apparmor_profile"] == r["capture_apparmor_profile"]:
+            raise OutcomeJournalError("native and signer profiles must be distinct")
     if any(
         r[k] != d[k]
         for k in ("scope_ref", "producer_ref", "stream_ref", "producer_public_key")
@@ -194,6 +205,38 @@ def validate_registration(policy, r):
     ):
         raise OutcomeJournalError("live core path aliases protected evidence")
     return r
+
+
+def native_arguments(r):
+    """Registration, never environment/optional caller flags, requires the gate."""
+    return (
+        ["--native-apparmor-profile", r["native_apparmor_profile"]]
+        if "native_apparmor_profile" in r
+        else []
+    )
+
+
+def native_gate(r, image):
+    """No key/session preparation until the sealed native gate proves enforcement."""
+    if "native_apparmor_profile" not in r:
+        return
+    result = subprocess.run(
+        [f"/proc/self/fd/{image}", "--health", *native_arguments(r)],
+        pass_fds=(image,),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=5,
+        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", **r["environment"]},
+    )
+    if result.returncode not in (0, 1) or len(result.stdout) > 8192:
+        raise OutcomeJournalError("native AppArmor preflight refused")
+    if _parse(result.stdout).get("native_apparmor") != dict(
+        schema_version="azazel-edge-core/native-apparmor/v1",
+        sealed_memfd=True,
+        early_transition=True,
+        enforced_profile=r["native_apparmor_profile"],
+    ):
+        raise OutcomeJournalError("native AppArmor enforcement not verified")
 
 
 def sealed_image(r):
@@ -364,6 +407,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             core.send_signal(signum)
 
     try:
+        native_gate(r, image)
         # The launcher is trusted root code. Its child receives only this
         # private channel and drops supplementary groups/UID before key use.
         worker = subprocess.Popen(
@@ -418,6 +462,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
                 session,
                 "--core-instance-fd",
                 str(lease.fd),
+                *native_arguments(r),
             ],
             pass_fds=(image, core_end.fileno(), lease.fd),
             stdin=subprocess.DEVNULL,

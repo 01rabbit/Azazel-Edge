@@ -1,6 +1,7 @@
 mod audit_chain;
 mod ingress;
 mod instance;
+mod confinement;
 mod live_origin;
 mod release;
 mod safety;
@@ -1952,6 +1953,10 @@ fn health_report(cfg: &Config) -> Value {
             "lock_file": "core-instance.lock", "lock_scope": "release-state-directory",
             "private_fd": true, "live_origin": "outcome-live-origin/v1"
         },
+        "native_apparmor": {
+            "schema_version":"azazel-edge-core/native-apparmor/v1",
+            "sealed_memfd":true,"early_transition":true,"enforced_profile":null
+        },
         "status": if healthy { "healthy" } else { "unhealthy" },
         "version": CORE_VERSION,
         "observe_only": healthy,
@@ -2002,7 +2007,12 @@ fn capture_origin_once<R: std::io::Read, W: Write>(reader: R, mut writer: W) -> 
 }
 
 fn main() {
-    let origin_args: Vec<String> = env::args().collect();
+    let raw_args: Vec<String> = env::args().collect();
+    // First application operation: before config, subcommands, state or threads.
+    let (origin_args, native_profile) = match confinement::enter(&raw_args) {
+        Ok(value) => value,
+        Err(error) => { eprintln!("{}", error); std::process::exit(3); }
+    };
     if origin_args.iter().any(|a| a == "--capture-origin-once") {
         if origin_args.len() != 2
             || capture_origin_once(std::io::stdin().lock(), std::io::stdout().lock()).is_err()
@@ -2021,13 +2031,19 @@ fn main() {
     // The contract subcommands return before anything else happens. They read
     // no file, write no file, open no socket and start no loop -- a health
     // check that changed the node would be a health check nobody could run.
-    let args: Vec<String> = env::args().collect();
+    let args = &origin_args;
     if args.iter().any(|a| a == "--version") {
         println!("{}", CORE_VERSION);
         return;
     }
     if args.iter().any(|a| a == "--health") {
-        let report = health_report(&cfg);
+        let mut report = health_report(&cfg);
+        if let Some(profile) = native_profile {
+            report["native_apparmor"] = json!({
+                "schema_version":"azazel-edge-core/native-apparmor/v1",
+                "sealed_memfd":true,"early_transition":true,"enforced_profile":profile
+            });
+        }
         println!("{}", serde_json::to_string(&report).unwrap_or_default());
         if report["status"] != "healthy" {
             std::process::exit(1);

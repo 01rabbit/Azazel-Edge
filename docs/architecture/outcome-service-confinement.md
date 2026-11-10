@@ -79,7 +79,7 @@ to exact interpreter/state paths, **not a deployable production policy**.
 
 | Role | Identity / capabilities | Mandatory checks and restrictions |
 | --- | --- | --- |
-| Launcher/native | existing default root; DAC_READ_SEARCH, SETGID, SETUID, NET_ADMIN only | no-new-privs; no ambient caps; private devices, kernel/control-group protection, namespace/SUID/personality restrictions, AF_UNIX-only fixture; existing singleton; **native AppArmor confinement is not accepted** |
+| Launcher/native | existing default root; DAC_READ_SEARCH, SETGID, SETUID, NET_ADMIN only | no-new-privs; no ambient caps; private devices, kernel/control-group protection, namespace/SUID/personality restrictions, AF_UNIX-only fixture; existing singleton; native confinement requires the separately enrolled v4 bootstrap below |
 | Signer | locked `edge400-capture`, UID/GID 61001; zero permitted/effective/ambient caps; empty supplementary groups | fixed alias, registered enforcing label, private key owned by that UID, signed-input write only; no-new-privs inherited/fixed |
 | Witness | root remains required by the existing live trust contract; DAC_READ_SEARCH only | enforcing named policy, private key/anchors, journal/source read, local readiness and fixed witness socket; no-new-privs and AF_UNIX filter; no actor/control executor |
 | Observer | locked `edge400-observer`, UID/GID 61002; zero capabilities, no extra groups | enforcing named policy; own journal only writable, public keys; independent authenticated witness recovery; no-new-privs and AF_UNIX filter |
@@ -115,8 +115,8 @@ filesystem permissions, not an unverified combined mount namespace. No runtime
 fallback changes these settings. The native sealed memfd similarly produced
 disconnected execution denial in the tested enforcing profile. The controller
 now reads the core's typed AppArmorProfile property and refuses any declared
-native profile, including ignore-failure forms, pending a separately reviewed
-compatible sealed-exec design. It does not enable unsafe disconnected-path flags
+native profile, including ignore-failure forms, because it confines the launcher before anonymous sealed exec. V4 uses the
+separate compatible early-native transition below. It does not enable unsafe disconnected-path flags
 or replace the sealed image with a mutable executable to obtain a green test.
 
 These are explicit limitations of this declared virtual profile, not proof
@@ -138,14 +138,81 @@ profile/account refusal, and no-recording refusals for missing/complain/wrongly
 attached capture policies. Reloading the original policy is a controlled lab
 fault restoration, not evidence repair or an automatic product recovery API.
 Normal OS reboot and unregistered reboot phases retain the prior explicit
-acceptance, with named confined observer recovery. CI runs separate baseline and
-AppArmor jobs; it does not reboot the hosted runner.
+acceptance, with named confined observer recovery. CI runs separate baseline, role-AppArmor and native-AppArmor jobs; it does not reboot the hosted runner.
 
-Keep #400 open. Production target units/accounts/LSM policy, root native sealed
-exec confinement, arbitrary local IPC/broker mediation, real enforcing provider
+Keep #400 open. Production target units/accounts/LSM policy and full provider-native policy, arbitrary local IPC/broker mediation, real enforcing provider
 permissions/readback, physical power-cut/SD/cache durability/wear and Pi resource/
 hostile-load/decision-parity gates remain. No full production admission, causal
 benefit, absolute anti-rollback, complete telemetry or physical effect is claimed.
 
 References: [systemd execution restrictions](https://www.freedesktop.org/software/systemd/man/252/systemd.exec.html),
 [AppArmor profile flags](https://apparmor-documentation-c38b15.gitlab.io/documentation/manpages/manpage_apparmor.d.5/).
+
+
+## V4: sealed native bootstrap confinement
+
+An explicit **new scope** may enroll `outcome-live-origin-registration/v4`:
+all exact v3 fields plus `native_apparmor_profile`. Both public preparation
+helpers accept `--native-apparmor-profile NAME` together with the capture
+profile. Names must be bounded literals and distinct. The trust digest pins
+both names and the exact ELF hash. Existing registrations, used scopes and
+journals are never upgraded or stripped of this requirement automatically.
+
+The launcher keeps the same verified, anonymous root-owned 0500 ELF memfd and
+all four irreversible seals (WRITE, GROW, SHRINK, SEAL). There is no mutable
+executable copy, mount preparation, additional library dependency, SYS_ADMIN,
+MAC_ADMIN or disconnected-path flag. At the first application operation in Rust
+`main`, before configuration, health/version/maintenance/capture subcommands,
+instance state, recovery, threads, input or native session start, the bootstrap:
+
+1. Validates the unique private profile argument derived from registration.
+2. Opens its actual `/proc/self/exe` and verifies regular/root/0500/unlinked
+   metadata and exactly all four seals. A disk image or partial seal fails.
+3. Fixes no-new-privileges and performs the AppArmor `change_profile` kernel
+   transition, then verifies its own exact `NAME (enforce)` kernel label.
+4. Exits 3 with no fallback if any check fails. Only then may normal work begin.
+
+The registered health probe executes **that same sealed image and gate** before
+stopping an old service. The direct trusted launcher also repeats this before
+starting the signer/opening a signed session. The real core repeats the gate
+independently after execution, closing the preflight-to-start race. A failure
+before the signer starts adds no evidence. A later race may leave the existing
+honest `session_prepare` uncertainty marker; it cannot produce a native start or
+clean end and subsequent continuation refuses. Never delete/repair that marker.
+The controller checks the actual native child's enforcing label as well as the
+signer's label and verified signed native start. No profiles are loaded or
+repaired by product runtime. A normal health report's
+`native_apparmor.enforced_profile=null` describes capability, not confinement;
+only an actually guarded probe reports the verified profile.
+
+This is application-directed confinement of an already trusted sealed program.
+The ELF loader, Rust runtime initialization, libraries and small bootstrap run
+before confinement and remain in the existing trusted root/code boundary. It is
+not an isolation boundary against malicious code executed before transition,
+policy replacement by trusted root, root compromise or kernel compromise. The
+profile must deny later profile transitions, arbitrary exec/control IPC and key
+access; a name/enforcing label does not attest policy semantics. Operator review
+of the offline policy remains mandatory. The launcher remains unconfined; a
+unit-level `AppArmorProfile=` is still refused rather than silently ignored.
+
+The disposable native profile has read access to the synthetic EVE input and
+write/lock access only to native state/logs, plus inherited Unix reporting and
+minimum process reads. It grants no signing/witness key, signed input, observer
+journal, policy-management, exec or profile-change permission. It does **not**
+admit real tc/nft enforcement or general broker/IPC permissions. The unchanged
+systemd capability bound is DAC_READ_SEARCH/SETGID/SETUID/NET_ADMIN; AppArmor
+denies their unneeded use. No runtime receives SYS_ADMIN/MAC_ADMIN. IP isolation
+continues to rely on the independently checked systemd family filter/offline
+network; do not infer standalone AppArmor network mediation on every kernel.
+
+Run `armor.py ... --native-core` for all five existing VM phases. The native CI
+matrix is mandatory (real kernel enforcement, no skip); CI does not reboot its
+host. Checks include actual native label and seals, independent same-root policy
+denials and DAC-positive controls, role-to-native signal-0 denial, singleton,
+registration/key/signature refusal, clean restart/boot/witness ordering,
+complain/missing profile refusal before evidence append, and removal after a
+successful preflight producing no native frame/start. Root Linux tests also
+exercise all one-shot/daemon entries with absent/partial/full seals and missing
+policy. No fixture loss is backfilled and no read-only result becomes an
+execution fact. Physical durability/resources and production-provider policy/
+readback remain separate #400 acceptance gates.

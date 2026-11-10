@@ -199,3 +199,34 @@ def test_native_memfd_confinement_is_not_admitted_by_guessing(value):
 
     with pytest.raises(OSError):
         _security({"AppArmorProfile": value})
+
+
+def test_native_registration_requires_both_exact_enrolled_profiles(tmp_path):
+    from azazel_edge.outcome.input_live import native_arguments
+
+    p, r = registration(tmp_path)
+    r.update(
+        schema_version="outcome-live-origin-registration/v4",
+        native_apparmor_profile="edge400-native",
+    )
+    with patch("os.geteuid", return_value=61001):
+        assert validate_registration(p, r) == r
+        assert native_arguments(r) == ["--native-apparmor-profile", "edge400-native"]
+        for fault in [
+            {"schema_version": "outcome-live-origin-registration/v3"},
+            {"native_apparmor_profile": "unconfined"},
+            {"native_apparmor_profile": "edge400-capture"},
+            {"native_apparmor_profile": "bad --health"},
+            {"native_apparmor_profile": "name//hat"},
+        ]:
+            with pytest.raises(OSError):
+                validate_registration(p, {**r, **fault})
+        for key in [
+            "capture_apparmor_profile",
+            "native_apparmor_profile",
+            "ai_socket_uid",
+        ]:
+            bad = dict(r)
+            del bad[key]
+            with pytest.raises(OSError):
+                validate_registration(p, bad)

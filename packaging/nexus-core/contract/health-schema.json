@@ -29,6 +29,10 @@
     "checks[].name",
     "checks[].ok",
     "contract",
+    "native_apparmor.early_transition",
+    "native_apparmor.enforced_profile",
+    "native_apparmor.schema_version",
+    "native_apparmor.sealed_memfd",
     "observe_only",
     "status",
     "version"
