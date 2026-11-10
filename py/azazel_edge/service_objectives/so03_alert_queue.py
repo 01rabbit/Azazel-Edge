@@ -603,7 +603,7 @@ def run(
     info: Dict[str, Any] = {}
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so03-") as tmp, _watch_fsync() as synced:
-            rows = _measure(core, samples, rng, synced, Path(tmp), info, during_core)
+            rows = _measure(core, samples, rng, synced, Path(tmp).resolve(), info, during_core)
     try:
         full_queue = _full_queue_enqueue_latency()
     except Exception as exc:  # diagnostic only; never part of the verdict

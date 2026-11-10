@@ -548,7 +548,7 @@ def measure(
 def _measure_with_owned_state(so04, owned: OwnedState, core: Path, leases_per_type: int, rng, profile, bounds):
     prerequisites = [prerequisite("core_binary_present", True, f"{core}")]
     with tempfile.TemporaryDirectory(prefix="so04c-") as tmp:
-        work = Path(tmp)
+        work = Path(tmp).resolve()
         ledger = work / "release-ledger.json"
         events = work / "normalized-events.jsonl"
         eve = work / "eve.json"

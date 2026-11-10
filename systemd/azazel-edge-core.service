@@ -9,6 +9,7 @@ EnvironmentFile=-/etc/default/azazel-edge-security
 Environment="AZAZEL_EVE_PATH=/var/log/suricata/eve.json"
 Environment="AZAZEL_AI_SOCKET=/run/azazel-edge-ai/ai-bridge.sock"
 Environment="AZAZEL_NORMALIZED_EVENT_LOG=/var/log/azazel-edge/normalized-events.jsonl"
+Environment="AZAZEL_DEFENSE_RELEASE_LEDGER=/var/lib/azazel-edge/release-ledger.json"
 Environment="AZAZEL_FORWARD_AI=true"
 Environment="AZAZEL_FORWARD_LOG=true"
 Environment="AZAZEL_DEFENSE_ENFORCE=false"
@@ -18,6 +19,7 @@ Environment="AZAZEL_DEFENSE_ACTION_TTL_SEC=300"
 Environment="AZAZEL_DEFENSE_ALLOW_HIGH_IMPACT_AUTO=false"
 ExecStart=/usr/local/bin/azazel-edge-core
 Restart=always
+RestartPreventExitStatus=3
 RestartSec=2
 
 [Install]

@@ -255,3 +255,11 @@ the exact existing core environment and image; no inherited enforcement flags,
 replay, arbitrary command or activation default is added. Unclosed capture
 history refuses a new core launch; capture failure after launch leaves defense
 running. See the [configuration, roles and recovery procedure](architecture/outcome-live-origin.md).
+
+The optional [single-unit service handoff](architecture/outcome-service-handoff.md)
+requires a new quarantined bundle, matching imported keys, root-installed isolated
+runtime, native guard capability, exact effective configuration and fresh witness
+proof. No unit is enabled by preparation/provisioning. The default core unit now
+explicitly names its unchanged default ledger and prevents restart on exclusion
+exit 3; ordinary startup remains direct native execution. The signed drop-in
+exists only after explicit reviewed apply.

@@ -53,7 +53,8 @@ for root and the exact parent launcher PID. These credentials identify the
 **trusted launcher that created the pair**, not independent kernel attestation
 of the subsequent Rust executable. The launcher verifies and seals the ELF,
 passes the other endpoint only to that child, and closes its own endpoints.
-The key's bytes are loaded only in the non-root signer; the core gets no key,
+The `input_live` launcher loads signing material only in its non-root signer;
+root provisioning/service preflight may verify private material. The native core gets no key,
 key argument, observer journal, witness key or anchor descriptor. Capture fds
 are marked close-on-exec before provider commands can run. The observer still
 has public keys only and the separate witness remains mandatory.
@@ -208,3 +209,11 @@ power cuts/storage/cache/wear, Pi CPU/RSS/disk/latency and observer off/on/fault
 live-decision parity. #393 retains independent protected-service measurement;
 external/TPM monotonic anchoring remains separate. Keep #400 open. Passing the
 software CI does not authorize deployment or prove comparative/causal benefit.
+
+The [service/key handoff layer](outcome-service-handoff.md) adds explicit offline
+provisioning and reviewed switching of the same existing unit, with a shared
+native lifetime guard. New live launchers acquire that guard before signer
+preparation. A registration v2 can pin a separate private AI socket UID without
+granting access to the signer. Live signers reject retained capabilities/groups
+and set no-new-privileges before key use. No service was activated by software
+tests; production PID-1/cgroup and physical commissioning remain required.

@@ -1365,3 +1365,22 @@ Capture descriptors are close-on-exec before provider commands. After launch
 capture failure never terminates or restarts defense. No user/ACL/capability,
 service, installer, default activation or new enforcement gate is installed;
 root core/launcher/witness share root trust and are not mutually compromise-isolated.
+
+The [optional service capture handoff](outcome-service-handoff.md) is a root-only
+management CLI, not an observer/AI endpoint. It may import pre-existing matching
+keys into an absent root-only quarantine, verify a protected bundle, review a
+fixed existing unit/process/configuration snapshot and apply one owned drop-in.
+It never creates users/ACLs/capabilities, generates/replaces secrets, enables
+services or resets evidence. Keys remain private to capture/root witness roles.
+A pinned AI socket UID retains its private directory/socket; no capture/observer
+access is granted. The signer checks zero permitted/effective/ambient caps and
+sets no-new-privileges, without reducing the normal core provider capabilities.
+The normal and signed core share a protected lifetime lock derived from their
+registered release-state directory, before daemon/release work. The controller
+uses one global operation lock across bundle choices and refuses unmanaged cores,
+non-root/elevated/sandbox-unknown units, stale plans and incomplete proof. Its
+only manager mutation target is `azazel-edge-core.service`; apply/restore never
+invokes provider commands directly. An explicit restore removes only its exact
+owned profile and starts nothing. Default unit ledger selection is unchanged;
+exit 3 suppresses restart loops on exclusion. Root authority, real service/cgroup
+commissioning and G6 limits remain as documented.

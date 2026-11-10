@@ -1,5 +1,6 @@
 mod audit_chain;
 mod ingress;
+mod instance;
 mod live_origin;
 mod release;
 mod safety;
@@ -1946,6 +1947,11 @@ fn health_report(cfg: &Config) -> Value {
     let healthy = observe_only(&checks);
     json!({
         "contract": HEALTH_CONTRACT,
+        "capture_service": {
+            "schema_version": "azazel-edge-core/capture-service/v1",
+            "lock_file": "core-instance.lock", "lock_scope": "release-state-directory",
+            "private_fd": true, "live_origin": "outcome-live-origin/v1"
+        },
         "status": if healthy { "healthy" } else { "unhealthy" },
         "version": CORE_VERSION,
         "observe_only": healthy,
@@ -2006,10 +2012,10 @@ fn main() {
         }
         return;
     }
-    if let Err(error) = live_origin::install(&origin_args) {
-        eprintln!("{}", error);
-        std::process::exit(2);
-    }
+    let (daemon_args, inherited_instance) = match instance::arguments(&origin_args) {
+        Ok(value) => value,
+        Err(error) => { eprintln!("{}", error); std::process::exit(3); }
+    };
     let cfg = load_config();
 
     // The contract subcommands return before anything else happens. They read
@@ -2050,6 +2056,15 @@ fn main() {
             }
         }
         return;
+    }
+
+    let _instance = match instance::InstanceGuard::acquire(&cfg.defense_release_ledger_path, inherited_instance) {
+        Ok(guard) => guard,
+        Err(error) => { eprintln!("{}", error); std::process::exit(3); }
+    };
+    if let Err(error) = live_origin::install(&daemon_args) {
+        eprintln!("{}", error);
+        std::process::exit(2);
     }
 
     if let Some(parent) = Path::new(&cfg.normalized_log_path).parent() {
