@@ -13,7 +13,7 @@ from .input_origin import MAX_IMAGE
 from .journal import OutcomeJournalError, _json, _parse
 
 
-def prepare(policy, binary, environment):
+def prepare(policy, binary, environment, *, ai_socket_uid=None):
     if (
         policy.data["witness_uid"] != 0
         or os.geteuid() != 0
@@ -63,6 +63,9 @@ def prepare(policy, binary, environment):
         launcher_uid=0,
         environment=environment
     )
+    if ai_socket_uid is not None:
+        r["schema_version"] = "outcome-live-origin-registration/v2"
+        r["ai_socket_uid"] = ai_socket_uid
     p = TrustPolicy(
         {
             **dict(policy.data),
@@ -81,11 +84,16 @@ def main(argv=None):
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--environment", type=Path, required=True)
+    parser.add_argument("--ai-socket-uid", type=int)
     args = parser.parse_args(argv)
     try:
         p = TrustPolicy.from_file(args.policy, role="witness")
         raw, _ = read_regular(args.environment, owner=0, max_bytes=8192)
-        print(_json(prepare(p, args.binary, _parse(raw))).decode())
+        print(
+            _json(
+                prepare(p, args.binary, _parse(raw), ai_socket_uid=args.ai_socket_uid)
+            ).decode()
+        )
         return 0
     except (OSError, ValueError):
         print("live enrollment refused; existing evidence unchanged", file=sys.stderr)

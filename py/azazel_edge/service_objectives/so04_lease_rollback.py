@@ -539,7 +539,7 @@ def run(
     monotonic_leases = False
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so04-") as tmp:
-            work = Path(tmp)
+            work = Path(tmp).resolve()
             ledger = work / "release-ledger.json"
             events = work / "normalized-events.jsonl"
             eve = work / "eve.json"

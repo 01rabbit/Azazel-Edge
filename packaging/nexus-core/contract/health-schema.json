@@ -20,6 +20,11 @@
     "the report's status is the healthy status"
   ],
   "keys": [
+    "capture_service.live_origin",
+    "capture_service.lock_file",
+    "capture_service.lock_scope",
+    "capture_service.private_fd",
+    "capture_service.schema_version",
     "checks[].detail",
     "checks[].name",
     "checks[].ok",

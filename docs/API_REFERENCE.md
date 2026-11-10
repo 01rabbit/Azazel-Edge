@@ -387,3 +387,10 @@ through a private inherited channel; provider and release facts are preserved,
 not recalculated. Trust policy v3 requires producer preparation and verified
 clean closure before another launch. Lifecycle boundaries stop live observation
 until verified loss/fresh-segment recovery. See the [live-origin contract](architecture/outcome-live-origin.md).
+
+`input_service.prepare/provision/verify` prepares public absent-root candidates
+and imports matching existing private files without generation/reset/activation.
+`service_switch` provides read-only plan, digest-bound same-unit apply and
+explicit inactive-profile restore. Native `core-instance.lock` excludes normal
+and captured daemons in one release-state directory. See the [service/key
+contract](architecture/outcome-service-handoff.md).

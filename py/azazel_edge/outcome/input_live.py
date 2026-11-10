@@ -26,6 +26,7 @@ from .input_auth import (
     hex_bytes,
 )
 from .input_origin import MAX_IMAGE
+from .instance import CoreLease
 from .journal import OutcomeJournalError, _parse, _ref
 from .live_protocol import native_frame
 
@@ -65,9 +66,14 @@ def validate_registration(policy, r):
         "environment",
     }
     if (
+        type(r) is dict
+        and r.get("schema_version") == "outcome-live-origin-registration/v2"
+    ):
+        fields.add("ai_socket_uid")
+    if (
         type(r) is not dict
         or set(r) != fields
-        or r["schema_version"] != SCHEMA
+        or r["schema_version"] not in (SCHEMA, "outcome-live-origin-registration/v2")
         or r["mode"] != "live-core"
         or type(r["launcher_uid"]) is not int
         or r["launcher_uid"] != 0
@@ -100,6 +106,15 @@ def validate_registration(policy, r):
         raise OutcomeJournalError(
             "live origin cannot replay input or use stdout as evidence"
         )
+    ai_uid = r.get("ai_socket_uid", 0)
+    if (
+        type(ai_uid) is not int
+        or not 0 <= ai_uid < 2**31
+        or ai_uid in (d["producer_uid"], d["observer_uid"])
+    ):
+        raise OutcomeJournalError(
+            "AI socket role must remain separate from capture and observer"
+        )
     for key in ("binary_path",):
         path = r[key]
         if (
@@ -121,7 +136,14 @@ def validate_registration(policy, r):
         if "AZAZEL_" + key not in env:
             continue
         value = Path(env["AZAZEL_" + key])
-        parent, name = open_parent(value, trusted_owner=0)
+        if not value.is_absolute() or ".." in value.parts:
+            raise OutcomeJournalError("physical registered core path required")
+        # The producer has no access to private core/AI directories. Its root
+        # parent validated these; verify public structure here without grants.
+        if os.geteuid() != 0:
+            continue
+        expected_owner = ai_uid if key == "AI_SOCKET" else 0
+        parent, name = open_parent(value, trusted_owner=expected_owner)
         try:
             try:
                 info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -135,7 +157,7 @@ def validate_registration(policy, r):
                 else stat.S_ISREG(info.st_mode)
             )
             if (
-                info.st_uid != 0
+                info.st_uid != expected_owner
                 or info.st_mode & 0o022
                 or not expected_type
                 or info.st_nlink != 1
@@ -192,9 +214,36 @@ def sealed_image(r):
         raise
 
 
+def harden_receiver(uid):
+    import ctypes
+
+    if (
+        os.getresuid() != (uid, uid, uid)
+        or os.getresgid() != (uid, uid, uid)
+        or os.getgroups()
+    ):
+        raise OutcomeJournalError("receiver retained unexpected identities/groups")
+    status = Path("/proc/self/status").read_text()
+    for key in ("CapEff", "CapPrm", "CapAmb"):
+        if int(status.split(key + ":", 1)[1].split()[0], 16):
+            raise OutcomeJournalError("receiver retained process capabilities")
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [
+        ctypes.c_int,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    ]
+    libc.prctl.restype = ctypes.c_int
+    if libc.prctl(38, 1, 0, 0, 0) != 0:  # Linux PR_SET_NO_NEW_PRIVS
+        raise OutcomeJournalError("receiver no-new-privileges unavailable")
+
+
 def receive(policy, r, key_path, boot_ref, fd, session):
     if sys.platform != "linux" or os.geteuid() != policy.data["producer_uid"]:
         raise OutcomeJournalError("registered non-root Linux receiver required")
+    harden_receiver(policy.data["producer_uid"])
     with socket.socket(fileno=fd) as channel:
         os.set_inheritable(channel.fileno(), False)
         if channel.family != socket.AF_UNIX or channel.type != socket.SOCK_STREAM:
@@ -272,7 +321,12 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     _ref(boot_ref)
     p = TrustPolicy.from_file(policy_path, role="witness")
     r = registration(p, registration_path)
-    image = sealed_image(r)
+    lease = CoreLease(r["environment"]["AZAZEL_DEFENSE_RELEASE_LEDGER"])
+    try:
+        image = sealed_image(r)
+    except BaseException:
+        lease.close()
+        raise
     core_end, signer_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     worker = None
     core = None
@@ -339,8 +393,10 @@ def launch(policy_path, registration_path, key_path, boot_ref):
                 str(core_end.fileno()),
                 "--live-origin-session",
                 session,
+                "--core-instance-fd",
+                str(lease.fd),
             ],
-            pass_fds=(image, core_end.fileno()),
+            pass_fds=(image, core_end.fileno(), lease.fd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             cwd="/",
@@ -370,6 +426,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             signer_code = 1
         return 0 if code == 0 and signer_code == 0 else 1
     finally:
+        lease.close()  # A surviving core still owns its inherited lock.
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
         core_end.close()
