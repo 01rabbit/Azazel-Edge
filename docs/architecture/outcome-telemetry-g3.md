@@ -360,3 +360,14 @@ G3 produces real pre/post Outcome evidence, but the full research baseline still
 - later evidence rules for any tactical-effect claim beyond the already fail-closed baseline.
 
 Presented Terrain, Belief, Counterfactual planning, MAGI Council and Co-Adaptation remain parked until the current Outcome-as-Evidence gates are closed.
+
+## Optional local persistence
+
+The foreground collector can explicitly opt into the bounded
+[observation journal](outcome-observation-journal.md). Default operation remains
+volatile. Journal begin is synced before allocating a window; completed results
+are synced before emission. Pending observations become durable losses on close
+or recovery. An unclean session seals new admissions because its unknown input
+tail cannot be reconstructed. No historical procfs sampling, executor, network
+client or background service is added. G6 physical storage and resource tests
+remain required before installation/activation.

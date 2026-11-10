@@ -100,7 +100,7 @@ in-place migration that silently clears the ledger is permitted.
 admission counters and whether new admission is closed. These are offline
 read-model values, not new Web API endpoints.
 
-The ledger is not wired into the live G3 CLI. The live CLI still avoids historical replay by starting at EOF. Persisting the ledger on the device (path, fsync, growth, wear) is a G6 decision.
+The replay ledger stays in memory. The separate, explicitly enabled [G3 observation journal](outcome-observation-journal.md) reuses its identity rules for durable local records. The live CLI still starts at EOF; physical storage durability, wear and performance remain G6 gates.
 
 ## Replay boundary (enforced by tests)
 
@@ -134,12 +134,12 @@ closed. A new empty ledger is valid only for a separately identified new
 experiment with no prior identities reused.
 
 The replay knows which windows were pending at each recorded boot boundary.
-This is not crash-safe persistence for a deployed collector: wiring durable
-before-window journaling/fsync, boot recovery and storage budgets into the live
-CLI still requires separate implementation/review and G6 evidence. Abrupt
-loss without a complete checkpoint must be treated as unknown continuity;
-never manufacture post-restart success. The default live observer remains
-unchanged and begins at EOF.
+This replay alone is not crash-safe persistence for a deployed collector. The
+optional [observation journal](outcome-observation-journal.md) implements bounded
+before-window fsync and conservative process recovery separately; its software
+fault tests do not establish G6 physical storage durability. Abrupt loss without
+known continuity cannot manufacture post-restart success. The default live
+collector remains volatile and begins at EOF.
 
 No Pi/HIL measurement, comparative defensive benefit, causal claim, automatic
 activation or model admission follows from these software tests. Every retained

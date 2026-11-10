@@ -314,3 +314,22 @@ API contract details evolve with implementation.
 For release-specific behavior, consult:
 - [Changelog](CHANGELOG.md)
 - [Release Verification Guide](RELEASE_VERIFICATION_GUIDE.md)
+
+## Optional G3 observation journal (local Python API)
+
+`azazel_edge.outcome.journal.ObservationJournal` is an opt-in, bounded local
+persistence adapter for `OutcomeTelemetryCollector(persistence=...)`. It adds
+no Web endpoint or execution authority. `begin_window` syncs before collection;
+`commit_outcome` syncs the complete inconclusive Outcome before returning true.
+`lose_window` retains a tombstone. `status()` exposes byte/identity/session
+budgets, losses, seal reason, continuity and error counters;
+`retained_outcomes()` returns bounded copies of committed records. Reopening
+validates and re-syncs the entire journal and directory before exposing
+recovered results; a failed open never repairs or truncates it.
+
+See the [journal contract and recovery procedure](architecture/outcome-observation-journal.md)
+and [explicit CLI configuration](CONFIGURATION.md#optional-g3-observation-journal).
+Use the same scope, collector context and budgets on recovery; callers must
+close the journal. Opening is a recovery operation that may append tombstones
+and a seal; it is not a read-only inspection endpoint. Do not use this adapter
+from the deterministic control path or replay.

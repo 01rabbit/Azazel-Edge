@@ -254,6 +254,24 @@ class _PendingObservation:
     mechanism_status: str = ""
 
 
+class OutcomePersistence(Protocol):
+    def check_context(self, policy_ref: str) -> None: ...
+    def begin_window(self, *, decision_id: str, execution_id: str, objective_id: str) -> bool: ...
+    def lose_window(self, *, decision_id: str, execution_id: str, objective_id: str) -> None: ...
+    def commit_outcome(self, outcome: OutcomeRecord) -> bool: ...
+
+
+def persistence_context(policy, interface, sample_interval_seconds=DEFAULT_SAMPLE_INTERVAL_SECONDS,
+                        buffer_seconds=DEFAULT_BUFFER_SECONDS, max_samples=DEFAULT_MAX_SAMPLES,
+                        max_activity_events=DEFAULT_MAX_ACTIVITY_EVENTS, max_pending=DEFAULT_MAX_PENDING,
+                        max_seen_executions=DEFAULT_MAX_SEEN_EXECUTIONS):
+    """Bind source/policy, sampling and memory budgets; never persist raw paths."""
+    return json.dumps(dict(policy_ref=policy.policy_ref, interface=interface,
+        sample_interval_seconds=float(sample_interval_seconds), buffer_seconds=float(buffer_seconds),
+        max_samples=max_samples, max_activity_events=max_activity_events, max_pending=max_pending,
+        max_seen_executions=max_seen_executions), sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
 class OutcomeTelemetryCollector:
     """Passive bounded pre/post telemetry collector. It never claims tactical success."""
 
@@ -270,6 +288,7 @@ class OutcomeTelemetryCollector:
         max_pending: int = DEFAULT_MAX_PENDING,
         max_seen_executions: int = DEFAULT_MAX_SEEN_EXECUTIONS,
         identity_ledger: OutcomeIdentityLedger | None = None,
+        persistence: OutcomePersistence | None = None,
     ) -> None:
         if not _valid_interface(interface):
             raise ValueError("invalid telemetry interface")
@@ -292,6 +311,13 @@ class OutcomeTelemetryCollector:
         self.seen_execution_ids: set[str] = set()
         self.max_pending = max_pending
         self.max_seen_executions = max_seen_executions
+        if persistence is not None and identity_ledger is not None:
+            raise ValueError("durable journal and separate identity ledger cannot be combined")
+        if persistence is not None:
+            persistence.check_context(persistence_context(policy, interface, sample_interval_seconds,
+                buffer_seconds, max_samples, max_activity_events, max_pending, max_seen_executions))
+        self.persistence = persistence
+        self.persistence_errors = 0
         self.identity_ledger = identity_ledger
         self.lost_window_deliveries = 0
 
@@ -333,7 +359,21 @@ class OutcomeTelemetryCollector:
         if execution.execution_id in self.seen_execution_ids:
             return False
         if len(self.seen_execution_ids) >= self.max_seen_executions or len(self.pending) >= self.max_pending:
+            if self.persistence is not None:
+                try:
+                    self.persistence.lose_window(decision_id=execution.decision_id,
+                        execution_id=execution.execution_id, objective_id=objective.objective_id)
+                except OSError:
+                    self.persistence_errors += 1
             return False
+        if self.persistence is not None:
+            try:
+                if not self.persistence.begin_window(decision_id=execution.decision_id,
+                    execution_id=execution.execution_id, objective_id=objective.objective_id):
+                    return False
+            except OSError:
+                self.persistence_errors += 1
+                return False
 
         pre_seconds, post_seconds = _window_seconds(objective.observation_window)
         src_ip = str(normalized.get("src_ip") or "") if isinstance(normalized, Mapping) else ""
@@ -369,14 +409,38 @@ class OutcomeTelemetryCollector:
         due = [key for key, pending in self.pending.items() if pending.effective_end_epoch <= now]
         records = [self._build_outcome(self.pending.pop(key), now) for key in due]
         self._prune(now)
-        return tuple(records)
+        if self.persistence is None:
+            return tuple(records)
+        committed = []
+        for record in records:
+            try:
+                if self.persistence.commit_outcome(record):
+                    committed.append(record)
+            except OSError:
+                self.persistence_errors += 1
+                try:
+                    self.persistence.lose_window(decision_id=record.decision_id,
+                        execution_id=record.execution_id, objective_id=record.objective_id)
+                except OSError:
+                    pass  # Poisoned journal never retries I/O; restart resolves retained begins.
+        return tuple(committed)
 
     def invalidate_pending_windows(self) -> None:
         """Checkpoint pending-window loss before discarding collector state.
 
-        The caller owns durable storage; this method neither writes nor grants
-        any control authority. Without a ledger no continuity claim is possible.
+        An explicit persistence adapter durably marks loss before clearing. With
+        only an in-memory ledger the caller owns storage. Neither grants control
+        authority; without either adapter no continuity claim is possible.
         """
+        if self.persistence is not None:
+            for pending in self.pending.values():
+                try:
+                    self.persistence.lose_window(decision_id=pending.decision_id,
+                        execution_id=pending.execution_id, objective_id=pending.objective.objective_id)
+                except OSError:
+                    self.persistence_errors += 1
+            self.pending.clear()
+            return
         if self.identity_ledger is None:
             raise ValueError("window invalidation requires an identity ledger")
         for pending in self.pending.values():
@@ -694,42 +758,77 @@ def run_live(
     poll_seconds: float = 0.25,
     sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    journal_directory: Path | None = None,
+    journal_scope: str | None = None,
+    journal_boot_id: str | None = None,
+    initialize_journal: bool = False,
+    journal_max_bytes: int = 16 * 1024 * 1024,
+    journal_max_identities: int = 4096,
 ) -> None:
     """Foreground live-only collector. Historical procfs reconstruction is forbidden."""
-    collector = OutcomeTelemetryCollector(
-        source=LinuxProcTelemetrySource(),
-        policy=OutcomeTelemetryPolicy.from_file(policy_path),
-        interface=interface,
-        sample_interval_seconds=sample_interval_seconds,
-    )
-    next_sample = time.monotonic()
-    with input_path.open("r", encoding="utf-8") as stream:
-        stream.seek(0, 2)
-        while True:
-            now_monotonic = time.monotonic()
-            if now_monotonic >= next_sample:
-                collector.record_sample(epoch=time.time())
-                next_sample = now_monotonic + sample_interval_seconds
-            saw_record = False
+    policy = OutcomeTelemetryPolicy.from_file(policy_path)
+    persistence = None
+    if journal_directory is not None:
+        from .journal import NAME, ObservationJournal
+        journal_path = (journal_directory / NAME).resolve()
+        if journal_path in (input_path.resolve(), output_path.resolve()):
+            raise ValueError("journal must be separate from input and JSONL output")
+        persistence = ObservationJournal(journal_directory, scope_ref=journal_scope,
+            policy_ref=persistence_context(policy, interface, sample_interval_seconds),
+            boot_id=journal_boot_id, create=initialize_journal,
+            max_bytes=journal_max_bytes, max_identities=journal_max_identities)
+    elif journal_scope is not None or journal_boot_id is not None or initialize_journal:
+        raise ValueError("journal scope/boot/initialization requires a journal directory")
+    try:
+        if persistence is not None and persistence.status()["new_admission_closed"]:
+            raise OSError("observation journal admission closed: " + str(persistence.status()["seal_reason"] or "identity_capacity"))
+        collector = OutcomeTelemetryCollector(
+            source=LinuxProcTelemetrySource(),
+            policy=policy,
+            interface=interface,
+            sample_interval_seconds=sample_interval_seconds,
+            persistence=persistence,
+        )
+        next_sample = time.monotonic()
+        with input_path.open("r", encoding="utf-8") as stream:
+            stream.seek(0, 2)
             while True:
-                position = stream.tell()
-                line = stream.readline()
-                if not line:
-                    stream.seek(position)
-                    break
-                saw_record = True
-                event = _decode_event(line)
-                if event is not None:
-                    collector.observe_event(event, observed_epoch=time.time())
-            outcomes = collector.finalize_due(epoch=time.time())
-            if outcomes:
-                append_jsonl(
-                    output_path,
-                    ({"schema_version": record.schema_version, "outcome": record.to_dict(), "collector_mode": "passive_g3", "effect_assessment": None} for record in outcomes),
-                    max_bytes=max_output_bytes,
-                )
-            if not saw_record:
-                time.sleep(max(0.05, poll_seconds))
+                now_monotonic = time.monotonic()
+                if now_monotonic >= next_sample:
+                    collector.record_sample(epoch=time.time())
+                    next_sample = now_monotonic + sample_interval_seconds
+                saw_record = False
+                while True:
+                    position = stream.tell()
+                    line = stream.readline()
+                    if not line:
+                        stream.seek(position)
+                        break
+                    saw_record = True
+                    event = _decode_event(line)
+                    if event is not None:
+                        collector.observe_event(event, observed_epoch=time.time())
+                        if (persistence is not None and collector.persistence_errors
+                                and not persistence.status()["continuity_available"]):
+                            raise OSError("observation journal continuity unavailable; evidence collection stopped")
+                outcomes = collector.finalize_due(epoch=time.time())
+                if outcomes:
+                    append_jsonl(
+                        output_path,
+                        ({"schema_version": record.schema_version, "outcome": record.to_dict(), "collector_mode": "passive_g3", "effect_assessment": None} for record in outcomes),
+                        max_bytes=max_output_bytes,
+                    )
+                if persistence is not None:
+                    status = persistence.status()
+                    if not status["continuity_available"]:
+                        raise OSError("observation journal continuity unavailable; evidence collection stopped")
+                    if status["new_admission_closed"] and not collector.pending:
+                        raise OSError("observation journal admission closed: " + str(status["seal_reason"] or "identity_capacity"))
+                if not saw_record:
+                    time.sleep(max(0.05, poll_seconds))
+    finally:
+        if persistence is not None:
+            persistence.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -741,7 +840,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-seconds", type=float, default=0.25)
     parser.add_argument("--sample-interval-seconds", type=float, default=DEFAULT_SAMPLE_INTERVAL_SECONDS)
     parser.add_argument("--max-output-bytes", type=int, default=int(os.environ.get("AZAZEL_OUTCOME_MAX_BYTES", str(DEFAULT_MAX_OUTPUT_BYTES))))
+    parser.add_argument("--journal-directory", type=Path, help="Explicit precreated private directory; no default persistence")
+    parser.add_argument("--journal-scope", help="New experiment/scope identity; must match on recovery")
+    parser.add_argument("--journal-boot-id", help="Current trusted OS boot identity supplied by the operator")
+    parser.add_argument("--journal-initialize", action="store_true", help="First initialization only in an empty directory")
+    parser.add_argument("--journal-max-bytes", type=int, default=16*1024*1024)
+    parser.add_argument("--journal-max-identities", type=int, default=4096)
     args = parser.parse_args(argv)
+    if args.journal_directory is not None and (not args.journal_scope or not args.journal_boot_id):
+        parser.error("journal directory requires explicit scope and trusted boot identity")
+    if args.journal_directory is None and (args.journal_scope or args.journal_boot_id or args.journal_initialize):
+        parser.error("journal arguments require --journal-directory")
     run_live(
         input_path=Path(args.input),
         output_path=Path(args.output),
@@ -750,6 +859,9 @@ def main(argv: list[str] | None = None) -> int:
         poll_seconds=args.poll_seconds,
         sample_interval_seconds=args.sample_interval_seconds,
         max_output_bytes=args.max_output_bytes,
+        journal_directory=args.journal_directory, journal_scope=args.journal_scope,
+        journal_boot_id=args.journal_boot_id, initialize_journal=args.journal_initialize,
+        journal_max_bytes=args.journal_max_bytes, journal_max_identities=args.journal_max_identities,
     )
     return 0
 

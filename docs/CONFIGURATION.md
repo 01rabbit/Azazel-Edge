@@ -164,3 +164,37 @@ These paths intentionally track the edge-tier runtime name regardless of
 ## Operational Note
 
 Use deployment-appropriate profiles and validate changes in a dry-run or test environment before production field use.
+
+## Optional G3 observation journal
+
+The foreground `python -m azazel_edge.outcome.telemetry --policy ...` collector
+is volatile by default. The following CLI arguments enable a local journal
+explicitly; no environment flag, installer or service enables it automatically.
+
+| Argument | Default | Requirement |
+| --- | --- | --- |
+| `--journal-directory` | absent (disabled) | Precreated physical absolute directory, owned by collector UID, mode `0700`; all symlink components refused. |
+| `--journal-scope` | absent | Explicit experiment identity, unchanged on recovery. ASCII alphanumeric, hyphen or underscore, up to 128 characters, beginning alphanumeric. |
+| `--journal-boot-id` | absent | Current trusted OS boot identity supplied by operator (same identifier syntax); no wall-time boot inference. |
+| `--journal-initialize` | false | First creation only in an empty directory. Omit on every subsequent open. |
+| `--journal-max-bytes` | 16777216 | Exact retained budget, 131072..67108864 bytes. Unchanged on recovery. |
+| `--journal-max-identities` | 4096 | Exact retained budget, 1..16384. Unchanged on recovery; no eviction. |
+
+Scope/boot identity are required together with the directory. Policy/source
+identity, interface, sampling and memory budgets are bound into its context.
+The file is `observations.journal` (`0600`, same UID, one hard link), held by one
+nonblocking exclusive writer lock. Keep this under a trusted private parent;
+root/same-UID tampering and rollback are outside the integrity guarantee.
+
+A missing file, mismatch, invalid record, unsafe permissions or unavailable
+sync/lock stops collection. Exhaustion seals new admission; admitted windows
+may finish within reserved space, then the foreground process exits with an
+error. A persistence I/O failure stops the foreground process without a
+volatile fallback. An unclean restart preserves results and marks known pending
+windows lost, but seals all new admission even if no pending identity was
+saved. The CLI refuses a sealed journal before reading procfs/input. See the
+[full recovery runbook](architecture/outcome-observation-journal.md) before use.
+
+This opt-in has software/process fault coverage only. Device power-loss,
+filesystem behavior, write latency/wear and concurrent defense overhead are
+still G6 acceptance work; it is not installed or enabled by this change.
