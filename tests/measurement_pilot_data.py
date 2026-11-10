@@ -6,7 +6,7 @@ from azazel_edge.benchmark.benefit import SAFETY_FIELDS, manifest_digest
 from azazel_edge.outcome.adapter import from_rust_event
 from azazel_edge.outcome.telemetry import OutcomeTelemetryPolicy
 
-ROOT = Path(__file__).parent/'fixtures/measurement_pilot_v1'
+ROOT = Path(__file__).parent/'fixtures/measurement_pilot_v2'
 TIMELINE = Path(__file__).parent/'fixtures/outcome/g5_golden_replay_input_v1.json'
 
 
@@ -21,7 +21,7 @@ def inputs(protocol, case):
         scenario=case['id'], seed=100+p, order=(p+i)%2) for p in range(2) for i,arm in enumerate(('reference','candidate'))]
     records = []
     for a in manifest['assignments']:
-        ns = a['id']; candidate = a['arm']=='candidate'
+        ns = a['id'].replace('_', '-') if protocol.get('recording_namespace_version') == 2 else a['id']; candidate = a['arm']=='candidate'
         recording = json.loads(json.dumps(source).replace('trace-golden', 'trace-'+ns))
         steps = recording['boots'][0]['steps']
         target = next(s['event'] for s in steps if s['op']=='event' and s['event'].get('enforcement', {}).get('trace_id') == 'trace-'+ns+'-throttle-1')
