@@ -37,11 +37,12 @@ def _alert(n: int) -> str:
 
 
 class Core:
-    def __init__(self, core_bin: Path, work: Path, cap: int | None = None, from_start: bool = True):
-        # No AZAZEL_UNDELIVERED_SPOOL: the default is beside the ledger, the
-        # core's writable state directory (the Nexus unit's ReadWritePaths).
-        self.spool = work / "state" / "undelivered-decisions.jsonl"
-        self.state = work / "state" / "undelivered-decisions.state.json"
+    def __init__(self, core_bin: Path, work: Path, cap: int | None = None, from_start: bool = True, spool_directory: Path | None = None):
+        # Except for the isolated storage-failure case, test the default
+        # beside the ledger (the Nexus unit's writable state directory).
+        spool_directory = spool_directory if spool_directory is not None else work / "state"
+        self.spool = spool_directory / "undelivered-decisions.jsonl"
+        self.state = spool_directory / "undelivered-decisions.state.json"
         self.eve = work / "eve.json"
         self.socket = work / "intake.sock"
         if not self.eve.exists():
@@ -60,6 +61,8 @@ class Core:
         }
         if cap is not None:
             env["AZAZEL_UNDELIVERED_SPOOL_CAP_BYTES"] = str(cap)
+        if spool_directory != work / "state":
+            env["AZAZEL_UNDELIVERED_SPOOL"] = str(self.spool)
         self.proc = subprocess.Popen([str(core_bin)], cwd=str(work), env=env,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         time.sleep(0.5)
@@ -234,14 +237,16 @@ def test_a_wedged_intake_at_shutdown_leaves_every_decision_delivered_spooled_or_
 def test_an_unwritable_spool_directory_never_stops_the_core(tmp_path, rust_core_bin):
     """Re521c-04: where the spool cannot be created, the core runs on, decides
     and says on stderr how many undelivered decisions were not kept."""
-    state_dir = tmp_path / "state"
+    # Evidence storage must fail independently of the mandatory native
+    # singleton/release-state directory. No lockless fallback is permitted.
+    state_dir = tmp_path / "unwritable-spool"
     state_dir.mkdir()
     os.chmod(state_dir, 0o500)
     if os.access(state_dir, os.W_OK):
         os.chmod(state_dir, 0o700)
         pytest.skip("the directory stays writable for this user (root)")
     try:
-        core = Core(rust_core_bin, tmp_path)
+        core = Core(rust_core_bin, tmp_path, spool_directory=state_dir)
         try:
             core.append(0, 20)
             time.sleep(2)
