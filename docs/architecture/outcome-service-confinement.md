@@ -216,3 +216,7 @@ exercise all one-shot/daemon entries with absent/partial/full seals and missing
 policy. No fixture loss is backfilled and no read-only result becomes an
 execution fact. Physical durability/resources and production-provider policy/
 readback remain separate #400 acceptance gates.
+
+The optional [real-provider VM slice](outcome-provider-confinement.md) separately
+commissions nft/conntrack permissions, isolated local probe traffic and actual
+apply/readback/release controls. Its permissions are not added to this baseline.

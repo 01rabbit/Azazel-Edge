@@ -7,12 +7,15 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 
+assert sys.argv[1:] in ([], ["--provider"])
+profile = "edge400-provider" if sys.argv[1:] else "edge400-native"
 lib = ctypes.CDLL("libapparmor.so.1", use_errno=True)
-assert lib.aa_change_profile(b"edge400-native") == 0
+assert lib.aa_change_profile(profile.encode()) == 0
 assert (
     Path("/proc/self/attr/apparmor/current").read_text().strip()
-    == "edge400-native (enforce)"
+    == profile + " (enforce)"
 )
 denied = []
 
@@ -51,8 +54,14 @@ expect(
     "systemd-control",
     lambda: socket.socket(socket.AF_UNIX).connect("/run/systemd/private"),
 )
-expect("inet", lambda: socket.socket(socket.AF_INET))
+if profile == "edge400-provider":
+    for family, kind in [
+        (socket.AF_INET, socket.SOCK_STREAM),
+        (socket.AF_NETLINK, socket.SOCK_RAW),
+    ]:
+        allowed = socket.socket(family, kind)
+        allowed.close()
+else:
+    expect("inet", lambda: socket.socket(socket.AF_INET))
 expect("inet6", lambda: socket.socket(socket.AF_INET6))
-print(
-    json.dumps(dict(uid=os.getuid(), profile="edge400-native (enforce)", denied=denied))
-)
+print(json.dumps(dict(uid=os.getuid(), profile=profile + " (enforce)", denied=denied)))
