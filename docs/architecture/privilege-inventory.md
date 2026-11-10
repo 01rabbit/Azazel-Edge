@@ -1352,3 +1352,16 @@ key-isolation boundary. The observer/witness gains no subprocess or arbitrary
 file/signing endpoint. `input_enroll` emits public candidates without writes,
 private keys or provisioning. Installed live-core authority remains as above;
 this optional connection has not been activated on a device.
+
+The [optional live origin](outcome-live-origin.md) adds an explicit trusted root
+launcher outside installed units. It may start only a root-owned hash-pinned
+sealed core with a root-owned allowlisted registration/environment, and a
+separate non-root capture signer (no supplementary groups). It is a root launch
+control surface requiring trusted code/commissioning, not an observer/AI
+endpoint. The signer authenticates the root launcher parent via kernel Unix
+credentials, reads only the inherited private channel and its own key/source,
+and has no executor or root file capability. The core gets no signing key.
+Capture descriptors are close-on-exec before provider commands. After launch
+capture failure never terminates or restarts defense. No user/ACL/capability,
+service, installer, default activation or new enforcement gate is installed;
+root core/launcher/witness share root trust and are not mutually compromise-isolated.

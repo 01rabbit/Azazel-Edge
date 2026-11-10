@@ -171,3 +171,8 @@ physical power loss/SD cache/durability/wear, hostile-load CPU/RSS/disk/latency,
 and observer off/on/faulted live-decision parity. #393 retains independent
 protected-service capture. No software pass is G6 or causal/comparative-benefit
 acceptance; keep #400 open.
+
+For actual normal-path provider/release reports, use the separately registered
+[live-core connection](outcome-live-origin.md). Its v3 trust profile is not
+interchangeable with this v2 read-only profile. This origin continues to assert
+only dry-run calculation; its output cannot satisfy live-provider provenance.

@@ -216,3 +216,9 @@ read-only origin and strictly increasing raw prefix cursor; an otherwise valid
 signature without enrollment is refused. There is no v1 policy fallback for an
 existing registered scope. See the [enrollment and real Rust connection
 contract](outcome-registered-origin.md) for setup, tests and remaining gates.
+
+The [normal defense-process connection](outcome-live-origin.md) adds a separate
+new-scope `outcome-input-trust/v3` registration profile. It authenticates unchanged
+normal-path provider/release reports with explicit producer/native lifecycle
+records, not read-only computation or causal effect. Existing witness and
+protected-prefix trust limits remain; no older scope migrates or downgrades.

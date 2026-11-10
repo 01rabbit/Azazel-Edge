@@ -248,3 +248,10 @@ For a new enrolled read-only Rust capture scope, use
 `input_enroll`/`input_origin` foreground commands. The observer still uses
 `--journal-resume-input --input-auth-policy`; no automatic enrollment, downgrade,
 service or key provisioning occurs. See the [exact registration/runbook](architecture/outcome-registered-origin.md).
+
+A new `outcome-input-trust/v3` scope supports the explicitly supervised normal
+core via `input_live_enroll` and `input_live`. Its root-owned registration pins
+the exact existing core environment and image; no inherited enforcement flags,
+replay, arbitrary command or activation default is added. Unclosed capture
+history refuses a new core launch; capture failure after launch leaves defense
+running. See the [configuration, roles and recovery procedure](architecture/outcome-live-origin.md).
