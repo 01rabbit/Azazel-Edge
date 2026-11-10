@@ -21,6 +21,7 @@ from .outcome_identity import OutcomeIdentityLedger, outcome_identity_key
 
 SCHEMA = "outcome-observation-journal/v1"
 CURSOR_SCHEMA = "outcome-observation-journal/v2"
+AUTH_SCHEMA = "outcome-observation-journal/v3"
 NAME = "observations.journal"
 MAX_RECORD_BYTES = 65536
 CONTROL_RESERVE = 4096
@@ -179,13 +180,17 @@ class ObservationJournal:
             max_bytes=max_bytes,
         )
         self.input_source = input_source
+        self.authentication = (
+            input_source.authentication if input_source is not None else None
+        )
         if input_source is not None:
             from .input_cursor import BoundedInput, EMPTY_SHA
 
             if type(input_source) is not BoundedInput:
                 raise OutcomeJournalError("verified bounded input required")
             self.config.update(
-                schema_version=CURSOR_SCHEMA, input_config=dict(input_source.config)
+                schema_version=AUTH_SCHEMA if self.authentication else CURSOR_SCHEMA,
+                input_config=dict(input_source.config),
             )
             self._cursor = dict(offset=0, sha256=EMPTY_SHA)
         else:
@@ -218,6 +223,9 @@ class ObservationJournal:
                 raise OutcomeJournalError(
                     "initialization requires a new empty scope directory"
                 )
+            if create and self.authentication is not None:
+                input_source.snapshot(self._cursor, require_complete=True)
+                self.authentication.preflight(0, ZERO_HASH, 0)
             if not create:
                 before = os.stat(NAME, dir_fd=self._dir, follow_symlinks=False)
                 self._file_info(before)
@@ -246,6 +254,8 @@ class ObservationJournal:
                 self.recovery_input = input_source.snapshot(
                     self._cursor, require_complete=True
                 )
+            if not create and self.authentication is not None:
+                self.authentication.preflight(self._seq, self._hash, self._size)
             self._unclean = self._active
             for state in list(self._states.values()):
                 if state["state"] == "pending":
@@ -558,6 +568,10 @@ class ObservationJournal:
                 view = view[written:]
             os.fsync(self._fd)
             self._namespace()
+            if self.authentication is not None:
+                self.authentication.advance(
+                    self._seq + 1, digest, self._size + len(line)
+                )
             self._apply(kind, data)
             self._size += len(line)
             self._seq += 1

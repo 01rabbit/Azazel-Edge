@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from datetime import datetime
 import math
 import time
@@ -165,6 +166,7 @@ def run_live_resumable(
     journal_max_identities,
     input_max_bytes,
     input_max_records,
+    authentication_policy=None,
 ):
     if journal_directory is None:
         raise ValueError("input resume requires a journal directory")
@@ -174,8 +176,31 @@ def run_live_resumable(
     if not math.isfinite(poll_seconds) or poll_seconds <= 0:
         raise ValueError("poll interval must be finite and positive")
     policy = OutcomeTelemetryPolicy.from_file(policy_path)
+    authentication = None
+    if authentication_policy is not None:
+        from .input_auth import TrustPolicy
+        from .input_witness import InputAuthentication
+
+        trust = TrustPolicy.from_file(authentication_policy, role="observer")
+        p = trust.data
+        if (
+            str(journal_directory) != p["journal_directory"]
+            or journal_scope != p["scope_ref"]
+            or journal_max_bytes != p["journal_max_bytes"]
+        ):
+            raise OutcomeJournalError("journal authentication context mismatch")
+        if output_path.resolve() in {
+            Path(p["socket_path"]),
+            Path(p["anchor_directory"]) / "anchors.journal",
+            Path(authentication_policy).resolve(),
+        }:
+            raise OutcomeJournalError("output aliases authentication storage")
+        authentication = InputAuthentication(trust)
     with BoundedInput(
-        input_path, max_bytes=input_max_bytes, max_records=input_max_records
+        input_path,
+        max_bytes=input_max_bytes,
+        max_records=input_max_records,
+        authentication=authentication,
     ) as source:
         with ObservationJournal(
             journal_directory,

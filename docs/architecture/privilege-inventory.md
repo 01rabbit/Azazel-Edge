@@ -1314,3 +1314,29 @@ out-of-scope findings tracked separately. Still open:
 8. **Hardware.** None of §9 is device evidence. Stage 1 and 2 still need a
    device run by the owner before they are called done; stage 3 needs the
    `CAP_NET_ADMIN`-only core run that #471 describes.
+
+
+## Optional foreground authenticated-input witness (#400; not installed)
+
+The [v3 authenticated-input prototype](outcome-authenticated-input.md) is an
+explicit evaluation component outside the installed units above. It requires
+three distinct UIDs: a non-root capture producer holding only its capture key,
+a non-root observer holding public keys and its existing private journal, and
+a separately trusted witness holding its own key/private signed anchor log.
+The Linux software tests use producer 1000, observer 65534 and witness 0.
+
+The witness reads only two fixed policy paths and writes only its own bounded
+anchor log; it accepts bounded `read` / compare-and-`advance` metadata requests
+from the configured observer UID over an owned local Unix socket with kernel
+peer credentials. It has no payload-signing, arbitrary-path, reset, command,
+provider, control-daemon, approval, AI or release endpoint. Source authentication
+identifies capture provenance; prefix attestation never grants action or
+causal-assessment authority. The observer must not run as root or receive
+capabilities/ACLs that expose signing keys or anchor writes.
+
+A privileged witness can read the existing `0700`/`0600` observer journal. No
+UID, ACL, capability, installer, security setting or service is provisioned by
+this change; commissioning must separately review that read boundary and
+measure target-device costs. Whole-host/witness compromise or coordinated
+rollback of source, journal and protected anchor remains outside the software
+claim; independent monotonic anchoring is still required for that threat.

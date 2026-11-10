@@ -87,6 +87,9 @@ def test_runtime_dependencies_cover_imports():
     optional_modules = {
         # Optional Fabric integration extra (requirements/fabric.txt); guarded import.
         "azazel_fabric",
+        # Explicit authenticated-input extra (requirements/input-auth.txt).
+        # Imported on demand; requested auth fails closed if it is unavailable.
+        "cryptography",
         # Optional AZ-06 integration: the shadow/replay E2E tests skip unless
         # azazel-deception is installed (pytest.importorskip).
         "azazel_deception",

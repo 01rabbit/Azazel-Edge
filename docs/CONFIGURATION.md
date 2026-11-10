@@ -221,3 +221,24 @@ refused. Trusted append-only producer/parent and clock/boot identity remain
 operator preconditions, not cryptographic authentication. Read the
 [resumption contract and limitations](architecture/outcome-input-resume.md)
 before use. No installer/service or default activation changes.
+
+### Authenticated capture with a protected witness (new v3 scope only)
+
+`--input-auth-policy /physical/trust.json` requires `--journal-resume-input`
+and its complete explicit journal configuration. The public policy pins two
+Ed25519 public keys, scope/stream, three distinct producer/observer/witness UIDs,
+fixed source/journal/Unix-socket/anchor paths and exact budgets. It is owned by
+the witness UID, not writable by the observer. The signing keys remain in the
+producer and witness roles. No existing scope is migrated or downgraded.
+
+Preprovision `requirements/input-auth.txt` for offline use. A separately started
+foreground witness is required; no installer, users, permissions, unit or
+activation default is changed. It owns a private signed high-water log and
+requires Linux peer credentials. Missing/invalid/unavailable evidence, an
+unwitnessed journal tail or rollback behind the protected high-water state
+refuses restart without EOF/unsigned/v2 fallback. Missing windows stay lost.
+
+See the [full v3 contract, setup and trust limits](architecture/outcome-authenticated-input.md).
+The guarantee covers separately witnessed prefixes, not coordinated rollback
+of all three stores or compromise of signing roles. External monotonic anchoring,
+physical storage/resource acceptance and production enrollment remain open.

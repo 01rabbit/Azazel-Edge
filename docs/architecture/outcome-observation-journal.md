@@ -164,3 +164,10 @@ parity. Authenticated event source/clock/boot identity, a durable trusted intake
 cursor, safe automatic resume/rotation and independent service captures remain
 separate work. No causal benefit, complete coverage, live admission or default
 deployment follows from this slice.
+
+
+The separate [opt-in v3 authenticated-capture profile](outcome-authenticated-input.md)
+adds public-key source verification and a separately owned protected-prefix
+witness for new scopes. It does not migrate existing records or change this
+version's claims; coordinated whole-machine rollback remains outside its
+software-only guarantee.

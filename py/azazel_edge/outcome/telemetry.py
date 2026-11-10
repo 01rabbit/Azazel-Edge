@@ -767,8 +767,11 @@ def run_live(
     resume_input: bool = False,
     input_max_bytes: int = 16 * 1024 * 1024,
     input_max_records: int = 8192,
+    authentication_policy: Path | None = None,
 ) -> None:
     """Foreground live-only collector. Historical procfs reconstruction is forbidden."""
+    if authentication_policy is not None and not resume_input:
+        raise ValueError("authentication requires explicit input resume")
     if resume_input:
         from .input_resume import run_live_resumable
         return run_live_resumable(input_path=input_path, output_path=output_path,
@@ -777,7 +780,8 @@ def run_live(
             journal_directory=journal_directory,journal_scope=journal_scope,
             journal_boot_id=journal_boot_id,initialize_journal=initialize_journal,
             journal_max_bytes=journal_max_bytes,journal_max_identities=journal_max_identities,
-            input_max_bytes=input_max_bytes,input_max_records=input_max_records)
+            input_max_bytes=input_max_bytes,input_max_records=input_max_records,
+            authentication_policy=authentication_policy)
     policy = OutcomeTelemetryPolicy.from_file(policy_path)
     persistence = None
     if journal_directory is not None:
@@ -861,7 +865,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--journal-resume-input", action="store_true", help="New v2 scope only: verify durable input position; discard downtime records as loss")
     parser.add_argument("--input-max-bytes", type=int, default=16*1024*1024)
     parser.add_argument("--input-max-records", type=int, default=8192)
+    parser.add_argument("--input-auth-policy", type=Path, help="Explicit v3 public trust policy; requires separate offline witness")
     args = parser.parse_args(argv)
+    if args.input_auth_policy is not None and not args.journal_resume_input:
+        parser.error("--input-auth-policy requires --journal-resume-input")
     if args.journal_resume_input and args.journal_directory is None:
         parser.error("--journal-resume-input requires --journal-directory")
     if args.journal_directory is not None and (not args.journal_scope or not args.journal_boot_id):
@@ -880,6 +887,7 @@ def main(argv: list[str] | None = None) -> int:
         journal_boot_id=args.journal_boot_id, initialize_journal=args.journal_initialize,
         journal_max_bytes=args.journal_max_bytes, journal_max_identities=args.journal_max_identities,
         resume_input=args.journal_resume_input,input_max_bytes=args.input_max_bytes,input_max_records=args.input_max_records,
+        authentication_policy=args.input_auth_policy,
     )
     return 0
 
