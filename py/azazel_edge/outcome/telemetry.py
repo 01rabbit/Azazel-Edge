@@ -808,6 +808,9 @@ def run_live(
                     event = _decode_event(line)
                     if event is not None:
                         collector.observe_event(event, observed_epoch=time.time())
+                        if (persistence is not None and collector.persistence_errors
+                                and not persistence.status()["continuity_available"]):
+                            raise OSError("observation journal continuity unavailable; evidence collection stopped")
                 outcomes = collector.finalize_due(epoch=time.time())
                 if outcomes:
                     append_jsonl(

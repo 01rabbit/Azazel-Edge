@@ -552,7 +552,7 @@ def test_live_io_failure_stops_without_volatile_projection(tmp_path):
         polls.append(True)
         source.write_text(
             json.dumps(rust_event(ts="2026-01-01T00:00:00Z", trace="live-failure"))
-            + "\n"
+            + "\n{}\n"
         )
 
     with patch.object(
@@ -561,7 +561,9 @@ def test_live_io_failure_stops_without_volatile_projection(tmp_path):
         telemetry.time, "sleep", poll
     ), patch(
         "os.fsync", sync
-    ):
+    ), patch.object(
+        telemetry, "_decode_event", wraps=telemetry._decode_event
+    ) as decode:
         with pytest.raises(OSError, match="continuity unavailable"):
             telemetry.run_live(
                 input_path=source,
@@ -573,6 +575,7 @@ def test_live_io_failure_stops_without_volatile_projection(tmp_path):
                 journal_boot_id="boot-a",
                 initialize_journal=True,
             )
+        assert decode.call_count == 1  # Do not drain further input after a failed sync.
     assert not output.exists()
     with journal(p, policy_ref=persistence_context(pol, "br0")) as j:
         assert (
