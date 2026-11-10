@@ -23,6 +23,7 @@ Entry point for all documents in this directory.
 | [architecture/mio-reasoning-trace.md](architecture/mio-reasoning-trace.md) | Developer | Reasoning trace identity, working memory, minimized audit and retention (#389) | 2026-10-27 |
 | [reviews/mio-cognitive-plane-adversarial-review.md](reviews/mio-cognitive-plane-adversarial-review.md) | Owner / Reviewer | #373 adversarial review of the M.I.O. cognitive core: findings, probes, remaining owner decisions (no gate outcome) | 2026-10-28 |
 | [architecture/booth-focus-decision-view.md](architecture/booth-focus-decision-view.md) | Developer / Presenter | Read-only Booth Focus projection over the decision pipeline | 2026-07-25 |
+| [architecture/outcome-observation-journal.md](architecture/outcome-observation-journal.md) | Developer / Operator | Opt-in bounded G3 journal, durable begin/commit, conservative restart sealing and recovery limits (#400) | 2026-11-10 |
 | [architecture/service-objective-declarations.md](architecture/service-objective-declarations.md) | Developer | Provisional per-action rollback completion bounds (OF-05), the enforced, provisional Core ingress quota and shedding (OF-06), the SO-02 lab harness, and why SO-05 has none | 2026-10-25 |
 | [../concept_profiles/README.md](../concept_profiles/README.md) | Developer / Operator | Concept-to-configuration mapping layer | 2026-05-17 |
 | [../demos/concepts/README.md](../demos/concepts/README.md) | Operator / Presenter | Concept-oriented demo scenario grouping | 2026-05-16 |
