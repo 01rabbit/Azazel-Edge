@@ -111,11 +111,19 @@ class Run:
         assert json.loads(line) == {"core_started": True}, self.process.stderr.read()
         # The normal core logs startup after calculating its new-input offset.
         deadline = time.monotonic() + 15
+        pending = bytearray()
         while time.monotonic() < deadline:
             if not select.select([self.process.stderr], [], [], 1)[0]:
                 continue
-            if "azazel-edge-core started:" in self.process.stderr.readline():
+            # Read the fd directly: TextIOWrapper can read ahead several log
+            # lines, leaving select idle while the matching line is buffered.
+            part = os.read(self.process.stderr.fileno(), 8192)
+            if not part:
+                break
+            pending.extend(part)
+            if b"azazel-edge-core started:" in pending:
                 return
+            assert len(pending) <= 32768, "unexpected startup log bound"
         raise AssertionError("real normal core did not start")
 
     def stop(self):
