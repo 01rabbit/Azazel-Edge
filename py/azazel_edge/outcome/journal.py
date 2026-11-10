@@ -20,6 +20,7 @@ from .contracts import OutcomeAssessment, CausalSupport, OutcomeRecord
 from .outcome_identity import OutcomeIdentityLedger, outcome_identity_key
 
 SCHEMA = "outcome-observation-journal/v1"
+CURSOR_SCHEMA = "outcome-observation-journal/v2"
 NAME = "observations.journal"
 MAX_RECORD_BYTES = 65536
 CONTROL_RESERVE = 4096
@@ -153,6 +154,7 @@ class ObservationJournal:
         create=False,
         max_identities=4096,
         max_bytes=DEFAULT_MAX_BYTES,
+        input_source=None,
     ):
         _ref(scope_ref)
         _ref(boot_id)
@@ -176,6 +178,20 @@ class ObservationJournal:
             max_identities=max_identities,
             max_bytes=max_bytes,
         )
+        self.input_source = input_source
+        if input_source is not None:
+            from .input_cursor import BoundedInput, EMPTY_SHA
+
+            if type(input_source) is not BoundedInput:
+                raise OutcomeJournalError("verified bounded input required")
+            self.config.update(
+                schema_version=CURSOR_SCHEMA, input_config=dict(input_source.config)
+            )
+            self._cursor = dict(offset=0, sha256=EMPTY_SHA)
+        else:
+            self._cursor = None
+        self._input_records = self._missed_records = self._recovery_gaps = 0
+        self._recovering = input_source is not None
         self.boot_id = boot_id
         self.max_bytes = max_bytes
         self.max_identities = max_identities
@@ -193,6 +209,10 @@ class ObservationJournal:
             duplicates=0, capacity_drops=0, write_failures=0, recovered_windows=0
         )
         try:
+            if create and input_source is not None and input_source._namespace() != 0:
+                raise OutcomeJournalError(
+                    "cursor scope must initialize with empty input"
+                )
             self._dir = _directory(directory)
             if create and os.listdir(self._dir):
                 raise OutcomeJournalError(
@@ -220,6 +240,12 @@ class ObservationJournal:
                 os.fsync(self._fd)
                 os.fsync(self._dir)
                 self._namespace()
+            if input_source is not None:
+                # Verify all saved bytes and the complete restart tail BEFORE
+                # mutating recovery state or permitting a new observation.
+                self.recovery_input = input_source.snapshot(
+                    self._cursor, require_complete=True
+                )
             self._unclean = self._active
             for state in list(self._states.values()):
                 if state["state"] == "pending":
@@ -228,10 +254,17 @@ class ObservationJournal:
                         {**state["meta"], "reason": "recovered_unfinished_window"},
                     )
                     self.counters["recovered_windows"] += 1
-            if self._unclean:
+            if self._unclean and input_source is not None and not self._sealed:
+                self._append("session_recovered", {"boot_id": self._session_boot})
+            if self._unclean and input_source is None:
                 self._seal("unclean_restart")
             elif not self._sealed:
-                if self._sessions >= MAX_SESSIONS:
+                if (
+                    input_source is not None
+                    and self._input_records >= input_source.max_records
+                ):
+                    self._seal("input_capacity")
+                elif self._sessions >= MAX_SESSIONS:
                     self._seal("session_capacity")
                 else:
                     try:
@@ -273,7 +306,7 @@ class ObservationJournal:
             if (
                 self._seq
                 or type(data) is not dict
-                or data != self.config
+                or _json(data) != _json(self.config)
                 or type(data.get("max_identities")) is not int
                 or type(data.get("max_bytes")) is not int
             ):
@@ -291,6 +324,7 @@ class ObservationJournal:
                     "byte_capacity",
                     "session_capacity",
                     "unclean_restart",
+                    "input_capacity",
                 )
                 or self._sealed
             ):
@@ -307,7 +341,39 @@ class ObservationJournal:
                 raise OutcomeJournalError("invalid journal session start")
             _ref(data["boot_id"])
             return
-        if kind == "session_close":
+        if kind in ("cursor", "input_ready"):
+            if (
+                self.input_source is None
+                or not self._active
+                or self._sealed
+                or type(data) is not dict
+            ):
+                raise OutcomeJournalError("invalid input continuity transition")
+            from .input_cursor import BoundedInput
+
+            if kind == "input_ready":
+                BoundedInput.position(data)
+                if not self._recovering or data != self._cursor:
+                    raise OutcomeJournalError("invalid input recovery fence")
+            else:
+                if (
+                    set(data) != {"position", "missed"}
+                    or type(data["missed"]) is not bool
+                ):
+                    raise OutcomeJournalError("invalid cursor record")
+                pos = BoundedInput.position(data["position"])
+                if (
+                    not self._cursor["offset"]
+                    < pos["offset"]
+                    <= self.input_source.max_bytes
+                    or self._input_records >= self.input_source.max_records
+                    or (self._recovering and not data["missed"])
+                ):
+                    raise OutcomeJournalError("invalid cursor advance")
+            return
+        if kind in ("session_close", "session_recovered"):
+            if kind == "session_recovered" and self.input_source is None:
+                raise OutcomeJournalError("cursor recovery requires bound input")
             if (
                 data != {"boot_id": self._session_boot}
                 or not self._active
@@ -337,6 +403,7 @@ class ObservationJournal:
             or self._sealed
             or not self._active
             or data["boot_id"] != self._session_boot
+            or self._recovering
         ):
             raise OutcomeJournalError("observation identity cannot reopen")
         if kind == "commit":
@@ -355,6 +422,11 @@ class ObservationJournal:
                 "recovered_unfinished_window",
                 "capacity_drop",
                 "explicit_window_loss",
+                "restart_input_missed",
+                "input_time_unusable",
+            ) or (
+                data["reason"] in ("restart_input_missed", "input_time_unusable")
+                and self.input_source is None
             ):
                 raise OutcomeJournalError("invalid loss reason")
 
@@ -365,12 +437,23 @@ class ObservationJournal:
             self._sealed = True
             self._seal_reason = data["reason"]
             return
+        if kind == "cursor":
+            self._cursor = dict(data["position"])
+            self._input_records += 1
+            self._missed_records += int(data["missed"])
+            return
+        if kind == "input_ready":
+            self._recovering = False
+            self._recovery_gaps += 1
+            return
         if kind == "session_open":
+            if self.input_source is not None:
+                self._recovering = True
             self._active = True
             self._sessions += 1
             self._session_boot = data["boot_id"]
             return
-        if kind == "session_close":
+        if kind in ("session_close", "session_recovered"):
             self._active = False
             self._session_boot = None
             return
@@ -408,11 +491,11 @@ class ObservationJournal:
             raise OutcomeJournalError(
                 "incomplete or changing journal; no automatic repair"
             )
+        frame_budget = 2 * self.max_identities + 2 * MAX_SESSIONS + 4
+        if self.input_source is not None:
+            frame_budget += self.input_source.max_records + 2 * MAX_SESSIONS + 4
         for line in raw.splitlines(keepends=True):
-            if (
-                len(line) > MAX_RECORD_BYTES
-                or self._seq >= 2 * self.max_identities + 2 * MAX_SESSIONS + 4
-            ):
+            if len(line) > MAX_RECORD_BYTES or self._seq >= frame_budget:
                 raise OutcomeJournalError("journal record budget exceeded")
             event = _parse(line)
             if (
@@ -453,7 +536,9 @@ class ObservationJournal:
             if self._states.get(key, {}).get("state") == "pending":
                 pending -= 1
         reserve = pending * MAX_RECORD_BYTES + (
-            0 if kind in ("seal", "session_close") or self._sealed else CONTROL_RESERVE
+            0
+            if kind in ("seal", "session_close", "session_recovered") or self._sealed
+            else CONTROL_RESERVE
         )
         if (
             len(line) > MAX_RECORD_BYTES
@@ -515,7 +600,7 @@ class ObservationJournal:
                 raise OutcomeJournalError("journal decision identity collision")
             self.counters["duplicates"] += 1
             return False
-        if self._sealed:
+        if self._sealed or self._recovering:
             return False
         if len(self._states) >= self.max_identities:
             self._seal("identity_capacity")
@@ -529,7 +614,9 @@ class ObservationJournal:
             return False
         return True
 
-    def lose_window(self, *, decision_id, execution_id, objective_id):
+    def lose_window(
+        self, *, decision_id, execution_id, objective_id, reason="explicit_window_loss"
+    ):
         self._usable()
         meta = self._meta(
             decision_id=decision_id,
@@ -549,7 +636,7 @@ class ObservationJournal:
                 self._seal("identity_capacity")
             return
         try:
-            self._append("lost", {**meta, "reason": "explicit_window_loss"})
+            self._append("lost", {**meta, "reason": reason})
         except _RetentionFull:
             self._seal("byte_capacity")
 
@@ -570,6 +657,56 @@ class ObservationJournal:
         self._append("commit", {**old["meta"], "outcome": wire})
         return True
 
+    def retained_identity_state(self, *, decision_id, execution_id, objective_id):
+        self._usable()
+        meta = self._meta(
+            decision_id=decision_id,
+            execution_id=execution_id,
+            objective_id=objective_id,
+        )
+        key = outcome_identity_key(execution_id=execution_id, objective_id=objective_id)
+        state = self._states.get(key)
+        if state and state["meta"]["decision_id"] != meta["decision_id"]:
+            raise OutcomeJournalError("journal decision identity collision")
+        return state["state"] if state else None
+
+    def input_position(self):
+        self._usable()
+        if self._cursor is None:
+            raise OutcomeJournalError("journal has no bound input")
+        return dict(self._cursor)
+
+    def advance_input(self, position, *, missed):
+        self._usable()
+        if self.input_source is None:
+            raise OutcomeJournalError("journal has no bound input")
+        position = self.input_source.position(position)
+        self.input_source.validate_candidate(self._cursor, position)
+        if self._input_records >= self.input_source.max_records:
+            self._seal("input_capacity")
+            raise OutcomeJournalError("input record budget exhausted")
+        try:
+            self._append("cursor", dict(position=position, missed=missed))
+        except _RetentionFull:
+            self._seal("byte_capacity")
+            raise
+
+    def finish_input_recovery(self):
+        self._usable()
+        if self.input_source is None or not self._recovering:
+            raise OutcomeJournalError("journal has no bound input")
+        data = self.input_source.snapshot(self._cursor, require_complete=True)
+        if self._cursor["offset"] != len(data):
+            self.recovery_input = data
+            return False  # New startup bytes must also be excluded, never observed.
+        try:
+            self._append("input_ready", dict(self._cursor))
+        except _RetentionFull:
+            self._seal("byte_capacity")
+            raise
+        self.recovery_input = b""  # Release the bounded restart snapshot after fencing.
+        return True
+
     def retained_outcomes(self):
         """Bounded projection; consumers deduplicate by retained outcome identity."""
         self._usable()
@@ -581,7 +718,12 @@ class ObservationJournal:
 
     def status(self):
         return dict(
-            schema_version=SCHEMA,
+            schema_version=self.config["schema_version"],
+            input_position=deepcopy(self._cursor),
+            input_records=self._input_records,
+            missed_input_records=self._missed_records,
+            recovery_gaps=self._recovery_gaps,
+            input_recovery_pending=self._recovering,
             bytes=self._size,
             max_bytes=self.max_bytes,
             identities=len(self._states),
@@ -590,7 +732,11 @@ class ObservationJournal:
             committed=sum(s["state"] == "committed" for s in self._states.values()),
             lost=sum(s["state"] == "lost" for s in self._states.values()),
             new_admission_closed=self._sealed
-            or len(self._states) >= self.max_identities,
+            or len(self._states) >= self.max_identities
+            or (
+                self.input_source is not None
+                and self._input_records >= self.input_source.max_records
+            ),
             sessions=self._sessions,
             unclean_recovery=self._unclean,
             seal_reason=self._seal_reason,

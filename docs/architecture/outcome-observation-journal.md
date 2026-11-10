@@ -1,7 +1,9 @@
 # Outcome observation journal — bounded local persistence
 
 Status: software implementation / optional foreground G3 only; **G6 pending**.
-Tracking: #400. This extends the existing G3 collector and identity ledger,
+Tracking: #400. This document describes v1. The separate [opt-in v2 input cursor](outcome-input-resume.md)
+can resume only after verified prefix continuity and explicit startup losses.
+V1 scopes and seals are not migrated. This extends the existing G3 collector and identity ledger,
 without changing canonical Outcome, assessment, enforcement or replay contracts.
 
 ## Transaction and authority
@@ -134,7 +136,9 @@ performs this recovery before reporting the sealed state and exiting nonzero.
 Do not delete, truncate, rotate, raise budgets or reinitialize to clear a seal.
 A genuinely new experiment needs an explicit new scope and trusted upstream
 boundary that excludes prior identities; a new filename alone cannot establish
-that boundary. No automatic unsealing or resumed intake is implemented.
+that boundary. No automatic unsealing or resumed intake is implemented for v1. Only a new,
+explicitly initialized [v2 input-cursor scope](outcome-input-resume.md) has
+verified resumption, with no migration or removal of existing seals.
 
 Edge owns journal/collector correctness and failure visibility. #393 owns
 independent service measurement; #400/G6 owns device acceptance. No new

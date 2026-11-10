@@ -764,8 +764,20 @@ def run_live(
     initialize_journal: bool = False,
     journal_max_bytes: int = 16 * 1024 * 1024,
     journal_max_identities: int = 4096,
+    resume_input: bool = False,
+    input_max_bytes: int = 16 * 1024 * 1024,
+    input_max_records: int = 8192,
 ) -> None:
     """Foreground live-only collector. Historical procfs reconstruction is forbidden."""
+    if resume_input:
+        from .input_resume import run_live_resumable
+        return run_live_resumable(input_path=input_path, output_path=output_path,
+            policy_path=policy_path, interface=interface, poll_seconds=poll_seconds,
+            sample_interval_seconds=sample_interval_seconds,max_output_bytes=max_output_bytes,
+            journal_directory=journal_directory,journal_scope=journal_scope,
+            journal_boot_id=journal_boot_id,initialize_journal=initialize_journal,
+            journal_max_bytes=journal_max_bytes,journal_max_identities=journal_max_identities,
+            input_max_bytes=input_max_bytes,input_max_records=input_max_records)
     policy = OutcomeTelemetryPolicy.from_file(policy_path)
     persistence = None
     if journal_directory is not None:
@@ -846,7 +858,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--journal-initialize", action="store_true", help="First initialization only in an empty directory")
     parser.add_argument("--journal-max-bytes", type=int, default=16*1024*1024)
     parser.add_argument("--journal-max-identities", type=int, default=4096)
+    parser.add_argument("--journal-resume-input", action="store_true", help="New v2 scope only: verify durable input position; discard downtime records as loss")
+    parser.add_argument("--input-max-bytes", type=int, default=16*1024*1024)
+    parser.add_argument("--input-max-records", type=int, default=8192)
     args = parser.parse_args(argv)
+    if args.journal_resume_input and args.journal_directory is None:
+        parser.error("--journal-resume-input requires --journal-directory")
     if args.journal_directory is not None and (not args.journal_scope or not args.journal_boot_id):
         parser.error("journal directory requires explicit scope and trusted boot identity")
     if args.journal_directory is None and (args.journal_scope or args.journal_boot_id or args.journal_initialize):
@@ -862,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
         journal_directory=args.journal_directory, journal_scope=args.journal_scope,
         journal_boot_id=args.journal_boot_id, initialize_journal=args.journal_initialize,
         journal_max_bytes=args.journal_max_bytes, journal_max_identities=args.journal_max_identities,
+        resume_input=args.journal_resume_input,input_max_bytes=args.input_max_bytes,input_max_records=args.input_max_records,
     )
     return 0
 
