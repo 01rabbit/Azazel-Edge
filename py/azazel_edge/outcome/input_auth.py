@@ -193,10 +193,14 @@ class TrustPolicy:
             "anchor_max_records",
         }
         d = self.data
+        if type(d) is dict and d.get("schema_version") == "outcome-input-trust/v2":
+            fields.add("origin_registration_sha256")
+            hex_bytes(d.get("origin_registration_sha256"), 32)
         if (
             type(d) is not dict
             or set(d) != fields
-            or d["schema_version"] != "outcome-input-trust/v1"
+            or d["schema_version"]
+            not in ("outcome-input-trust/v1", "outcome-input-trust/v2")
         ):
             raise OutcomeJournalError("invalid input trust policy")
         for key in ("scope_ref", "producer_ref", "stream_ref", "witness_ref"):
@@ -274,12 +278,48 @@ class TrustPolicy:
         return dict(schema_version="outcome-input-auth/v1", trust_sha256=self.digest)
 
 
+def validate_readonly_origin_event(event):
+    """An enrolled read-only calculation can never claim live application."""
+    if type(event) is not dict:
+        raise OutcomeJournalError("invalid read-only origin event")
+    enforcement = event.get("enforcement")
+    status = event.get("enforcement_status")
+    if (
+        type(event.get("normalized")) is not dict
+        or type(event.get("defense")) is not dict
+        or event.get("pipeline") != "rust_event_engine_v1"
+        or event.get("source") != "suricata_eve"
+        or type(enforcement) is not dict
+        or type(status) is not dict
+    ):
+        raise OutcomeJournalError("invalid read-only origin event")
+    if (
+        enforcement.get("mode") != "dry_run"
+        or enforcement.get("result") != "dry_run"
+        or type(enforcement.get("executed_count")) is not int
+        or enforcement["executed_count"] != 0
+        or type(enforcement.get("failed_count")) is not int
+        or enforcement["failed_count"] != 0
+        or enforcement.get("command_plan") != []
+        or enforcement.get("rollback_plan") != []
+        or enforcement.get("errors") != []
+        or enforcement.get("metadata") != {"capture_only": True}
+        or status.get("enforce_enabled") is not False
+        or status.get("dry_run") is not True
+        or status.get("high_impact_auto") is not False
+        or status.get("enforce_level") != "advisory"
+        or status.get("allowed_actions") != []
+    ):
+        raise OutcomeJournalError("read-only origin cannot assert execution authority")
+
+
 class SourceVerifier:
     def __init__(self, policy):
         self.policy = policy
         self.raw = b""
         self.seq = 0
         self.head = ZERO_HASH
+        self.origin_offset = 0
 
     def verify(self, data):
         p = self.policy.data
@@ -293,6 +333,7 @@ class SourceVerifier:
             raise OutcomeJournalError("signed input rewound or changed")
         seq = self.seq
         head = self.head
+        origin_offset = self.origin_offset
         for line in data[len(self.raw) :].splitlines(keepends=True):
             if len(line) > 65536:
                 raise OutcomeJournalError("signed input frame too large")
@@ -327,6 +368,31 @@ class SourceVerifier:
             ):
                 raise OutcomeJournalError("signed input identity/sequence mismatch")
             _ref(wire["boot_ref"])
+            registration = p.get("origin_registration_sha256")
+            if registration is not None:
+                validate_readonly_origin_event(wire["event"])
+                origin = wire["event"].get("capture_origin")
+                if (
+                    type(origin) is not dict
+                    or set(origin)
+                    != {"schema_version", "registration_sha256", "mode", "raw_cursor"}
+                    or origin["schema_version"] != "outcome-registered-origin/v1"
+                    or origin["registration_sha256"] != registration
+                    or origin["mode"] != "readonly-core"
+                ):
+                    raise OutcomeJournalError(
+                        "registered input origin missing or mismatched"
+                    )
+                cursor = origin["raw_cursor"]
+                if (
+                    type(cursor) is not dict
+                    or set(cursor) != {"offset", "prefix_sha256"}
+                    or type(cursor["offset"]) is not int
+                    or not origin_offset < cursor["offset"] <= p["input_max_bytes"]
+                ):
+                    raise OutcomeJournalError("registered raw input position invalid")
+                hex_bytes(cursor["prefix_sha256"], 32)
+                origin_offset = cursor["offset"]
             verify_signature(
                 p["producer_public_key"], wire["signature"], SOURCE_DOMAIN, core
             )
@@ -335,6 +401,7 @@ class SourceVerifier:
         self.raw = data
         self.seq = seq
         self.head = head
+        self.origin_offset = origin_offset
         return self.tip()
 
     def tip(self):
@@ -413,6 +480,11 @@ class SignedCaptureWriter:
             or v.seq >= p["input_max_records"]
         ):
             raise OutcomeJournalError("capture writer capacity/type refused")
+        # Reject registration/semantic/sequence faults before mutating source.
+        checked = SourceVerifier(self.policy)
+        checked.raw, checked.seq, checked.head = v.raw, v.seq, v.head
+        checked.origin_offset = v.origin_offset
+        checked.verify(v.raw + line)
         try:
             raw, info = read_regular(
                 p["source_path"],
@@ -431,11 +503,11 @@ class SignedCaptureWriter:
                     raise OutcomeJournalError("capture short write")
                 view = view[n:]
             os.fsync(self.fd)
-            v.verify(raw + line)
+            self.verifier = checked
         except BaseException:
             self.poisoned = True
             raise
-        return v.tip()
+        return self.verifier.tip()
 
     def close(self):
         if self.fd is not None:

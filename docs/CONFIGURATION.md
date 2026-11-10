@@ -242,3 +242,9 @@ See the [full v3 contract, setup and trust limits](architecture/outcome-authenti
 The guarantee covers separately witnessed prefixes, not coordinated rollback
 of all three stores or compromise of signing roles. External monotonic anchoring,
 physical storage/resource acceptance and production enrollment remain open.
+
+For a new enrolled read-only Rust capture scope, use
+`outcome-input-trust/v2` with `origin_registration_sha256` and the separate
+`input_enroll`/`input_origin` foreground commands. The observer still uses
+`--journal-resume-input --input-auth-policy`; no automatic enrollment, downgrade,
+service or key provisioning occurs. See the [exact registration/runbook](architecture/outcome-registered-origin.md).

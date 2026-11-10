@@ -66,6 +66,9 @@ jobs:
           node tests/touch_console_logic.test.js
           node tests/sentinel_console_logic.test.js
 
+      - name: Build registered read-only origin for UID integration tests
+        run: cargo build --locked --manifest-path rust/azazel-edge-core/Cargo.toml
+
       - name: Authenticated input with actual separate UIDs (offline witness)
         run: |
           # Search permission on this disposable runner only; checkout is readable.
