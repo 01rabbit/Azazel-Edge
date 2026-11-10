@@ -263,8 +263,16 @@ def switched(bundle, monkeypatch):
     monkeypatch.setattr(
         "azazel_edge.outcome.service_switch._trusted_package", lambda: package
     )
+    # The Actions toolcache belongs to the runner, not the service operator.
+    # Model an operator-installed interpreter without weakening ready()'s
+    # production path checks. Actual isolated imports are tested separately.
+    installed_bin = f.root / "installed-bin"
+    installed_bin.mkdir(mode=0o755)
+    python = installed_bin / "python"
+    shutil.copyfile(Path(sys.executable).resolve(), python)
+    python.chmod(0o755)
     manager = Manager(f)
-    switch = Switch(f.bundle, Path(sys.executable), manager)
+    switch = Switch(f.bundle, python, manager)
     return f, manager, switch
 
 
@@ -290,6 +298,7 @@ def test_reviewed_plan_apply_and_explicit_restore_never_start_a_second_unit(swit
         "pid",
         "config",
         "code",
+        "interpreter",
         "keys",
         "witness",
         "runtime",
@@ -307,6 +316,8 @@ def test_stale_or_unverified_plan_never_stops_existing_defense(switched, fault):
         m.env["AZAZEL_DEFENSE_DRY_RUN"] = "false"
     elif fault == "code":
         next((f.root / "installed-package").glob("*.py")).write_text("# changed")
+    elif fault == "interpreter":
+        s.python.parent.chmod(0o777)
     elif fault == "keys":
         f.pk.chmod(0o644)
     elif fault in ("witness", "runtime", "native"):
@@ -560,9 +571,9 @@ def test_generated_service_profile_passes_real_systemd_syntax_verification(bundl
     from azazel_edge.outcome.service_switch import profile
 
     tool = shutil.which("systemd-analyze")
-    assert (
-        tool
-    ), "mandatory systemd syntax checker must be preinstalled in test environment"
+    assert tool, (
+        "mandatory systemd syntax checker must be preinstalled in test environment"
+    )
     f = bundle
     unit = f.root / "azazel-edge-core.service"
     unit.write_bytes(
