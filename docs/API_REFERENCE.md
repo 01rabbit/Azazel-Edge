@@ -394,3 +394,14 @@ and imports matching existing private files without generation/reset/activation.
 explicit inactive-profile restore. Native `core-instance.lock` excludes normal
 and captured daemons in one release-state directory. See the [service/key
 contract](architecture/outcome-service-handoff.md).
+# Optional registered capture confinement
+
+New empty live scopes may prepare `outcome-live-origin-registration/v3` with
+`input_service prepare --capture-apparmor-profile NAME` or the equivalent
+`input_live_enroll` option. The pinned exact registration adds the named capture
+profile; runtime cannot omit/downgrade it. The fixed sibling `edge-capture`
+interpreter alias must match the protected installed Python bytes and the
+actual separate-UID kernel label must be enforcing. Witness units may explicitly
+require `input_witness --apparmor-profile NAME` before key/store readiness.
+No policy/account installation, arbitrary executable or unconfined fallback is
+provided. See [scope and limitations](architecture/outcome-service-confinement.md).

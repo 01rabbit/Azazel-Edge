@@ -1393,3 +1393,13 @@ fixed local `busctl get-property`; unavailable/unknown types fail closed. The
 disposable virtual-systemd test profile uses Wants+After readiness ordering,
 without witness-to-core stop propagation. Production units/accounts/keys remain
 operator-commissioned; the test driver is not a production installer.
+
+Registration v3 can pin an enforcing capture AppArmor name in a new scope.
+Its fixed root-owned `edge-capture` alias must equal the existing interpreter;
+the separate-UID probe and actual receiver verify their kernel label before
+key/writer use. No arbitrary executable, policy installation, account creation,
+MAC_ADMIN grant or unconfined fallback is added to runtime. The drop-in retains
+the verified service User/Group rather than forcing root. Native AppArmor
+declarations are refused pending compatible sealed execution. The named-role VM
+driver and policy are lab-only; supported layers and unaccepted combinations are
+explicit in [the confinement contract](outcome-service-confinement.md).

@@ -13,7 +13,9 @@ from .input_origin import MAX_IMAGE
 from .journal import OutcomeJournalError, _json, _parse
 
 
-def prepare(policy, binary, environment, *, ai_socket_uid=None):
+def prepare(
+    policy, binary, environment, *, ai_socket_uid=None, capture_apparmor_profile=None
+):
     if (
         policy.data["witness_uid"] != 0
         or os.geteuid() != 0
@@ -61,11 +63,17 @@ def prepare(policy, binary, environment, *, ai_socket_uid=None):
             )
         },
         launcher_uid=0,
-        environment=environment
+        environment=environment,
     )
     if ai_socket_uid is not None:
         r["schema_version"] = "outcome-live-origin-registration/v2"
         r["ai_socket_uid"] = ai_socket_uid
+    if capture_apparmor_profile is not None:
+        r.update(
+            schema_version="outcome-live-origin-registration/v3",
+            ai_socket_uid=ai_socket_uid if ai_socket_uid is not None else 0,
+            capture_apparmor_profile=capture_apparmor_profile,
+        )
     p = TrustPolicy(
         {
             **dict(policy.data),
@@ -85,13 +93,20 @@ def main(argv=None):
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--environment", type=Path, required=True)
     parser.add_argument("--ai-socket-uid", type=int)
+    parser.add_argument("--capture-apparmor-profile")
     args = parser.parse_args(argv)
     try:
         p = TrustPolicy.from_file(args.policy, role="witness")
         raw, _ = read_regular(args.environment, owner=0, max_bytes=8192)
         print(
             _json(
-                prepare(p, args.binary, _parse(raw), ai_socket_uid=args.ai_socket_uid)
+                prepare(
+                    p,
+                    args.binary,
+                    _parse(raw),
+                    ai_socket_uid=args.ai_socket_uid,
+                    capture_apparmor_profile=args.capture_apparmor_profile,
+                )
             ).decode()
         )
         return 0

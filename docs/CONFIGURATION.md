@@ -263,3 +263,14 @@ proof. No unit is enabled by preparation/provisioning. The default core unit now
 explicitly names its unchanged default ledger and prevents restart on exclusion
 exit 3; ordinary startup remains direct native execution. The signed drop-in
 exists only after explicit reviewed apply.
+# Capture AppArmor commissioning (explicit opt-in)
+
+The capture profile name is part of a new scope's exact public live registration
+v3, not an environment default or a runtime bypass switch. Prestage a root-owned
+0755 `edge-capture` copy beside the installed interpreter and an enforcing
+pathname attachment policy. Its bytes must match that interpreter. Plan/apply
+and every managed start probe the actual separate-UID profile before connecting.
+Existing v1/v2 registrations remain unchanged. Declared native AppArmor units
+are still refused; the sealed native execution path is not relaxed. The lab
+role policy is not production activation; use the
+[virtual commissioning contract](architecture/outcome-service-confinement.md).

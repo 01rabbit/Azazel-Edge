@@ -8,6 +8,12 @@ commissioning and G6 physical-device acceptance remain open.
 The [normal-core capture contract](outcome-live-origin.md) remains authoritative;
 this layer neither creates provider facts nor fills observation gaps.
 
+The [role confinement profile](outcome-service-confinement.md) adds explicit
+new-scope registered capture AppArmor checks and virtual named-account evidence.
+The managed drop-in inherits its already verified root identity; it does not
+force User/Group or grant privileges. Declared native AppArmor profiles remain
+unsupported and are refused; the sealed executable is not weakened to fit policy.
+
 ## Supported boundary and exclusion
 
 Only the existing `azazel-edge-core.service` is switched. There is no second

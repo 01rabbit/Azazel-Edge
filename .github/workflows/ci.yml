@@ -85,8 +85,12 @@ jobs:
           PYTHONPATH=.:py pytest -q
 
   outcome-systemd:
-    name: Outcome real systemd (disposable VM, no OS reboot)
+    name: Outcome real systemd (${{ matrix.flavor }}, no OS reboot)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [baseline, apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -95,6 +99,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-venv
+          if [ '${{ matrix.flavor }}' = apparmor ]; then
+            sudo apt-get install -y -qq apparmor apparmor-utils libapparmor1
+          fi
           test ! -e /etc/systemd/system/azazel-edge-core.service
           test ! -e /var/lib/edge400-systemd-lab
           sudo mkdir /opt/edge400-src
@@ -119,9 +126,11 @@ jobs:
         run: |
           # Namespace only the driver, never alter runner networking. Lab
           # services independently restrict sockets to AF_UNIX. No reboot here.
+          driver=guest.py
+          if [ '${{ matrix.flavor }}' = apparmor ]; then driver=armor.py; fi
           for phase in prepare exercise smoke-finish; do
             sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
-              /opt/edge400-runtime/bin/python -I /opt/edge400-src/tests/real_systemd/guest.py \
+              /opt/edge400-runtime/bin/python -I "/opt/edge400-src/tests/real_systemd/$driver" \
               "$phase" --allow-disposable-vm
           done
       - name: Collect minimized lab evidence
@@ -134,7 +143,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: outcome-systemd-results
+          name: outcome-systemd-results-${{ matrix.flavor }}
           path: outcome-systemd-results.jsonl
           if-no-files-found: error
 
