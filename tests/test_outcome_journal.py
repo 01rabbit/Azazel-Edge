@@ -637,3 +637,35 @@ def test_exported_nested_values_cannot_mutate_retained_result(tmp_path):
         assert j.retained_outcomes()[0].to_dict() == original.to_dict()
     with journal(p) as j:
         assert j.retained_outcomes()[0].to_dict() == original.to_dict()
+
+
+@pytest.mark.parametrize("fail_directory", [False, True])
+def test_sealed_reopen_must_resync_before_exposing_recovered_results(
+    tmp_path, fail_directory
+):
+    import stat
+
+    p = directory(tmp_path)
+    with journal(p, True, max_identities=1) as j:
+        assert j.begin_window(**META) and j.commit_outcome(_outcome())
+        assert not j.begin_window(
+            decision_id="new", execution_id="new", objective_id="new"
+        )
+    before = (p / NAME).read_bytes()
+    real = os.fsync
+    calls = []
+
+    def sync(fd):
+        is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+        calls.append(is_directory)
+        if is_directory == fail_directory:
+            raise OSError(errno.EIO, "recovery sync failed")
+        real(fd)
+
+    with patch("os.fsync", sync):
+        with pytest.raises(OSError, match="recovery sync failed"):
+            journal(p, max_identities=1)
+    assert calls == ([False, True] if fail_directory else [False])
+    assert (p / NAME).read_bytes() == before
+    with journal(p, max_identities=1) as j:
+        assert j.retained_outcomes()[0].outcome_id == "outcome-a"

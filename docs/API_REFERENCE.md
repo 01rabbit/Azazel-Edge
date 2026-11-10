@@ -324,7 +324,8 @@ no Web endpoint or execution authority. `begin_window` syncs before collection;
 `lose_window` retains a tombstone. `status()` exposes byte/identity/session
 budgets, losses, seal reason, continuity and error counters;
 `retained_outcomes()` returns bounded copies of committed records. Reopening
-validates the entire journal; a failed open never repairs or truncates it.
+validates and re-syncs the entire journal and directory before exposing
+recovered results; a failed open never repairs or truncates it.
 
 See the [journal contract and recovery procedure](architecture/outcome-observation-journal.md)
 and [explicit CLI configuration](CONFIGURATION.md#optional-g3-observation-journal).

@@ -214,6 +214,12 @@ class ObservationJournal:
                 os.fsync(self._dir)  # failure is fatal; no unsupported-sync fallback
             else:
                 self._load()
+                # A complete tail (including a seal) may have survived a failed
+                # sync without ever being acknowledged. Re-establish durability
+                # even when recovery needs no additional append.
+                os.fsync(self._fd)
+                os.fsync(self._dir)
+                self._namespace()
             self._unclean = self._active
             for state in list(self._states.values()):
                 if state["state"] == "pending":

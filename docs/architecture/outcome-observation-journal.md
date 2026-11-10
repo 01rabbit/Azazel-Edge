@@ -51,6 +51,9 @@ lost, seal. Every frame append completes short writes and calls file `fsync`;
 first creation additionally syncs the private directory. Unsupported sync is
 fatal. Hash/sequence/schema/transition/context validation rejects an incomplete
 or corrupt tail **without truncation, repair, recreation or resumption**.
+A valid reopened file and its directory are re-synced before recovery results
+are exposed, including a previously sealed scope that needs no new append. A
+complete frame readable from cache after an earlier sync error is not enough.
 Hashes detect accidental corruption, not malicious edits, source truth or
 rollback of the complete journal. This is not a signed evidence store.
 
@@ -143,7 +146,7 @@ of this implementation.
 `tests/test_outcome_journal.py` checks sync ordering, complete records and
 identity suppression across clean reopen, actual child-process SIGKILL at
 empty/pending/committed phases, lost windows with later samples, ENOSPC/EIO and
-unsupported sync, failure before any begin bytes, directory sync failure,
+unsupported sync, failure before any begin bytes, directory sync failure, sealed-reopen sync failure,
 short writes/torn tails, corruption/context/permissions, symlinks/hardlinks/
 FIFO, writer collision/path drift, finite session/identity/byte budgets,
 reserved completion space, CLI opt-in and clean close, and no network/command
