@@ -61,7 +61,7 @@ def build_receipt(manifest: Mapping[str, Any], assignment_id: str, capture: Mapp
             goals.append(elapsed)
         elif kind == "sensor_gap":
             gap = True
-        elif kind not in ("discovery", "protected_reach", "authentication_attempt", "verified_containment"):
+        elif kind not in ("discovery", "protected_reach", "authentication_attempt", "verified_containment", "actionable_detection"):
             raise BenefitInputError("unknown milestone kind")
     if starts != [0.0] or len(ends) != 1 or ends[0] != horizon:
         raise BenefitInputError("capture does not verify the full declared horizon")

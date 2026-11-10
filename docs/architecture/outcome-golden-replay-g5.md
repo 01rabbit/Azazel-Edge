@@ -158,3 +158,12 @@ Outcome and Effect remains inconclusive under the existing contracts.
 
 This table records software inspection and declared test scope, not a statement
 that all historical gates or the full #400 issue are complete.
+
+## Recorded independent-service measurement join (#400/#393)
+
+[Recorded measurement path](../MEASUREMENT_PATH.md) now feeds this existing
+G5 transcript into a bounded session/boot/clock/ID join alongside a separately
+recorded service receipt. It retains the original Outcome/Effect unchanged and
+withholds incomplete, ambiguous, clock-uncertain or lost-window comparisons.
+The project-authored software pilot is not a live observation producer, durable
+before-window journal, actual protected-service experiment or G6 acceptance.

@@ -95,3 +95,11 @@ C0–C6 captures, practical threshold selection, model/Knowledge/canary ablation
 resource/fault/hardware measurements and controlled operator studies. No absent
 provider or unexecuted comparator is scored as a real run. Keep #400/G6 and the
 existing activation/isolation/admission gates open.
+
+## Joined recorded path
+
+[Recorded measurement path](MEASUREMENT_PATH.md) connects the existing G5
+readback/release/telemetry path to the independent-service receipt calculator.
+It includes a fixed software-only nine-scenario pilot, coverage/identity/clock
+refusal and a minimized reproduction set. It introduces no live capture or
+enforcement and does not complete the independent C0-C6 or G6 gates above.

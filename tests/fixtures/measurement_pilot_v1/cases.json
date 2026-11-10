@@ -1,0 +1,128 @@
+[
+  {
+    "errors": false,
+    "expected_gate": "recorded_thresholds_met_requires_independent_review",
+    "fault": "none",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "gain",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "practical_time_gain_not_demonstrated",
+    "fault": "none",
+    "goal_seconds": [
+      10,
+      10
+    ],
+    "id": "neutral",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": true,
+    "expected_gate": "legitimate_service_gate_failed",
+    "fault": "none",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "service_harm",
+    "latency_ms": [
+      20,
+      100
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "protected_goal_regression",
+    "fault": "none",
+    "goal_seconds": [
+      null,
+      10
+    ],
+    "id": "protection_harm",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "inconclusive_missing_or_insufficient_pairs",
+    "fault": "pause",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "actor_pause",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "inconclusive_missing_or_insufficient_pairs",
+    "fault": "shared",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "shared_source",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "inconclusive_missing_or_insufficient_pairs",
+    "fault": "clock",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "clock_uncertain",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "inconclusive_missing_or_insufficient_pairs",
+    "fault": "gap",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "capture_gap",
+    "latency_ms": [
+      20,
+      20
+    ]
+  },
+  {
+    "errors": false,
+    "expected_gate": "inconclusive_missing_or_insufficient_pairs",
+    "fault": "restart",
+    "goal_seconds": [
+      10,
+      30
+    ],
+    "id": "restart_lost",
+    "latency_ms": [
+      20,
+      20
+    ]
+  }
+]
