@@ -75,7 +75,7 @@ jobs:
           sudo chmod o+x "$HOME"
           set -o pipefail
           sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
-            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py | tee input-auth-uids.log
+            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py | tee input-auth-uids.log
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
@@ -83,6 +83,52 @@ jobs:
         run: |
           . .venv/bin/activate
           PYTHONPATH=.:py pytest -q
+
+  outcome-systemd:
+    name: Outcome real systemd (disposable VM, no OS reboot)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the exact core
+        run: cargo build --locked --manifest-path rust/azazel-edge-core/Cargo.toml
+      - name: Stage root-owned isolated lab runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-venv
+          test ! -e /etc/systemd/system/azazel-edge-core.service
+          test ! -e /var/lib/edge400-systemd-lab
+          sudo mkdir /opt/edge400-src
+          sudo cp -R py tests requirements /opt/edge400-src/
+          sudo chown -R root:root /opt/edge400-src
+          sudo chmod -R go-w /opt/edge400-src
+          git rev-parse HEAD | sudo tee /opt/edge400-src/SOURCE_REVISION >/dev/null
+          sudo install -m 755 rust/azazel-edge-core/target/debug/azazel-edge-core /usr/local/bin/azazel-edge-core
+          sudo /usr/bin/python3 -m venv --copies /opt/edge400-runtime
+          sudo /opt/edge400-runtime/bin/pip install -r requirements/input-auth.txt pytest
+          sudo sh -c 'echo /opt/edge400-src/py > /opt/edge400-runtime/lib/python3.12/site-packages/edge400.pth'
+          printf 'edge400 dedicated disposable VM; no production state\n' | sudo tee /etc/edge400-disposable-vm >/dev/null
+      - name: Actual single-unit handoff and witness readiness (offline)
+        run: |
+          # Namespace only the driver, never alter runner networking. Lab
+          # services independently restrict sockets to AF_UNIX. No reboot here.
+          for phase in prepare exercise smoke-finish; do
+            sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
+              /opt/edge400-runtime/bin/python -I /opt/edge400-src/tests/real_systemd/guest.py \
+              "$phase" --allow-disposable-vm
+          done
+      - name: Collect minimized lab evidence
+        if: always()
+        run: |
+          if sudo test -f /var/lib/edge400-systemd-lab/results.jsonl; then
+            sudo cat /var/lib/edge400-systemd-lab/results.jsonl > outcome-systemd-results.jsonl
+          fi
+          sudo journalctl -u azazel-edge-core.service -u edge400-lab-witness.service --no-pager -n 160
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: outcome-systemd-results
+          path: outcome-systemd-results.jsonl
+          if-no-files-found: error
 
   test-rust:
     name: Rust tests
