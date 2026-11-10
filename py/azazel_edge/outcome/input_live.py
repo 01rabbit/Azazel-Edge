@@ -295,6 +295,9 @@ def harden_receiver(uid):
     libc.prctl.restype = ctypes.c_int
     if libc.prctl(38, 1, 0, 0, 0) != 0:  # Linux PR_SET_NO_NEW_PRIVS
         raise OutcomeJournalError("receiver no-new-privileges unavailable")
+    from .socket_boundary import unix_only
+
+    unix_only()
 
 
 def receive(policy, r, key_path, boot_ref, fd, session):

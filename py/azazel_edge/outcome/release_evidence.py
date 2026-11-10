@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import ipaddress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -14,7 +15,7 @@ from .contracts import (
     ExecutionStatus,
     MechanismStatus,
 )
-from .ownership import expected_ownership
+from .ownership import expected_ownership, _valid_owner_token
 
 
 class ReleaseEvidenceStatus(str, Enum):
@@ -77,18 +78,35 @@ def from_rust_release_event(event: Mapping[str, Any]) -> ReleaseEvidenceRecord:
 
     due_epoch = _epoch(release.get("due_epoch"), "due_epoch")
     attempted_at_epoch = _epoch(release.get("attempted_at_epoch"), "attempted_at_epoch")
-    if attempted_at_epoch < due_epoch and status is not ReleaseEvidenceStatus.SUPERSEDED:
+    if (
+        attempted_at_epoch < due_epoch
+        and status is not ReleaseEvidenceStatus.SUPERSEDED
+    ):
         raise ValueError("release attempt predates due time")
 
     postcondition = release.get("postcondition")
     if not isinstance(postcondition, Mapping):
         raise ValueError("release evidence requires postcondition object")
-    if status is ReleaseEvidenceStatus.RELEASED and postcondition.get("verified") is not True:
+    if (
+        status is ReleaseEvidenceStatus.RELEASED
+        and postcondition.get("verified") is not True
+    ):
         raise ValueError("released evidence requires verified absence postcondition")
 
     tc_handle = str(release.get("tc_handle") or "")
-    if action == "throttle" and not _valid_tc_handle(tc_handle):
-        raise ValueError("throttle release evidence requires valid tc handle")
+    if action == "throttle":
+        if resource_key.startswith("nft:"):
+            if not _nft_flow_limit(resource_key) or tc_handle:
+                raise ValueError(
+                    "nft throttle release requires exact flow resource and no tc handle"
+                )
+            if (
+                not _valid_owner_token(owner_token)
+                or owner_token != "azazel-edge:" + task_id
+            ):
+                raise ValueError("nft throttle release owner/task mismatch")
+        elif not _valid_tc_handle(tc_handle):
+            raise ValueError("throttle release evidence requires valid tc handle")
     if action != "throttle" and tc_handle:
         raise ValueError("nft release evidence must not claim tc handle")
 
@@ -116,7 +134,9 @@ def from_rust_release_event(event: Mapping[str, Any]) -> ReleaseEvidenceRecord:
         errors=errors,
         postcondition=dict(postcondition),
         evidence_refs=(evidence_ref,),
-        observed_at=datetime.fromtimestamp(attempted_at_epoch, tz=timezone.utc).isoformat(),
+        observed_at=datetime.fromtimestamp(
+            attempted_at_epoch, tz=timezone.utc
+        ).isoformat(),
     )
 
 
@@ -133,7 +153,10 @@ def reconcile_release_evidence(
     longer present.
     """
 
-    if execution.decision_id != release.decision_id or mechanism.decision_id != release.decision_id:
+    if (
+        execution.decision_id != release.decision_id
+        or mechanism.decision_id != release.decision_id
+    ):
         raise ValueError("release evidence decision correlation mismatch")
     if execution.execution_id != mechanism.execution_id:
         raise ValueError("release evidence execution/mechanism correlation mismatch")
@@ -165,13 +188,20 @@ def reconcile_release_evidence(
         return execution, mechanism
     if release.postcondition.get("verified") is not True:
         return execution, mechanism
-    if execution.status is not ExecutionStatus.APPLIED or execution.lifecycle is not ActionLifecycle.ACTIVE:
+    if (
+        execution.status is not ExecutionStatus.APPLIED
+        or execution.lifecycle is not ActionLifecycle.ACTIVE
+    ):
         return execution, mechanism
     if mechanism.status is not MechanismStatus.OBSERVED:
         return execution, mechanism
 
-    refs = tuple(dict.fromkeys((*execution.provider_evidence_refs, *release.evidence_refs)))
-    mechanism_refs = tuple(dict.fromkeys((*mechanism.evidence_refs, *release.evidence_refs)))
+    refs = tuple(
+        dict.fromkeys((*execution.provider_evidence_refs, *release.evidence_refs))
+    )
+    mechanism_refs = tuple(
+        dict.fromkeys((*mechanism.evidence_refs, *release.evidence_refs))
+    )
     release_summary = {
         "release_task_id": release.release_task_id,
         "status": release.status.value,
@@ -207,7 +237,9 @@ def _validate_provider_release_identity(
     release: ReleaseEvidenceRecord,
 ) -> None:
     if execution.release_ref != release.release_task_id:
-        raise ValueError("release evidence task id does not match execution release reference")
+        raise ValueError(
+            "release evidence task id does not match execution release reference"
+        )
     applied = execution.applied_parameters
     metadata = applied.get("metadata") if isinstance(applied, Mapping) else None
     if not isinstance(metadata, Mapping):
@@ -219,9 +251,13 @@ def _validate_provider_release_identity(
     if expected_task != release.release_task_id:
         raise ValueError("release evidence task id does not match provider metadata")
     if expected_owner != release.owner_token:
-        raise ValueError("release evidence owner token does not match provider metadata")
+        raise ValueError(
+            "release evidence owner token does not match provider metadata"
+        )
     if expected_resource != release.resource_key:
-        raise ValueError("release evidence resource key does not match provider metadata")
+        raise ValueError(
+            "release evidence resource key does not match provider metadata"
+        )
     if release.action_kind == "throttle" and expected_tc_handle != release.tc_handle:
         raise ValueError("release evidence tc handle does not match provider metadata")
     if release.action_kind != "throttle" and expected_tc_handle:
@@ -230,8 +266,44 @@ def _validate_provider_release_identity(
 
 def _release_ownership(release: ReleaseEvidenceRecord) -> dict[str, str]:
     if release.action_kind == "throttle":
-        return {"kind": "tc_handle", "value": release.tc_handle}
+        if release.tc_handle:
+            return {"kind": "tc_handle", "value": release.tc_handle}
+        if not _nft_flow_limit(release.resource_key):
+            raise ValueError("throttle release ownership is not a recognized provider")
     return {"kind": "nft_comment", "value": release.owner_token}
+
+
+def _nft_flow_limit(resource_key: str) -> bool:
+    """Recognize only the Rust nft flow-limit identity, including IPv6 colons.
+
+    Parsing authorizes no command or retrospective mechanism observation. The
+    execution/resource/owner and observed-mechanism correlations still apply.
+    """
+    prefix = "nft:inet:azazel_edge:throttle:"
+    if not resource_key.startswith(prefix):
+        return False
+    try:
+        flow, protocol, raw_port = resource_key[len(prefix) :].rsplit(":", 2)
+        source, destination = flow.split(">")
+        if "%" in flow:
+            return False
+        src, dst = ipaddress.ip_address(source), ipaddress.ip_address(destination)
+        if not raw_port.isascii() or not raw_port.isdecimal():
+            return False
+        port = int(raw_port)
+        if (
+            src.version != dst.version
+            or raw_port != str(port)
+            or not 0 <= port <= 65535
+        ):
+            return False
+        return (
+            (protocol in ("tcp", "udp") and port > 0)
+            or (protocol == "icmp" and src.version == 4 and port == 0)
+            or (protocol == "ipv6-icmp" and src.version == 6 and port == 0)
+        )
+    except ValueError:
+        return False
 
 
 def _required_text(mapping: Mapping[str, Any], key: str) -> str:

@@ -1,0 +1,29 @@
+# Disposable provider-only extension. Never installed by product runtime.
+#include <tunables/global>
+profile edge400-provider {
+  #include <abstractions/base>
+  / r,
+  /var/ r,
+  /var/lib/ r,
+  /var/lib/edge400-systemd-lab/ r,
+  /var/lib/edge400-systemd-lab/eve.json r,
+  /var/lib/edge400-systemd-lab/native/ r,
+  /var/lib/edge400-systemd-lab/native/** rwk,
+  /proc/*/attr/apparmor/current r,
+  /proc/*/status r,
+  /proc/*/stat r,
+  /proc/sys/kernel/random/boot_id r,
+  /dev/fd/* rwk,
+  /usr/ r,
+  /usr/sbin/ r,
+  /usr/sbin/{nft,conntrack} mrix,
+  /etc/{protocols,services} r,
+  capability net_admin,
+  network netlink raw,
+  network netlink dgram,
+  network unix,
+  network inet stream, # existing local decoy reachability precondition only
+  audit deny network inet6,
+  signal (receive) peer=unconfined,
+  ptrace (readby) peer=unconfined,
+}
