@@ -774,3 +774,18 @@ def test_directory_fsync_failure_no_go_and_original_error_survives_cleanup(
 def test_imported_metadata_is_not_owned_sampler_authority(context):
     with pytest.raises(AssertionError, match="owned Root transport context"):
         call.namespace_observation(context)
+
+
+def test_listener_barrier_refusal_precedes_initializer_launch_and_go(
+    tmp_path, monkeypatch
+):
+    args, events, sent = fixture(tmp_path, monkeypatch)
+
+    def unavailable(*args):
+        raise AssertionError("synthetic passive listener unavailable")
+
+    monkeypatch.setattr(call, "witness_binding", unavailable)
+    with pytest.raises(AssertionError, match="passive listener unavailable"):
+        call.initialize(tmp_path, **args)
+    assert "launch" not in events and "GO" not in events and sent == []
+    assert not (tmp_path / "initializer-result.json").exists()

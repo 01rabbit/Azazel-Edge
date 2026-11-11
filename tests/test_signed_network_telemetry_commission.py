@@ -36,14 +36,27 @@ BOOT = "095d28ff-ca7d-4b08-9e4b-e36a62db4810"
 
 def witness_unit():
     return (
-        "[Unit]\n[Service]\n"
+        "[Unit]\n[Service]\nType=notify\nNotifyAccess=main\n"
         f"ExecStart={main.g.PYTHON} -I -m azazel_edge.outcome.input_witness "
         f"--policy {main.g.BUNDLE}/trust.json --private-key {main.g.BUNDLE}/witness/key.raw "
         "--systemd-notify --apparmor-profile edge400-witness\n"
     )
 
 
-@pytest.mark.parametrize("fault", [None, "wrong", "duplicate", "missing"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "wrong",
+        "duplicate",
+        "missing",
+        "type",
+        "notify",
+        "duplicate-type",
+        "duplicate-notify",
+        "crlf-type",
+    ],
+)
 def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
     tmp_path, monkeypatch, fault
 ):
@@ -88,16 +101,31 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
         payload = original + "ExecStart=/usr/bin/true\n"
     elif fault == "missing":
         payload = "[Service]\nUser=root\n"
+    elif fault == "type":
+        payload = original.replace("Type=notify", "Type=simple")
+    elif fault == "notify":
+        payload = original.replace("NotifyAccess=main", "NotifyAccess=all")
+    elif fault == "duplicate-type":
+        payload = original + "Type=notify\n"
+    elif fault == "duplicate-notify":
+        payload = original + "NotifyAccess=main\n"
+    elif fault == "crlf-type":
+        payload = original.replace("Type=notify\n", "Type=notify\r\n")
     target = tmp_path / main.g.WITNESS
     if fault:
-        with pytest.raises(AssertionError, match="exact current witness command"):
+        with pytest.raises(
+            AssertionError,
+            match="exact current witness command|exact witness notify source",
+        ):
             main.g.write(target, payload)
         assert not target.exists() and captured == []
         return
     main.g.write(target, payload)
-    expected = original.replace(" -I -m ", " -I -B -m ") + (
-        "\n[Service]\nNetworkNamespacePath=" + main.setup.role.NSFS_TARGETS[0] + "\n"
-    )
+    expected = original.replace(" -I -m ", " -I -B -m ").replace(
+        " --systemd-notify", ""
+    ).replace("Type=notify\n", "Type=exec\n").replace(
+        "NotifyAccess=main\n", "NotifyAccess=none\n"
+    ) + ("\n[Service]\nNetworkNamespacePath=" + main.setup.role.NSFS_TARGETS[0] + "\n")
     assert target.read_bytes() == expected.encode() == captured[0][1].encode()
     assert target.stat().st_mode & 0o7777 == 0o644
     core = tmp_path / main.g.UNIT

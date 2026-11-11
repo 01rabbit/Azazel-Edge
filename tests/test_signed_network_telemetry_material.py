@@ -308,3 +308,12 @@ def test_current_public_auth_binding_implementation_is_mandatory_source_pin(faul
         sources[key] = "0" * 64
     with pytest.raises(plan.BenefitInputError):
         plan.validate_telemetry_manifest(value, "b" * 64)
+
+
+def test_current_manual_product_source_pins_include_used_switch_code():
+    path = material.SRC / "py/azazel_edge/outcome/service_switch.py"
+    assert path in material.source_paths()
+    assert (
+        material.source_hashes()[str(path.relative_to(material.SRC))]
+        == hashlib.sha256(path.read_bytes()).hexdigest()
+    )

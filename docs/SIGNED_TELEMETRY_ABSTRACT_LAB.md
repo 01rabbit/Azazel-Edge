@@ -7,8 +7,10 @@ Only that descriptor enters `prepare(..., witness_network_namespace=...)`, expli
 provisioning trust v4 and its scope-derived abstract address. Device/inode remains
 separate Root ownership evidence; cookie is not an inode or cross-kernel identity. The
 pathname transport and existing product/legacy defaults remain unchanged; no
-pathname failure selects a fallback. The existing witness unit gains only the
-literal owned EDGE namespace path in this lab configuration. No AppArmor rule,
+pathname failure selects a fallback. Only this manual lab renders the witness
+with `Type=exec`, `NotifyAccess=none`, no `--systemd-notify`, and the literal owned
+EDGE namespace path. The original witness template and product defaults stay
+unchanged. No AppArmor rule,
 capability, private-proc gate or runtime bound is broadened.
 
 Before either initializer/live GO and after its API result, Root independently
@@ -16,7 +18,15 @@ resamples the still-held EDGE cookie/boot and checks the fixed live witness
 PID/start time, enforcing label, separate owned EDGE device/inode,
 typed effective command/properties and protected unit-file identity/hash. These
 stable facts, explicit transport metadata and the public trust digest enter the
-shared binding. Mutable witness counters do not. Raw Root observations are retained;
+shared binding. Mutable witness counters do not. Root also requires one exact
+abstract STREAM listener in `/proc/<PID>/net/unix` and one matching socket FD held
+by the same witness PID, with stable inode/FD across later bindings. Only initial
+pre-Popen initialization may passively poll a well-formed absent listener for up
+to two seconds; unknown, duplicate or changed identity fails immediately, and
+later phases do not poll. Each bounded raw table/FD sample is separately retained.
+A listener establishes metadata readiness, never authentication: actual signed
+initializer preflight and the original sealed-Switch proof remain required.
+Raw Root observations are retained;
 they are not cryptographic observer-label proof or endpoint probes.
 
 Sealed Switch still calls the original `Systemd.witness` proof. A temporary lab
