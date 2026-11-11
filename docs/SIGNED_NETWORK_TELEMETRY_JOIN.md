@@ -1,12 +1,12 @@
-# Optional signed telemetry join: first interface chunk only
+# Optional signed telemetry join: interface and scoped commissioning
 
-There is no working signed telemetry join, frozen four-assignment manifest or new
-runtime result. The existing signed-network preparation/runner still selects the
+There is one [scoped positive init/live/terminal result](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12),
+with separate negative runtime qualification still open and no frozen four-assignment manifest. The existing signed-network preparation/runner still selects the
 legacy role and **rejects the new manifest**. Do not use this component as an
 operator entrypoint or interpret structural validation as permission to proceed.
 The old-profile telemetry gap remains blocked. The separately completed v6
 stateless precheck is compatibility evidence at its own tested source, not admission
-for this changed source or a signed observer.
+for another source or scope.
 
 ## Explicit plan and external pins
 
@@ -133,8 +133,9 @@ of whole-scope quiescence or admission.
 
 Tests use synthetic Root/unit/proof observations and real private client IO,
 including a stuck owned client killed/reaped by the helper itself. They do not
-execute a hardened initializer, policy loader, authenticated scope or VM. Live
-caller/phase dispatch and single-current-source commissioning remain unwired.
+execute a hardened initializer, policy loader, authenticated scope or VM. Separate
+manual init/live commissioning now has the scoped result linked above; trial
+phase/run dispatch remains unwired.
 
 
 ### Initializer prelaunch inherited-material refusal
@@ -174,10 +175,10 @@ initializer result. This is sampled Root public-configuration continuity, not an
 atomic pair snapshot, cryptographic observer-label/journal binding, source
 admission or a replacement for the observer's unchanged authentication after GO.
 
-Private `_current_binding(*, current, namespace, source_sha256, kernel)` returns
+Private `_current_binding(*, current, namespace, source_sha256, kernel, output, phase)` returns
 `(binding, policy_raw)` for fixed init/live reuse. Callers must independently
 verify its inputs. Binding keys are `role`, `kernel_boot_id`, `namespace`,
 `observer_source_sha256`, `material`, `public_auth`, `roles` (both fixed specs),
-`policy_file_sha256` and `policy_sha256`. It adds no role/path selector. The
-future live caller must compare the full same-context binding and retain its
-own proof; it remains unwired and uncommissioned by this initializer-only change.
+`policy_file_sha256`, `policy_sha256` and sampled `witness_actor`. It adds no
+role/path selector. The manual live caller compares the full same-context binding
+and retains its own proof; this is separate from trial-runner integration.

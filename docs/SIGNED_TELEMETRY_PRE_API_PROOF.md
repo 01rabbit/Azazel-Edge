@@ -1,4 +1,4 @@
-# Fixed signed telemetry pre-API Root evidence (code only)
+# Fixed signed telemetry pre-API Root evidence
 
 `signed_network_telemetry_proof.collect_pre_api` accepts only `initialize` or
 `live`, an existing original three-pipe process, an independently owned EDGE
@@ -9,7 +9,7 @@ marked offline disposable-VM Root guard and explicit
 The fixed worker argv selects `--telemetry-lab-v2` explicitly for either initialize
 or live; the legacy selector remains unchanged. Root collection never sends GO.
 
-Before an API is opened, later reviewed orchestration may use this collector to
+Before an API is opened, the reviewed manual callers use this collector to
 retain the consumed READY prefix (including a bound-plus-one overflow byte), raw
 typed effective-unit queries and actual Root actor metadata. It checks the fixed
 new unit/label/alias and 40-second lifetime, actual PID/start-time/cgroup, private
@@ -23,14 +23,14 @@ allowlist remain unchanged. READY alone authenticates nothing.
 
 This is sampled Root metadata, not cryptographic observer-label binding,
 continuous actor liveness, API permission/terminal-operation proof, negative
-probe qualification, experiment admission or efficacy evidence. No runtime has
-been executed for this chunk. A separate reviewed worker/orchestrator and fresh
-VM commissioning must establish the joined authenticated API positive and
-negative behavior before any trial can be considered. Root source/archive trust
+probe qualification, experiment admission or efficacy evidence. The separate
+[one-boot positive connection](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12)
+now exercises the joined worker/orchestrator; fresh negative runtime qualification
+remains open before any trial can be considered. Root source/archive trust
 is an external operator boundary; a caller-supplied digest is not an attestation.
 
 
-## Worker fence (code only; runtime commissioning remains required)
+## Worker fence and remaining qualification
 
 The optional worker first verifies its fixed Linux source path, literal alias and
 argv, actual enforcing new label, all real/effective/saved UID/GID values,
@@ -38,8 +38,8 @@ thread-group identity, empty capability sets, NNP, dumpability and actual boot.
 Only self/source/kernel guard reads occur here. It emits the exact public READY
 schema before opening trust, policy, telemetry, bounded input, journal, sidecar,
 witness or live API material. The Root controller must retain and validate its
-independent complete proof before supplying the exact public GO frame. There is
-no controller/GO sender in this chunk.
+independent complete proof before supplying the exact public GO frame.
+Controller/GO sending lives in the separate reviewed callers.
 
 GO has an absolute two-second deadline and a fixed bound plus one overflow byte.
 Malformed input, EOF, overflow or timeout aborts and emits the bounded consumed
@@ -54,6 +54,7 @@ initialize success exercises real input/authentication/journal/recovery classes;
 the signed live terminal smoke uses existing synthetic API/witness callbacks.
 Neither constitutes an actual UID/LSM, live authenticated permission or runtime
 negative proof. Fresh joined-source commissioning must still demonstrate the
-required actual API positive, negative and terminal-close behaviors before any
-assignment is frozen. Authenticated v4 schema and persistence context are
-unchanged and do not cryptographically bind the observer label/interpreter.
+remaining actual negative behavior before any assignment is frozen. The scoped
+positive/terminal result above does not upgrade these synthetic tests. Origin
+registration v4 and persistence context do not cryptographically bind the observer
+label/interpreter.

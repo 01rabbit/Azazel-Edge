@@ -1,12 +1,12 @@
-# Single authenticated telemetry commissioning: manual API, runtime unrun
+# Single authenticated telemetry commissioning: one scoped positive result
 
 `signed_network_telemetry_commission.commission_telemetry(output, *, source_commit,
 archive_sha256, core_sha256, abi_sha256, interpreter_sha256)` now composes one
 fresh authenticated initialization/live/terminal connection on an explicitly
 marked offline disposable VM. It is a manual Root API with five mandatory
-external pins, no CLI or automatic launcher. No authenticated commissioning case
-has run for this changed source. The completed v6 stateless precheck remains
-compatibility evidence at its own source, not admission for this connection.
+external pins, no CLI or automatic launcher. One fresh-VM positive connection
+has completed at the exact source below. The earlier v6 stateless precheck remains
+separate compatibility evidence, not admission for another source or scope.
 
 Current explicit abstract transport and Root witness/namespace adapter boundaries
 are described in [the lab transport guide](SIGNED_TELEMETRY_ABSTRACT_LAB.md).
@@ -14,8 +14,43 @@ are described in [the lab transport guide](SIGNED_TELEMETRY_ABSTRACT_LAB.md).
 Read-only evidence validation now requires **at least one recorded telemetry
 sample with all four coverage flags true**, preserving the original call epoch.
 Initialization, PRE-API READY or a terminal receipt cannot substitute for that
-gate. Runtime remains **UNRUN** for this changed source; static and fixture checks
-do not establish current-source VM acceptance.
+gate. The positive result below covers that gate for one source/boot only;
+static fixtures and earlier failed attempts are not substituted for it.
+
+## Reviewed positive runtime evidence: v8, 2026-11-12
+
+Root completed one marked offline VM case and independently reviewed the retained
+cryptographic evidence. Source/archive trust came from external host/guest checks,
+not the revision field or receipt JSON. Exact references:
+
+- Source: `9ecf03f564ca5060602254d627c0c577e5b8d114`.
+- Source archive SHA256: `b1fcb04f4c5f7a7312f542f353cca10cd4412770fb563861c3f7412987c34b9f`.
+- Actual kernel boot: `08e38f0b-f9f9-43d2-87c8-0bb92c6812db`.
+- Private completed evidence archive SHA256: `bc802c7337eea05f901e86716b45e0537825ce199fe5ce81d989f51c012cd0ed`
+  (1,054,720 bytes; excludes keys).
+
+Genuine empty initialization preceded the original sealed native start and stop.
+The signed source contains exactly prepare/start/end; the 10 journal frames and
+11 signed witness anchors bind complete ordered cursors and natural terminal
+CONTROL. One closed-sidecar sample has all four coverage flags true. There are
+no outcomes or journal begin/commit/lost frames. Signed source/journal/witness
+proof and the observer-owned sidecar remain distinct evidence classes.
+
+Root observed UID61002, all capability sets zero, NNP, the enforcing new label,
+original three stdio FIFOs and private-proc bindings. Init/live configuration
+bindings agree; the boot-bound cookie and separately retained owned namespace
+identity are different metadata, not interchangeable proofs. Five original sealed
+witness proof calls completed with fixed cwd and clean owned-child reap/group
+emptiness, without forced cleanup. All seven cgroups were empty, names absent,
+no core remained and parent state was unchanged; the VM was stopped. Guest
+regression checks also passed: 106 tests in 2.06 seconds.
+
+Failed connection attempts v1–v7 remain retained at their original sources/boots;
+v8 does not relabel them or the separate stateless precheck. The separate fresh
+negative case has no reviewed runtime result yet.
+This is one authenticated connection, not a four-assignment manifest/trial,
+performance or efficacy result, hardware proof, general isolation acceptance or
+production admission. Transition/experiment/admission/measurement flags stay false.
 
 ## External prerequisites and current-source checks
 

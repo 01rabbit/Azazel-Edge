@@ -1,4 +1,4 @@
-# Explicit abstract witness wiring for the manual lab (runtime unrun)
+# Explicit abstract witness wiring for the manual lab
 
 The manual positive and separate synthetic-refusal commissioners pass their
 held owned EDGE FD to a bounded Root metadata child before preparation. It joins
@@ -48,6 +48,7 @@ fresh unbound socket before bind/connect or witness-store/key access. The cookie
 binds a kernel-lifetime namespace plus current boot, not rollback resistance.
 No namespace is selected from untrusted JSON. Tests use synthetic Root/namespace
 facts and fake setns, with real private fork/pipe/group/reap checks; they establish
-no actual role, transport, sealed Switch or VM acceptance. Fresh positive and
-separate invalid-signature commissioning remain required. No four-run manifest,
+no actual role, transport, sealed Switch or VM acceptance by themselves. One
+scoped positive VM result is recorded in [the commissioning guide](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12);
+separate invalid-signature runtime qualification remains open. No four-run manifest,
 trial, efficacy, admission, source repair or production activation is authorized.
