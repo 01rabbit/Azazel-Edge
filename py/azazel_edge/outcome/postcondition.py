@@ -189,6 +189,9 @@ def _verify_traffic_shaping(
     timeout_seconds: float,
     observed_at: str | None,
 ) -> AppliedMechanism:
+    from .nft_flow_evidence import SCOPE_KIND
+    if mechanism.scope.get("scope_kind") == SCOPE_KIND:
+        return _verify_nft_flow(execution, mechanism, runner, timeout_seconds, observed_at)
     scope = mechanism.scope
     if scope.get("scope_kind") != "interface_root_qdisc":
         raise ValueError("traffic shaping requires interface_root_qdisc scope")
@@ -249,6 +252,64 @@ def _verify_traffic_shaping(
         verification_strength="exact",
         probe={**_result_summary(result), "expected": expected},
     )
+
+
+def _verify_nft_flow(execution, mechanism, runner, timeout_seconds, observed_at):
+    from .nft_flow_evidence import QUERY, flow_scope, parse_readback, readback_matches
+
+    requested = execution.requested_parameters
+    applied = execution.applied_parameters
+    expected = flow_scope(
+        requested.get("command_plan"),
+        requested.get("rollback_plan"),
+        applied.get("metadata"),
+        execution.decision_id,
+    )
+    if (
+        execution.action_kind != "throttle"
+        or execution.scope != expected
+        or mechanism.scope != expected
+        or execution.release_ref != expected["release_task_id"]
+        or execution.error_code
+        or applied.get("mode") != "enforced"
+        or applied.get("result") != "applied"
+        or type(applied.get("executed_count")) is not int
+        or type(applied.get("failed_count")) is not int
+        or applied.get("executed_count") != 1
+        or applied.get("failed_count") != 0
+        or _validated_ip(requested.get("target")) != expected["source_ip"]
+    ):
+        raise ValueError("nft flow scope/provider correlation mismatch")
+    result = runner.run(QUERY, timeout_seconds=timeout_seconds)
+    if tuple(result.argv) != QUERY:
+        raise ValueError("nft flow query receipt mismatch")
+    if result.returncode != 0:
+        return _with_probe_result(
+            mechanism,
+            observed_at=observed_at,
+            status=MechanismStatus.UNVERIFIED,
+            basis="nft_flow_query_failed",
+            verification_strength="none",
+            probe=_result_summary(result),
+        )
+    matches = readback_matches(parse_readback(result.stdout), expected)
+    return _with_probe_result(
+        mechanism,
+        observed_at=observed_at,
+        status=MechanismStatus.OBSERVED if matches else MechanismStatus.NOT_OBSERVED,
+        basis="owned_nft_flow_limit_matches"
+        if matches
+        else "owned_nft_flow_limit_not_observed",
+        verification_strength="owned_full_flow_and_chain_parameters"
+        if matches
+        else "none",
+        probe={
+            **_result_summary(result),
+            "expected": expected,
+            "ownership": {"kind": "nft_comment", "value": expected["owner_token"]},
+        },
+    )
+
 
 
 def _verify_redirection(
@@ -714,6 +775,8 @@ def _is_allowed_read_only_query(argv: tuple[str, ...]) -> bool:
     if len(argv) == 6 and argv[:5] == ("tc", "-j", "qdisc", "show", "dev"):
         return bool(_INTERFACE_RE.fullmatch(argv[5]))
     if argv == ("nft", "-j", "list", "chain", "inet", "azazel_edge", "prerouting"):
+        return True
+    if argv == ("nft", "-j", "list", "chain", "inet", "azazel_edge", "throttle"):
         return True
     if argv == ("nft", "-j", "list", "chain", "inet", "azazel_edge", "input"):
         return True

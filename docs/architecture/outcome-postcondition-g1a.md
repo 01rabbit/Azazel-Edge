@@ -45,6 +45,7 @@ Only these logical query shapes are accepted:
 tc -j qdisc show dev <validated-interface>
 nft -j list chain inet azazel_edge prerouting
 nft -j list chain inet azazel_edge input
+nft -j list chain inet azazel_edge throttle
 ```
 
 All other argv shapes are rejected before subprocess invocation.
@@ -77,7 +78,7 @@ If any condition is false, G1a performs no host probe and returns the existing m
 
 ## Traffic shaping verification
 
-Current Rust throttle uses an interface-root TBF qdisc. G1a verifies:
+Legacy Rust throttle records use an interface-root TBF qdisc. For those records G1a verifies:
 
 1. scope is `interface_root_qdisc`;
 2. interface name passes the strict interface validator;
@@ -163,3 +164,7 @@ Unknown evidence never strengthens a live action or a tactical-effect claim.
 - Pi/HIL resource validation.
 
 These remain later #400 gates.
+
+Current owned nft flow-limit plans have a separate strict scope and complete-chain
+readback gate; see [nft flow evidence](outcome-nft-flow-evidence.md). They are never
+reinterpreted as a root TBF merely because their action is named throttle.

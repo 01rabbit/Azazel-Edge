@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
@@ -26,7 +27,7 @@ def expected_ownership(execution: ActionExecutionReceipt) -> dict[str, str] | No
 
     owners: list[dict[str, str]] = []
     for command in _requested_commands(execution):
-        parts = command.split()
+        parts = shlex.split(command)
         if parts[:3] == ["tc", "qdisc", "replace"] and "root" in parts and "tbf" in parts:
             try:
                 root_idx = parts.index("root")
@@ -41,7 +42,8 @@ def expected_ownership(execution: ActionExecutionReceipt) -> dict[str, str] | No
         if parts and parts[0] == "nft" and "comment" in parts:
             try:
                 comment_idx = parts.index("comment")
-                token = parts[comment_idx + 1]
+                from .nft_flow_evidence import owner_token
+                token = owner_token(parts[comment_idx + 1])
             except IndexError as exc:
                 raise ValueError("nft ownership comment is missing its token") from exc
             if not _valid_owner_token(token):
@@ -69,6 +71,20 @@ def verify_mechanism_postcondition(
     ``observed_at`` pins the probe timestamp for recorded replay only (G5).
     """
 
+    # Flow evidence must inspect the complete chain header and all owned rules.
+    # Do not strip its owner or hide duplicate/conflicting entries. Unknown
+    # throttle layouts also take the fail-closed base path before owner parsing.
+    if (
+        execution.action_kind == "throttle"
+        and mechanism.scope.get("scope_kind") != "interface_root_qdisc"
+    ):
+        return _verify_legacy_postcondition(
+            execution=execution,
+            mechanism=mechanism,
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+            observed_at=observed_at,
+        )
     ownership = expected_ownership(execution)
     if ownership is None:
         return _verify_legacy_postcondition(
@@ -167,7 +183,7 @@ def _requested_commands(execution: ActionExecutionReceipt) -> tuple[str, ...]:
 def _normalized_commands(execution: ActionExecutionReceipt) -> tuple[str, ...]:
     normalized: list[str] = []
     for command in _requested_commands(execution):
-        parts = command.split()
+        parts = shlex.split(command)
         if parts[:3] == ["tc", "qdisc", "replace"] and "root" in parts:
             root_idx = parts.index("root")
             if root_idx + 2 < len(parts) and parts[root_idx + 1] == "handle":
