@@ -126,3 +126,30 @@ The candidate intentionally supplies no namespace FD: a later real namespace-FD
 open denial and unshare test must remain distinct from an **unexercised setns
 syscall**. Invalid-FD calls are not permission evidence, and no Root FD proxy or
 extra namespace-read permission is introduced to manufacture such evidence.
+
+## Fixed-worker operations helper freeze
+
+`telemetry_isolation_operations.py` is a private helper chunk, not a complete
+worker or entrypoint. There is still no Root controller, installation or policy
+loading. Its tests supply explicitly synthetic syscall returns; they establish
+argument/errno/control-flow behavior, not actual permission, hidepid or LSM proof.
+The next worker chunk must perform the real identity/source guard and emit READY
+before waiting for a fixed Root frame; no probes may precede that fence.
+
+The helper binds typed libc interfaces, validates only fixed peer PID/Tgid/boot
+and one-byte public-buffer fields, and bounds a single frame to 16 or 1024 bytes
+with a fixed ten-second wait inside the future fifteen-second unit lifetime.
+`process_vm_readv` uses actual one-byte iovecs; a later self-read sanity check is
+required before the foreign valid public-buffer test. This operation's denial is
+not labelled as AA read-class attribution. Ptrace/Yama context must be recorded
+by Root later; actual known-live foreign PROC READ_FSCREDS negatives remain
+mandatory even if memory-read or trace attempts return EPERM.
+
+Only each fixed operation's specified errno can be recorded as a permission
+denial. ESRCH/EFAULT/ENOSYS/ENOENT/EINVAL do not prove a valid peer memory-read or
+trace denial; aa_change_profile permits legitimate EACCES or EPERM. Unexpected
+success always aborts: close owned file/socket resources, and boundedly reap an
+unexpected safe-version child (attempt kill/reap after timeout). If reaping is
+denied or fails, retain that fact; it does not pretend no execution occurred.
+Root's later all-actor cgroup cleanup remains mandatory. No later probe or
+privilege/namespace restoration runs after an unexpected success.
