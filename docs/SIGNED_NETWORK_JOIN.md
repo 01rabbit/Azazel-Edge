@@ -469,3 +469,13 @@ return EACCES. This code does not address or bypass those permissions. The curre
 four-run experiment remains **COMMISSIONING_BLOCKED**. The importer checks are
 synthetic hardware-free tests with genuine ephemeral source/witness signatures;
 they do not establish an actual complete imported calculation or service effect.
+
+Native session identifiers also retain two explicit domains. Original signed
+wire and `authenticated_origin.session_ref` retain the exact 32 lowercase hex
+digits, including a leading digit. The existing measurement reference grammar
+requires a leading letter. Only the test bridge therefore names the linkage
+`native-session-<original-32-hex>` using `native_session_reference`; removing that
+fixed prefix recovers the original uniquely. The reader and four-record structural
+gate require this exact mapping. No original ID, signed byte, cursor, Outcome,
+clock or production measurement parser is changed, and no session is repaired or
+authenticated by adding the label.

@@ -690,7 +690,7 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
             projection=projection,
             event=event,
             kernel_boot_id=record["kernel_boot_id"],
-            session_ref=verifier.live_state.session,
+            session_ref=service.native_session_reference(verifier.live_state.session),
             clock=service.clock_binding(
                 context["clock_anchor"],
                 record["controller_start_anchor"],

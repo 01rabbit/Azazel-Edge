@@ -332,3 +332,29 @@ def test_expected_root_source_pins_must_be_full_exact_shape(source):
             namespace_inode=456,
             source_identity=source,
         )
+
+
+@pytest.mark.parametrize("raw", ["0" * 32, "9" * 32, "a" * 32, "f" * 32])
+def test_native_session_mapping_preserves_exact_raw_identity(raw):
+    mapped = service_bridge.native_session_reference(raw)
+    assert mapped == "native-session-" + raw
+    assert mapped.removeprefix("native-session-") == raw
+    from azazel_edge.benchmark.measurement import _ref
+
+    assert _ref(mapped) == mapped
+
+
+@pytest.mark.parametrize(
+    "raw", [True, None, 1, "", "A" * 32, "a" * 31, "a" * 33, "g" * 32, "a" * 31 + "\n"]
+)
+def test_native_session_mapping_refuses_malformed_original(raw):
+    with pytest.raises(BenefitInputError, match="exact raw native session"):
+        service_bridge.native_session_reference(raw)
+
+
+def test_native_session_mapping_is_injective_without_changing_originals():
+    originals = [f"{value:032x}" for value in range(256)]
+    saved = list(originals)
+    mapped = [service_bridge.native_session_reference(raw) for raw in originals]
+    assert len(set(mapped)) == len(originals) and originals == saved
+    assert [value.removeprefix("native-session-") for value in mapped] == originals

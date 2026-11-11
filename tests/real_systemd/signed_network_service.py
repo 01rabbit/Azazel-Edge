@@ -193,6 +193,19 @@ def recorded_root_probe(
     )
 
 
+def native_session_reference(raw):
+    """Injectively name a raw native session in the existing measurement domain.
+
+    Original wire and authenticated_origin.session_ref stay unchanged. This
+    explicit test-bridge label neither repairs nor authenticates a session.
+    """
+    need(
+        type(raw) is str and re.fullmatch("[0-9a-f]{32}", raw) is not None,
+        "exact raw native session required",
+    )
+    return "native-session-" + raw
+
+
 def measurement_record(
     manifest,
     assignment,
