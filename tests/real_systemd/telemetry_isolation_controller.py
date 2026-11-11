@@ -156,9 +156,27 @@ def _exchange(process, payload, prefix, output):
     return bytes(buffers["stdout"]), bytes(buffers["stderr"])
 
 
+def _receive_ready(process, path):
+    """Retain EVERY consumed byte, including the first offending bound byte."""
+    raw = bytearray()
+    deadline = time.monotonic() + 2
+    try:
+        while not raw.endswith(b"\n"):
+            remaining = deadline - time.monotonic()
+            LAB.need(
+                remaining > 0 and select.select([process.stdout], [], [], remaining)[0],
+                "ready absolute deadline",
+            )
+            chunk = os.read(process.stdout.fileno(), 16385 - len(raw))
+            raw.extend(chunk)
+            LAB.need(chunk and len(raw) <= 16384, "missing/oversized ready receipt")
+    finally:
+        LAB.save(path, bytes(raw))
+
+
 def _ready(process, mode, assets, baseline, output, tracked):
     counterparts = p.stdio_identity(process)
-    p.old.receive_ready(process, output / (mode + "-ready.raw"))
+    _receive_ready(process, output / (mode + "-ready.raw"))
     raw = setup._read(output / (mode + "-ready.raw"), 16384)[0]
     source = setup._read(Path(p.worker_argv(mode)[3]))[0]
     ready = frames.parse_ready(
@@ -251,6 +269,42 @@ def _close_namespace_fd(fd, device, inode):
         "namespace FD number reused; do not close foreign descriptor",
     )
     os.close(fd)
+
+
+def _reap_client(process):
+    """Bounded stop/reap of our Popen client only, never a unit/foreign PID."""
+    proof = dict(
+        pid=process.pid,
+        scope="owned_Root_Popen_client_only",
+        steps=[],
+        errors=[],
+        forced=False,
+        reaped=False,
+    )
+
+    def step(name, call):
+        try:
+            value = call()
+            proof["steps"].append(dict(operation=name, result=value))
+            return True, value
+        except BaseException as exc:
+            proof["steps"].append(dict(operation=name, error=type(exc).__name__))
+            proof["errors"].append(name + ":" + type(exc).__name__)
+            return False, None
+
+    ok, status = step("poll", process.poll)
+    if not ok or status is None:
+        proof["forced"] = True
+        proof["errors"].append("client_still_running_or_unknown_after_drain")
+        step("terminate", process.terminate)
+    ok, status = step("wait", lambda: process.wait(timeout=1))
+    if not ok:
+        proof["forced"] = True
+        step("kill", process.kill)
+        ok, status = step("kill_wait", lambda: process.wait(timeout=1))
+    proof["reaped"] = ok and type(status) is int
+    proof["returncode"] = status
+    return proof
 
 
 def run(output):
@@ -391,6 +445,29 @@ def run(output):
                 mode + " client drain",
                 lambda process=process, mode=mode: _exchange(
                     process, None, mode + "-cleanup", output
+                ),
+                critical=True,
+            )
+            reaped = attempt(
+                mode + " owned client reap",
+                lambda process=process: _reap_client(process),
+                critical=True,
+            )
+            attempt(
+                mode + " client reap receipt",
+                lambda mode=mode, reaped=reaped: LAB.save_json(
+                    output / (mode + "-client-reap.json"), reaped
+                ),
+                critical=True,
+            )
+            attempt(
+                mode + " client clean reap proof",
+                lambda reaped=reaped: LAB.need(
+                    type(reaped) is dict
+                    and reaped["reaped"]
+                    and not reaped["forced"]
+                    and reaped["errors"] == [],
+                    "Root client needed forced or unknown reap; retain namespaces",
                 ),
                 critical=True,
             )

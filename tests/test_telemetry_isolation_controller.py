@@ -96,12 +96,23 @@ def fixture(tmp_path, monkeypatch, fault=None):
         def __init__(self, mode):
             self.mode = mode
             self.returncode = None
+            self.pid = 900 if mode == "peer" else 901
             self.stdin = Stream()
             self.stdout = Stream()
             self.stderr = Stream()
 
         def poll(self):
             return self.returncode
+
+        def wait(self, timeout):
+            assert timeout <= 1
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
 
     def launch(mode, path):
         events.append("launch:" + mode)
@@ -137,6 +148,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
     def exchange(process, payload, prefix, path):
         events.append("exchange:" + prefix)
         if payload is None:
+            process.returncode = 0
             return b"", b""
         if process.mode == "probe":
             assert (
@@ -349,7 +361,7 @@ def test_ready_handoff_uses_only_pid_dumpable_projection_and_real_counterparts(
         calls.append("ready")
         c.LAB.save(path, raw(value))
 
-    monkeypatch.setattr(c.p.old, "receive_ready", receive)
+    monkeypatch.setattr(c, "_receive_ready", receive)
     monkeypatch.setattr(
         c.setup,
         "_read",
@@ -442,3 +454,104 @@ def test_reused_descriptor_is_not_closed_as_an_old_namespace_handle():
         assert os.fstat(fd).st_ino == info.st_ino
     finally:
         os.close(fd)
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_ready_overflow_retains_exact_consumed_prefix_and_keeps_stdin_open(
+    tmp_path, split
+):
+    prefix = b'{"kind":"ready","payload":"'
+    data = prefix + b"x" * 20000 + b'"}\n'
+    if split:
+        script = (
+            "import sys,time;sys.stdout.buffer.write("
+            + repr(prefix)
+            + ");sys.stdout.buffer.flush();time.sleep(.02);sys.stdout.buffer.write("
+            + repr(data[len(prefix) :])
+            + ");sys.stdout.buffer.flush();time.sleep(30)"
+        )
+    else:
+        script = (
+            "import sys,time;sys.stdout.buffer.write("
+            + repr(data)
+            + ");sys.stdout.buffer.flush();time.sleep(30)"
+        )
+    child = process(script)
+    try:
+        with pytest.raises(AssertionError, match="oversized ready"):
+            c._receive_ready(child, tmp_path / "ready.raw")
+        assert (tmp_path / "ready.raw").read_bytes() == data[:16385]
+        assert not child.stdin.closed
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+        for stream in (child.stdin, child.stdout, child.stderr):
+            stream.close()
+
+
+def test_first_oversized_ready_read_is_appended_before_size_rejection(
+    tmp_path, monkeypatch
+):
+    consumed = b"x" * 16385
+    monkeypatch.setattr(c.select, "select", lambda *a: ([42], [], []))
+    monkeypatch.setattr(c.os, "read", lambda fd, amount: consumed)
+    source = SimpleNamespace(stdout=SimpleNamespace(fileno=lambda: 42))
+    with pytest.raises(AssertionError, match="oversized ready"):
+        c._receive_ready(source, tmp_path / "first.raw")
+    assert (tmp_path / "first.raw").read_bytes() == consumed
+
+
+def test_controller_reaps_actual_stuck_owned_client_after_ready_and_drain_failures(
+    tmp_path, monkeypatch
+):
+    # This is an ordinary private test child, not a hardened actor/systemd unit.
+    real_ready = c._ready
+    real_exchange = c._exchange
+    output, events, instances = fixture(tmp_path, monkeypatch)
+    children = []
+    data = b"x" * 20000
+
+    def launch(mode, path):
+        assert mode == "peer"  # Oversize READY must prevent launching the probe.
+        script = (
+            "import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);sys.stdout.buffer.write("
+            + repr(data)
+            + ");sys.stdout.buffer.flush();time.sleep(30)"
+        )
+        child = process(script)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(c, "_launch", launch)
+    monkeypatch.setattr(c, "_ready", real_ready)
+    monkeypatch.setattr(c, "_exchange", real_exchange)
+    try:
+        with pytest.raises(AssertionError, match="oversized ready"):
+            c.run(output)
+        child = children[0]
+        # Acceptance assertions occur BEFORE emergency test-finally cleanup.
+        assert child.returncode is not None
+        with pytest.raises(ChildProcessError):
+            os.waitpid(child.pid, os.WNOHANG)
+        proof = json.loads((output / "peer-client-reap.json").read_bytes())
+        assert (
+            proof["pid"] == child.pid
+            and proof["reaped"] is True
+            and proof["forced"] is True
+        )
+        assert "kill" in [row["operation"] for row in proof["steps"]]
+        assert proof["errors"]  # Forced reap can NEVER enable namespace deletion.
+        assert "namespace-close" not in events and "all-invariants" in events
+        assert not (output / "final-result.json").exists()
+        assert (output / "peer-ready.raw").read_bytes() == data[:16385]
+        assert all(
+            stream.closed for stream in (child.stdin, child.stdout, child.stderr)
+        )
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            for stream in (child.stdin, child.stdout, child.stderr):
+                stream.close()
