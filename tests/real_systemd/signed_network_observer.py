@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
+import select
 from pathlib import Path
 import subprocess
 import sys
@@ -39,7 +41,23 @@ RUNTIME_SECONDS = 40
 STOP_SECONDS = 5
 
 
-def role_argv(mode):
+def role_argv(mode, *, telemetry_lab_v2=False):
+    need(type(telemetry_lab_v2) is bool, "closed telemetry selector required")
+    if telemetry_lab_v2:
+        import signed_network_telemetry_contract as c
+
+        spec = c.observer_spec(mode)
+        argv = [
+            "systemd-run",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            "--unit=" + spec["unit"],
+        ]
+        for key, value in spec["properties"].items():
+            argv.extend(["-p", key + "=" + value])
+        return argv + [c.ALIAS, "-I", "-B", c.SOURCE, "--worker", mode, c.CLI_FLAG]
     need(mode in ("initialize", "live"), "unknown fixed observer mode")
     return [
         "systemd-run",
@@ -88,20 +106,129 @@ def policy_material():
     )
 
 
-def worker(mode):
+def _telemetry_guard(mode):
+    """Self/source reads only; authenticated API material remains unopened."""
+    import signed_network_telemetry_contract as c
+    import telemetry_isolation_contract as identity_contract
+    from azazel_edge.outcome.confinement import enforce_capture
+
+    c.observer_spec(mode)
+    need(
+        sys.platform == "linux"
+        and Path(__file__).resolve() == Path(c.SOURCE)
+        and sys.executable == c.ALIAS
+        and sys.argv == [c.SOURCE, "--worker", mode, c.CLI_FLAG],
+        "fixed telemetry source/alias/argv required",
+    )
+    enforce_capture(c.PROFILE)
+    raw = Path("/proc/self/status").read_bytes()
+    need(len(raw) <= 65536, "bounded self status required")
+    rows = [row.split(":", 1) for row in raw.decode().splitlines()]
+    need(
+        all(len(row) == 2 for row in rows)
+        and len({row[0] for row in rows}) == len(rows),
+        "exact self status required",
+    )
+    fields = dict(rows)
+    need(
+        fields["Uid"].split() == fields["Gid"].split() == ["61002"] * 4,
+        "actual telemetry credentials differ",
+    )
+    libc = ctypes.CDLL(None, use_errno=True)
+    dumpable = libc.prctl(3, 0, 0, 0, 0)
+    need(dumpable >= 0, "actual dumpability unavailable")
+    identity = dict(
+        pid=int(fields["Pid"]),
+        tgid=int(fields["Tgid"]),
+        uid=os.getuid(),
+        gid=os.getgid(),
+        groups=os.getgroups(),
+        apparmor=c.PROFILE + " (enforce)",
+        no_new_privs=fields["NoNewPrivs"].strip() == "1",
+        dumpable=dumpable,
+        **{
+            key: int(fields[field], 16)
+            for key, field in (
+                ("cap_eff", "CapEff"),
+                ("cap_prm", "CapPrm"),
+                ("cap_amb", "CapAmb"),
+                ("cap_bnd", "CapBnd"),
+            )
+        },
+    )
+    identity_contract.validate_role_identity(identity)
+    need(identity["pid"] == os.getpid(), "actual self PID differs")
+    source, _ = read_regular(Path(c.SOURCE), owner=0, max_bytes=1024 * 1024)
+    kernel = g.boot()
+    lab.boot_reference(kernel)
+    return dict(
+        kind=c.READY_KIND,
+        role=c.ROLE,
+        mode=mode,
+        identity=identity,
+        kernel_boot_id=kernel,
+        source=c.SOURCE,
+        source_sha256=hashlib.sha256(source).hexdigest(),
+    )
+
+
+def _telemetry_pre_api(mode):
+    """Emit untrusted READY; bounded exact Root GO precedes all API operations."""
+    import signed_network_telemetry_contract as c
+
+    ready = _telemetry_guard(mode)
+    raw_ready = (
+        json.dumps(
+            ready, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+        + b"\n"
+    )
+    need(len(raw_ready) <= 16384, "bounded PREAPI READY required")
+    sys.stdout.buffer.write(raw_ready)
+    sys.stdout.buffer.flush()
+    consumed = bytearray()
+    try:
+        deadline = time.monotonic() + 2
+        while not consumed.endswith(b"\n"):
+            remaining = deadline - time.monotonic()
+            need(
+                remaining > 0
+                and select.select([sys.stdin.buffer], [], [], remaining)[0],
+                "PREAPI GO deadline",
+            )
+            chunk = os.read(sys.stdin.buffer.fileno(), len(c.GO) + 1 - len(consumed))
+            consumed.extend(chunk)
+            need(chunk and len(consumed) <= len(c.GO), "PREAPI GO EOF/overflow")
+        need(bytes(consumed) == c.GO, "exact PREAPI GO required")
+    except BaseException:
+        # Public control bytes only, bounded consumed prefix; Root owns retention.
+        sys.stderr.write(
+            json.dumps(dict(kind="pre_api_go_refused", consumed_hex=consumed.hex()))
+            + "\n"
+        )
+        sys.stderr.flush()
+        raise
+    return ready["identity"]
+
+
+def worker(mode, *, telemetry_lab_v2=False):
     from role_probe import status
     from azazel_edge.outcome.confinement import enforce_capture
 
     need(mode in ("initialize", "live"), "unknown fixed observer mode")
-    enforce_capture("edge400-observer")
-    identity = status()
-    need(
-        identity["uid"] == 61002
-        and set(identity["groups"]) <= {61002}
-        and identity["apparmor"] == "edge400-observer (enforce)"
-        and all(identity[k] == 0 for k in ("cap_eff", "cap_prm", "cap_amb")),
-        "observer identity mismatch",
-    )
+    need(type(telemetry_lab_v2) is bool, "closed telemetry selector required")
+    if telemetry_lab_v2:
+        identity = _telemetry_pre_api(mode)
+    else:
+        enforce_capture("edge400-observer")
+        identity = status()
+        need(
+            identity["uid"] == 61002
+            and set(identity["groups"]) <= {61002}
+            and identity["apparmor"] == "edge400-observer (enforce)"
+            and all(identity[k] == 0 for k in ("cap_eff", "cap_prm", "cap_amb")),
+            "observer identity mismatch",
+        )
     trust = TrustPolicy.from_file(g.BUNDLE / "trust.json", role="observer")
     d = trust.data
     need(
@@ -463,4 +590,6 @@ def effective_observer(namespace_identity, *, evidence_directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", required=True, choices=("initialize", "live"))
-    worker(parser.parse_args().worker)
+    parser.add_argument("--telemetry-lab-v2", action="store_true")
+    args = parser.parse_args()
+    worker(args.worker, telemetry_lab_v2=args.telemetry_lab_v2)

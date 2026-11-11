@@ -6,8 +6,8 @@ namespace identity, actual kernel boot UUID, externally frozen observer source
 SHA256 and an existing protected Root output directory. It requires the existing
 marked offline disposable-VM Root guard and explicit
 `EDGE_SIGNED_NETWORK_TELEMETRY=1`. It neither launches a process nor sends GO.
-The reserved exact worker argv is a comparator only: the future observer flag and
-fence are not implemented by this chunk.
+The fixed worker argv selects `--telemetry-lab-v2` explicitly for either initialize
+or live; the legacy selector remains unchanged. Root collection never sends GO.
 
 Before an API is opened, later reviewed orchestration may use this collector to
 retain the consumed READY prefix (including a bound-plus-one overflow byte), raw
@@ -28,3 +28,32 @@ been executed for this chunk. A separate reviewed worker/orchestrator and fresh
 VM commissioning must establish the joined authenticated API positive and
 negative behavior before any trial can be considered. Root source/archive trust
 is an external operator boundary; a caller-supplied digest is not an attestation.
+
+
+## Worker fence (code only; runtime commissioning remains required)
+
+The optional worker first verifies its fixed Linux source path, literal alias and
+argv, actual enforcing new label, all real/effective/saved UID/GID values,
+thread-group identity, empty capability sets, NNP, dumpability and actual boot.
+Only self/source/kernel guard reads occur here. It emits the exact public READY
+schema before opening trust, policy, telemetry, bounded input, journal, sidecar,
+witness or live API material. The Root controller must retain and validate its
+independent complete proof before supplying the exact public GO frame. There is
+no controller/GO sender in this chunk.
+
+GO has an absolute two-second deadline and a fixed bound plus one overflow byte.
+Malformed input, EOF, overflow or timeout aborts and emits the bounded consumed
+control prefix as a stderr diagnostic for Root retention. Successful GO rejoins
+the existing authenticated initialize/live body and terminal flow unchanged.
+The experiment horizon is not involved; the existing process limit
+remains 40 seconds. GO is neither durable input_ready nor API success.
+
+Focused tests use synthetic guard identities/source/time, ephemeral trust,
+synthetic witness callbacks and an explicit local input-owner adapter. The
+initialize success exercises real input/authentication/journal/recovery classes;
+the signed live terminal smoke uses existing synthetic API/witness callbacks.
+Neither constitutes an actual UID/LSM, live authenticated permission or runtime
+negative proof. Fresh joined-source commissioning must still demonstrate the
+required actual API positive, negative and terminal-close behaviors before any
+assignment is frozen. Authenticated v4 schema and persistence context are
+unchanged and do not cryptographically bind the observer label/interpreter.
