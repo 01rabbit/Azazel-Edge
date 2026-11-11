@@ -143,6 +143,7 @@ def compile_current(output, *, abi_sha256, interpreter_sha256):
             "--skip-kernel-load",
             "--skip-cache",
             "--stdout",
+            "--warn=all",
             "--Werror",
             str(SOURCE_POLICY),
         ],

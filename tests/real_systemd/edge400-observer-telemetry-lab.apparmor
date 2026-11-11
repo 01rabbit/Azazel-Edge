@@ -1,9 +1,9 @@
 # Optional NEW disposable-lab candidate; never loaded by default/product runtime.
 # Parser/kernel support and actual same-profile isolation remain UNPROVEN.
 abi <abi/4.0>,
-#include <tunables/global>
+include <tunables/global>
 profile edge400-observer-telemetry-lab /opt/edge400-runtime/bin/edge-observe-telemetry-lab {
-  #include <abstractions/base>
+  include <abstractions/base>
   / r,
   /opt/ r,
   /opt/edge400-runtime/ r,
