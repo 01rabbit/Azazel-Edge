@@ -174,3 +174,12 @@ missing, subtree or inconsistent views retain the scopes and a failed stop
 receipt. These failures never skip the bounded stop attempts for other actors.
 The future preparation/start phase must check this supported view upfront; a
 shutdown failure still attempts every fixed actor before retaining evidence.
+
+The fixed stop set also covers `edge400-signed-network-initialize.service`.
+Collected transient workers still receive a bounded stop attempt. A nonzero stop
+is acceptable only when both independently read states are exactly not-found,
+inactive, zero main/control PIDs and empty `ControlGroup`, and the canonical
+fixed unit cgroup also passes the full PID1-view emptiness check. Any read error,
+timeout, unknown state, loaded replacement or descendant remains a sticky failure;
+all other fixed actors still receive their stop attempt. This is not a generic
+nonzero-command-success exception or permission to address other units.

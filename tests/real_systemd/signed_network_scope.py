@@ -11,7 +11,8 @@ from azazel_edge.outcome.input_auth import read_regular
 from signed_network_plan import g, n, p, names, need, strict
 
 OBSERVER_UNIT = "edge400-signed-network-observer.service"
-ACTOR_UNITS = (OBSERVER_UNIT, g.UNIT, g.WITNESS, p.NET_UNIT)
+INITIALIZER_UNIT = "edge400-signed-network-initialize.service"
+ACTOR_UNITS = (OBSERVER_UNIT, INITIALIZER_UNIT, g.UNIT, g.WITNESS, p.NET_UNIT)
 PROPERTIES = ("LoadState", "ActiveState", "MainPID", "ControlPID", "ControlGroup")
 
 
@@ -344,6 +345,16 @@ def _group_empty(group):
         os.close(root)
 
 
+def _known_collected(state):
+    return state == dict(
+        LoadState="not-found",
+        ActiveState="inactive",
+        MainPID="0",
+        ControlPID="0",
+        ControlGroup="",
+    )
+
+
 def stop_systemd_actors():
     """Attempt every fixed actor; any gap prohibits later namespace cleanup.
 
@@ -364,7 +375,13 @@ def stop_systemd_actors():
                 dict(unit=unit, step="before", error=type(exc).__name__)
             )
         try:
-            n.command("systemctl", "stop", unit, timeout=3)
+            stopped = n.command("systemctl", "stop", unit, timeout=3, check=False)
+            need(type(stopped.returncode) is int, "unknown actor stop result")
+            row["stop_returncode"] = stopped.returncode
+            need(
+                stopped.returncode == 0 or _known_collected(row.get("before")),
+                "actor stop failed without known collected identity",
+            )
         except BaseException as exc:
             receipt["failures"].append(
                 dict(unit=unit, step="stop", error=type(exc).__name__)
@@ -389,9 +406,15 @@ def stop_systemd_actors():
             need(
                 "before" in row
                 and _group_empty(row["before"]["ControlGroup"])
-                and _group_empty(after["ControlGroup"]),
+                and _group_empty(after["ControlGroup"])
+                and _group_empty("/system.slice/" + unit),
                 "actor cgroup has live descendants or unknown identity",
             )
+            if row.get("stop_returncode"):
+                need(
+                    _known_collected(row.get("before")) and _known_collected(after),
+                    "nonzero stop is not independently absent before and after",
+                )
         except BaseException as exc:
             receipt["failures"].append(
                 dict(unit=unit, step="verify", error=type(exc).__name__)

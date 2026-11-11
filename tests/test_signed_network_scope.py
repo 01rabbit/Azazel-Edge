@@ -118,7 +118,11 @@ def test_refuses_scope_conflict_before_namespace_use_or_cleanup(
         path.rename(saved)
         path.symlink_to(saved)
     calls = []
-    monkeypatch.setattr(s.n, "command", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        s.n,
+        "command",
+        lambda *a, **k: (calls.append(a) or SimpleNamespace(returncode=0)),
+    )
     with pytest.raises((BenefitInputError, OSError, ValueError)):
         s.reopen_assets(work)
     assert calls == [] and all(p.exists() for p in handles.values())
@@ -128,7 +132,11 @@ def test_replaced_named_handle_refuses_before_each_operation(tmp_path, monkeypat
     work, _, handles = fixture(tmp_path, monkeypatch)
     assets, _ = s.reopen_assets(work)
     calls = []
-    monkeypatch.setattr(s.n, "command", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        s.n,
+        "command",
+        lambda *a, **k: (calls.append(a) or SimpleNamespace(returncode=0)),
+    )
     try:
         name = s.names()["edge"]
         path = handles[name]
@@ -159,7 +167,11 @@ def test_stops_all_fixed_actors_before_allowing_namespace_cleanup(monkeypatch):
     calls = []
     monkeypatch.setattr(s, "_state", lambda unit: state("/system.slice/" + unit))
     monkeypatch.setattr(s, "_group_empty", lambda group: True)
-    monkeypatch.setattr(s.n, "command", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(
+        s.n,
+        "command",
+        lambda *a, **k: (calls.append((a, k)) or SimpleNamespace(returncode=0)),
+    )
     receipt = s.stop_systemd_actors()
     assert receipt["status"] == "verified_stopped"
     assert [a[2] for a, _ in calls] == list(s.ACTOR_UNITS)
@@ -190,6 +202,7 @@ def test_actor_step_failure_still_attempts_every_unit_and_withholds(monkeypatch,
         calls.append(argv)
         if fault == "stop" and argv == ("systemctl", "stop", target):
             raise subprocess.TimeoutExpired(argv, 3)
+        return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(s, "_state", read)
     monkeypatch.setattr(s.n, "command", command)
@@ -393,7 +406,11 @@ def test_unknown_cgroup_view_still_stops_every_actor_and_forbids_cleanup(monkeyp
 
     monkeypatch.setattr(s, "_cgroup_view", refuse_view)
     calls = []
-    monkeypatch.setattr(s.n, "command", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        s.n,
+        "command",
+        lambda *a, **k: (calls.append(a) or SimpleNamespace(returncode=0)),
+    )
     receipt = s.stop_systemd_actors()
     assert receipt["status"] == "failed"
     assert [a for a in calls] == [("systemctl", "stop", unit) for unit in s.ACTOR_UNITS]
@@ -408,3 +425,74 @@ def test_kernel_mount_evidence_reads_to_eof_in_bounded_chunks(tmp_path, monkeypa
     assert s._kernel_text(path, 6) == "abcdef"
     with pytest.raises(BenefitInputError, match="exceeds bound"):
         s._kernel_text(path, 5)
+
+
+def test_fixed_initializer_and_observer_are_both_in_stop_and_cgroup_whitelist():
+    assert s.INITIALIZER_UNIT in s.ACTOR_UNITS and s.OBSERVER_UNIT in s.ACTOR_UNITS
+    assert len(s.ACTOR_UNITS) == 5
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "pre_read",
+        "post_read",
+        "pre_loaded",
+        "post_loaded",
+        "unknown_view",
+        "canonical_populated",
+        "timeout",
+    ],
+)
+def test_collected_nonzero_stop_only_with_independent_full_before_after_absence(
+    monkeypatch, fault
+):
+    monkeypatch.setattr(s.g, "guard", lambda: None)
+    unit = s.OBSERVER_UNIT
+    calls = []
+    reads = {}
+    groups = []
+    absent = dict(
+        LoadState="not-found",
+        ActiveState="inactive",
+        MainPID="0",
+        ControlPID="0",
+        ControlGroup="",
+    )
+
+    def read(name):
+        reads[name] = reads.get(name, 0) + 1
+        if name == unit:
+            if fault == "pre_read" and reads[name] == 1:
+                raise OSError()
+            if fault == "post_read" and reads[name] == 2:
+                raise OSError()
+            if (fault == "pre_loaded" and reads[name] == 1) or (
+                fault == "post_loaded" and reads[name] == 2
+            ):
+                return state()
+        return dict(absent)
+
+    def command(*argv, **kwargs):
+        calls.append(argv)
+        if fault == "timeout" and argv == ("systemctl", "stop", unit):
+            raise subprocess.TimeoutExpired(argv, 3)
+        return SimpleNamespace(
+            returncode=5 if argv == ("systemctl", "stop", unit) else 0
+        )
+
+    def empty(group):
+        groups.append(group)
+        if fault == "unknown_view":
+            raise BenefitInputError("unknown view")
+        return not (fault == "canonical_populated" and group == "/system.slice/" + unit)
+
+    monkeypatch.setattr(s, "_state", read)
+    monkeypatch.setattr(s.n, "command", command)
+    monkeypatch.setattr(s, "_group_empty", empty)
+    result = s.stop_systemd_actors()
+    assert result["status"] == ("verified_stopped" if fault is None else "failed")
+    assert all(("systemctl", "stop", name) in calls for name in s.ACTOR_UNITS)
+    if fault is None:
+        assert "/system.slice/" + unit in groups
