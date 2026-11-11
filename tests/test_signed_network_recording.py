@@ -231,3 +231,47 @@ def test_actual_collector_policy_mismatch_fails_before_calls(tmp_path):
                 interface="es",
             )
     assert input_resume.OutcomeTelemetryCollector is OutcomeTelemetryCollector
+
+
+@pytest.mark.parametrize("failure", ["append", "super_signal", "caught_bound"])
+def test_caught_operation_failure_never_writes_clean_end(tmp_path, failure):
+    path = tmp_path / "calls"
+    with r.record_collector(path, policy=POLICY, policy_source_ref="inline"):
+        collector = input_resume.OutcomeTelemetryCollector(
+            source=Source(),
+            policy=OutcomeTelemetryPolicy.from_mapping(POLICY),
+            interface="es",
+        )
+        if failure == "append":
+            original = r.CallRecording.append
+
+            def append(sink, kind, data):
+                if kind == "sample":
+                    raise OSError("after super before append")
+                return original(sink, kind, data)
+
+            with patch.object(r.CallRecording, "append", append):
+                with pytest.raises(OSError):
+                    collector.record_sample(epoch=100)
+            assert len(collector.samples) == 1
+        elif failure == "super_signal":
+
+            class StopObservation(BaseException):
+                pass
+
+            original = r.OutcomeTelemetryCollector.finalize_due
+
+            def finalize(self, *, epoch):
+                original(self, epoch=epoch)
+                raise StopObservation()
+
+            with patch.object(r.OutcomeTelemetryCollector, "finalize_due", finalize):
+                with pytest.raises(StopObservation):
+                    collector.finalize_due(epoch=100)
+        else:
+            with patch.object(r, "MAX_ROWS", 1):
+                with pytest.raises(BenefitInputError):
+                    collector.record_sample(epoch=100)
+    with pytest.raises(BenefitInputError, match="unfinished"):
+        r.read_calls(path)
+    assert input_resume.OutcomeTelemetryCollector is OutcomeTelemetryCollector

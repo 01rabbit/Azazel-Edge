@@ -49,6 +49,7 @@ class CallRecording:
         self.size = self.count = 0
         self.previous = "0" * 64
         self.closed = False
+        self.poisoned = False
         try:
             self.append("begin", metadata)
         except BaseException:
@@ -57,6 +58,14 @@ class CallRecording:
             raise
 
     def append(self, kind, data):
+        try:
+            need(not self.poisoned, "recording poisoned")
+            self._append(kind, data)
+        except BaseException:
+            self.poisoned = True
+            raise
+
+    def _append(self, kind, data):
         need(not self.closed, "recording already closed")
         unsigned = dict(seq=self.count, prev=self.previous, kind=kind, data=data)
         row = dict(unsigned, sha256=manifest_digest(unsigned))
@@ -78,7 +87,7 @@ class CallRecording:
     def close(self, *, complete):
         if not self.closed:
             try:
-                if complete:
+                if complete and not self.poisoned:
                     self.append("end", {})
             finally:
                 os.close(self.fd)
@@ -109,6 +118,25 @@ def record_collector(path, *, policy, policy_source_ref):
         ),
     )
 
+    state = dict(inflight=False, poisoned=False)
+
+    @contextmanager
+    def operation():
+        try:
+            need(
+                not state["inflight"] and not state["poisoned"],
+                "collector recording poisoned/inflight",
+            )
+            state["inflight"] = True
+            yield
+        except BaseException:
+            state["poisoned"] = True
+            raise
+        else:
+            # Only a successfully returned super call AND durable sidecar append
+            # may clear inflight. Caught signals/errors must leave no clean end.
+            state["inflight"] = False
+
     class RecordedCollector(OutcomeTelemetryCollector):
         def __init__(self, **kwargs):
             need(
@@ -118,56 +146,59 @@ def record_collector(path, *, policy, policy_source_ref):
             super().__init__(**kwargs)
 
         def record_sample(self, *, epoch=None):
-            need(epoch is not None, "explicit real loop epoch required")
-            start = time.monotonic_ns()
-            result = super().record_sample(epoch=epoch)
-            sink.append(
-                "sample",
-                dict(
-                    epoch=epoch,
-                    start_ns=start,
-                    end_ns=time.monotonic_ns(),
-                    sample=asdict(result) if result else None,
-                ),
-            )
-            return result
+            with operation():
+                need(epoch is not None, "explicit real loop epoch required")
+                start = time.monotonic_ns()
+                result = super().record_sample(epoch=epoch)
+                sink.append(
+                    "sample",
+                    dict(
+                        epoch=epoch,
+                        start_ns=start,
+                        end_ns=time.monotonic_ns(),
+                        sample=asdict(result) if result else None,
+                    ),
+                )
+                return result
 
         def observe_event(self, event, *, observed_epoch=None):
-            need(observed_epoch is not None, "explicit intake epoch required")
-            start = time.monotonic_ns()
-            result = super().observe_event(event, observed_epoch=observed_epoch)
-            sink.append(
-                "event",
-                dict(
-                    epoch=observed_epoch,
-                    start_ns=start,
-                    end_ns=time.monotonic_ns(),
-                    event=event,
-                    accepted=result,
-                ),
-            )
-            return result
+            with operation():
+                need(observed_epoch is not None, "explicit intake epoch required")
+                start = time.monotonic_ns()
+                result = super().observe_event(event, observed_epoch=observed_epoch)
+                sink.append(
+                    "event",
+                    dict(
+                        epoch=observed_epoch,
+                        start_ns=start,
+                        end_ns=time.monotonic_ns(),
+                        event=event,
+                        accepted=result,
+                    ),
+                )
+                return result
 
         def finalize_due(self, *, epoch=None):
-            need(epoch is not None, "explicit finalization epoch required")
-            start = time.monotonic_ns()
-            result = super().finalize_due(epoch=epoch)
-            sink.append(
-                "finalize",
-                dict(
-                    epoch=epoch,
-                    start_ns=start,
-                    end_ns=time.monotonic_ns(),
-                    outcomes=[r.to_dict() for r in result],
-                ),
-            )
-            return result
+            with operation():
+                need(epoch is not None, "explicit finalization epoch required")
+                start = time.monotonic_ns()
+                result = super().finalize_due(epoch=epoch)
+                sink.append(
+                    "finalize",
+                    dict(
+                        epoch=epoch,
+                        start_ns=start,
+                        end_ns=time.monotonic_ns(),
+                        outcomes=[r.to_dict() for r in result],
+                    ),
+                )
+                return result
 
     input_resume.OutcomeTelemetryCollector = RecordedCollector
     complete = False
     try:
         yield
-        complete = True
+        complete = not state["inflight"] and not state["poisoned"] and not sink.poisoned
     finally:
         input_resume.OutcomeTelemetryCollector = OutcomeTelemetryCollector
         sink.close(complete=complete)
