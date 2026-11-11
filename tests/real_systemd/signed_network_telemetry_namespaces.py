@@ -89,6 +89,68 @@ class NamespaceSetup:
         lab.need(not errors, "namespace invariants incomplete: " + str(errors))
 
     def prepare(self):
+        return self._prepare(service=False)
+
+    def prepare_service(self):
+        """Only the separate v2 assignment preparation selects this fixed topology."""
+        return self._prepare(service=True)
+
+    def _service_topology(self):
+        # Same fixed addresses/rules as Assets.setup; namespaces already owned.
+        n = setup.n
+        for peer, edge_addr, address in (
+            ("client", "10.91.1.1", n.ATK),
+            ("service", "10.91.3.1", n.SERVER),
+        ):
+            self._fence_all()
+            self.assets.ns(
+                "edge",
+                "ip",
+                "link",
+                "add",
+                "e" + peer[0],
+                "type",
+                "veth",
+                "peer",
+                "name",
+                "peer0",
+                "netns",
+                self.assets.names[peer],
+            )
+            for kind, iface, ip in (
+                ("edge", "e" + peer[0], edge_addr),
+                (peer, "peer0", address),
+            ):
+                self.assets.ns(kind, "ip", "addr", "add", ip + "/24", "dev", iface)
+                self.assets.ns(kind, "ip", "link", "set", iface, "up")
+        self.assets.ns("client", "ip", "addr", "add", n.LEGIT + "/32", "dev", "peer0")
+        for kind, network, gateway in (
+            ("client", "10.91.3.0/24", "10.91.1.1"),
+            ("service", "10.91.1.0/24", "10.91.3.1"),
+            ("service", n.LEGIT + "/32", "10.91.3.1"),
+            ("edge", n.LEGIT + "/32", n.ATK),
+        ):
+            self.assets.ns(kind, "ip", "route", "add", network, "via", gateway)
+        self.assets.ns("edge", "sysctl", "-qw", "net.ipv4.ip_forward=1")
+        for kind in self.assets.names:
+            for version in ("-4", "-6"):
+                lab.need(
+                    not self.assets.ns(
+                        kind, "ip", version, "route", "show", "default"
+                    ).stdout.strip(),
+                    "external/default route present",
+                )
+        rules = (
+            "add table inet azazel_edge\n"
+            "add chain inet azazel_edge input { type filter hook input priority 0; policy accept; }\n"
+            "add chain inet azazel_edge throttle { type filter hook prerouting priority -150; policy accept; }\n"
+            "add chain inet azazel_edge prerouting { type nat hook prerouting priority -100; policy accept; }\n"
+            f'add rule inet azazel_edge throttle ip saddr 203.0.113.250 counter comment "{self.assets.foreign}"\n'
+        )
+        self.assets.ns("edge", "nft", "-f", "-", input=rules)
+        self._fence_all()
+
+    def _prepare(self, *, service):
         lab.need(
             not self.ready and not self.failed and not self.closed,
             "new context only; no retry",
@@ -132,8 +194,11 @@ class NamespaceSetup:
                 )  # Existing intent + immediate FD confirmation.
                 self.assets.ns(kind, "ip", "link", "set", "lo", "up")
             self._fence_all()
-            self.assets.ns("edge", "ip", "link", "add", "es", "type", "dummy")
-            self.assets.ns("edge", "ip", "link", "set", "es", "up")
+            if service:
+                self._service_topology()
+            else:
+                self.assets.ns("edge", "ip", "link", "add", "es", "type", "dummy")
+                self.assets.ns("edge", "ip", "link", "set", "es", "up")
             self._fence_all()
             self.marker.start()  # Fresh dedicated child; marker alone is NOT a fence.
             self._fence_all()
