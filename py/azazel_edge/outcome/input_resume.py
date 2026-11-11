@@ -104,10 +104,9 @@ def _open_admission(journal):
 
 def _live_lifecycle_allowed(journal):
     authentication = journal.input_source.authentication
-    return (
-        authentication is not None
-        and authentication.policy.data["schema_version"] in ("outcome-input-trust/v3", "outcome-input-trust/v4")
-    )
+    return authentication is not None and authentication.policy.data[
+        "schema_version"
+    ] in ("outcome-input-trust/v3", "outcome-input-trust/v4")
 
 
 def miss_record(line, journal, policy):
@@ -241,7 +240,10 @@ def run_live_resumable(
     terminal_registration_sha256 = None
     if terminal_stop_registration is not None:
         from .input_terminal import validate_terminal_registration
-        terminal_registration_sha256 = validate_terminal_registration(authentication, terminal_stop_registration)
+
+        terminal_registration_sha256 = validate_terminal_registration(
+            authentication, terminal_stop_registration
+        )
     terminal = None
     result = None
     with BoundedInput(
@@ -296,10 +298,22 @@ def run_live_resumable(
                 data = source.snapshot(journal.input_position())
                 count = 0
                 for line in source.lines(journal.input_position(), data):
-                    parsed = _parse(line.raw) if terminal_registration_sha256 is not None else None
-                    if type(parsed) is dict and parsed.get("pipeline") == "rust_live_origin_v1":
+                    parsed = (
+                        _parse(line.raw)
+                        if terminal_registration_sha256 is not None
+                        else None
+                    )
+                    if (
+                        type(parsed) is dict
+                        and parsed.get("pipeline") == "rust_live_origin_v1"
+                    ):
                         from .input_terminal import prepare_terminal_stop
-                        terminal = prepare_terminal_stop(line, journal, registration_sha256=terminal_registration_sha256)
+
+                        terminal = prepare_terminal_stop(
+                            line,
+                            journal,
+                            registration_sha256=terminal_registration_sha256,
+                        )
                         break
                     observe_input(
                         line, journal, collector, live_floor=live_floor, now=time.time()
