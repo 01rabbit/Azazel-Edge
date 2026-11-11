@@ -396,3 +396,76 @@ These are canonical JSON artifacts, not claims about original stdout whitespace.
 A later client receive or either peer wait failure therefore keeps the already
 received independent service/client facts and still runs all cleanup. It does not
 turn an incomplete join into a successful measurement.
+
+## Read-only per-assignment import (code only; commissioning blocked)
+
+`signed_network_read.read_assignment_artifacts(expected_manifest_sha256,
+expected_start_head)` reads the **original protected guest layout** after the
+reviewed runner has finished cleanup. It has no CLI, write operation, subprocess,
+socket, journal reopen, witness store, key-material read, recovery or retry. It
+uses the same external Root source-archive verification boundary as preparation;
+self-observed source hashes are not an independent source attestation. It does not
+support arbitrary imported artifact maps, ownership repair or remapped archives.
+
+Original service/client audits are read independently before other prerequisites.
+Bounded journal Outcomes and raw call-file hashes are also retained on a failed
+run, explicitly labelled unverified until the original signed witness chain is
+checked. A missing/failed/withheld run never produces a measurement record. All
+successfully read original files keep their byte hashes; repeated and final reads
+must retain byte content and device/inode identity. Files are never rewritten.
+
+The importer verifies public v4 live-core enrollment and its exact frozen arm
+configuration, the complete original signed source, actual terminal wire and
+decoded bytes, explicit raw-UUID/systemd-hex/journal-boot mappings, full ordered
+source cursor coverage, genuine initialization plus live session, and durable
+terminal close. Pending/lost windows, recovery transitions, observed control
+frames, missed activity or incomplete source are unavailable. C0 must pass the
+same signed session, terminal, journal and witness checks; its existing baseline
+`edge_recording=None` exemption does not waive authentication or convert its
+native disabled/dry-run execution fact into an applied action.
+
+Every **original signed witness anchor** is checked with the existing public-key
+verifier and `ANCHOR_DOMAIN`, exact schema/counter/previous/trust digest, source
+prefix sequence/head/size/hash, journal prefix sequence/head/size/hash and actual
+journal device/inode. Genesis and the complete final prefixes must be present;
+the final signed state must exactly match the worker's acknowledged state. An
+unsigned state JSON, successful command, marker or matching task is insufficient.
+Import limits are deliberately smaller than runtime retention: 4 MiB/512 source
+records, 8 MiB/4096 journal frames and 8 MiB/4097 signed anchors, also bounded by
+the registered anchor limits. Prefix digest construction is incremental; public
+signature verification still processes the complete finite prefix history.
+
+Only exact original collector callbacks and their unchanged epochs qualify.
+Actual start/end controller and observer brackets plus per-call brackets pass
+the fixed 5 ms `qualify_clock` gate; this is **sampled anchor consistency**, never
+continuous unsampled clock proof. H remains the original 5 seconds, with the real
+client protocol origin 1.25 seconds later. No timestamp is shifted to repair a
+missing callback, pre-event Root probe, drift or sample/window gap.
+
+The separate Root baseline/active/absence receipts must retain their original
+launch PID, fixed namespace intent/confirmed identity, boot, source pins and full
+chain context. Candidate full owned-rule semantics and foreign-context preservation
+reuse the production parser; the observer receives no query capability or proxy.
+The original live journal Outcomes, output export and raw recorder remain unchanged.
+Existing `replay_calls` first checks the plain G5 projection with only its explicitly
+named policy-source-label equivalence, then creates a **separate Root-augmented
+G5 calculation**. Any projection mismatch or unavailable coverage withholds the
+record; it never replaces the actual live Outcome or its confounders.
+
+A successful import returns `status=calculation_available` and the existing
+`measurement_record`, **not a measurement PASS**, production admission, successful
+live observer NFT confirmation or resume authority. Existing `measure_experiment`
+will still apply its window, coverage, release and attribution gates. This reader
+never calls that four-assignment calculator prematurely. Cross-four freshness
+validation (boots/scopes/sessions/registration and public keys) remains a separate
+small pending component; Root must finish that validation before calling the
+existing calculator or RunLedger completion. No four-assignment source/manifest
+has been frozen and no assignment has run.
+
+The independent confined precheck has now established a concrete commissioning
+block: the unchanged enforcing observer label/capability/address-family settings
+can read `/proc/meminfo`, but `/proc/net/dev`, `/proc/loadavg` and `/proc/uptime`
+return EACCES. This code does not address or bypass those permissions. The current
+four-run experiment remains **COMMISSIONING_BLOCKED**. The importer checks are
+synthetic hardware-free tests with genuine ephemeral source/witness signatures;
+they do not establish an actual complete imported calculation or service effect.
