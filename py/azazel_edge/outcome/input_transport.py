@@ -1,5 +1,6 @@
 """Explicit Linux abstract witness address; no discovery, transition or fallback."""
 
+import errno
 import hashlib
 import socket
 import sys
@@ -81,6 +82,15 @@ def socket_namespace(sock):
         or sock.getsockname() not in ("", b"")
     ):
         raise OutcomeJournalError("unbound Unix stream witness socket required")
+    try:
+        sock.getpeername()
+    except OSError as exc:
+        if exc.errno != errno.ENOTCONN:
+            raise OutcomeJournalError(
+                "witness socket connection state unavailable"
+            ) from exc
+    else:
+        raise OutcomeJournalError("unconnected witness socket required")
     try:
         raw = sock.getsockopt(
             socket.SOL_SOCKET, getattr(socket, "SO_NETNS_COOKIE", 71), 8

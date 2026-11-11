@@ -1,6 +1,8 @@
 """Explicit transport contracts; ephemeral crypto, no namespace/role transitions."""
 
+import errno
 import hashlib
+import socket
 from io import BytesIO
 from unittest.mock import Mock, MagicMock
 
@@ -125,6 +127,7 @@ def socket_fixture(monkeypatch, *, raw=None, boot=None):
     sock = MagicMock()
     sock.family, sock.type = t.socket.AF_UNIX, t.socket.SOCK_STREAM
     sock.getsockname.return_value = ""
+    sock.getpeername.side_effect = OSError(errno.ENOTCONN, "unconnected")
     sock.getsockopt.return_value = (
         (123).to_bytes(8, t.sys.byteorder) if raw is None else raw
     )
@@ -150,7 +153,9 @@ def test_both_endpoints_refuse_before_bind_connect_store_or_pathname_access(
     if fault == "wrongns":
         sock.getsockopt.return_value = (124).to_bytes(8, t.sys.byteorder)
     elif fault == "missing":
-        sock.getsockopt.side_effect = OSError("unsupported SO_NETNS_COOKIE")
+        sock.getsockopt.side_effect = OSError(
+            errno.ENOPROTOOPT, "unsupported SO_NETNS_COOKIE"
+        )
     elif fault == "nonlinux":
         monkeypatch.setattr(t.sys, "platform", "darwin")
     elif fault == "badsize":
@@ -179,13 +184,23 @@ def test_both_endpoints_refuse_before_bind_connect_store_or_pathname_access(
     assert sock.__exit__.call_count == 2
 
 
+@pytest.mark.parametrize("cookie", [123, 2**63 + 7, 2**64 - 1])
 def test_matching_socket_cookie_address_is_exact_bounded_public_bytes(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, cookie
 ):
     p, _ = policy(tmp_path)
     sock = socket_fixture(monkeypatch)
+    sock.getsockopt.return_value = cookie.to_bytes(8, t.sys.byteorder)
+    p = TrustPolicy(
+        dict(
+            p.data,
+            witness_transport=t.transport(
+                p.data["scope_ref"], dict(cookie=cookie, kernel_boot_id=BOOT)
+            ),
+        )
+    )
     address = t.abstract_address(p, sock)
-    assert t.socket_namespace(sock) == dict(cookie=123, kernel_boot_id=BOOT)
+    assert t.socket_namespace(sock) == dict(cookie=cookie, kernel_boot_id=BOOT)
     sock.getsockopt.assert_called_with(
         t.socket.SOL_SOCKET, getattr(t.socket, "SO_NETNS_COOKIE", 71), 8
     )
@@ -211,3 +226,14 @@ def test_v4_keeps_real_signed_native_lifecycle_and_registration_binding(tmp_path
         SourceVerifier(p).verify(
             b"".join(raw.splitlines(keepends=True)[:-1]) + _json(altered) + b"\n"
         )
+
+
+def test_real_unnamed_connected_socketpair_is_not_an_unbound_endpoint(monkeypatch):
+    monkeypatch.setattr(t.sys, "platform", "linux")
+    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    with left, right:
+        assert left.getsockname() in ("", b"")
+        with pytest.raises(
+            OutcomeJournalError, match="unconnected witness socket required"
+        ):
+            t.socket_namespace(left)
