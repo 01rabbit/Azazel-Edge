@@ -49,6 +49,33 @@ def old_assets():
     return values
 
 
+def reject_unit_material(paths):
+    units = [C.role_spec(mode)["unit"] for mode in C.ROLES]
+    for parent in map(Path, paths):
+        LAB.need(
+            parent.is_absolute() and ".." not in parent.parts,
+            "physical absolute unit path required",
+        )
+        LAB.need(
+            not os.path.lexists(parent / "edge400-telemetry-isolation-.service.d"),
+            "preexisting deep candidate prefix material",
+        )
+        for unit in units:
+            LAB.need(
+                all(
+                    not os.path.lexists(parent / name)
+                    for name in (
+                        unit,
+                        unit + ".d",
+                        unit + ".wants",
+                        unit + ".requires",
+                        unit + ".upholds",
+                    )
+                ),
+                "preexisting candidate unit material",
+            )
+
+
 def guard(output):
     G.guard()
     LAB.need(os.environ.get(FLAG) == "1", "explicit NEW candidate opt-in required")
@@ -95,21 +122,7 @@ def guard(output):
     )
     paths = p.old.pre_mutation_checks()["unit_search_paths"]
     units = [C.role_spec(mode)["unit"] for mode in C.ROLES]
-    for parent in map(Path, paths):
-        for unit in units:
-            LAB.need(
-                all(
-                    not os.path.lexists(parent / name)
-                    for name in (
-                        unit,
-                        unit + ".d",
-                        unit + ".wants",
-                        unit + ".requires",
-                        unit + ".upholds",
-                    )
-                ),
-                "preexisting candidate unit material",
-            )
+    reject_unit_material(paths)
     for unit in (*units, G.UNIT, G.WITNESS):
         LAB.need(
             G.systemctl(
@@ -157,12 +170,13 @@ def guard(output):
         loaded_before=loaded,
         kernel_boot_id=G.boot(),
         account_status=locked.stdout.decode(),
+        unit_search_paths=paths,
         isolated_api_preflight=LAB.isolated_api_preflight(),
         source_archive_boundary="externally verified host and guest archive SHA; revision is not archive proof",
     )
 
 
-def _mkdir(path):
+def _mkdir(path, *, on_create=None):
     parent, name = open_parent(path, trusted_owner=0)
     try:
         os.mkdir(name, mode=0o700, dir_fd=parent)
@@ -176,6 +190,8 @@ def _mkdir(path):
                 and stat.S_ISDIR(actual.st_mode),
                 "new directory identity changed",
             )
+            if on_create:
+                on_create("created", actual)
             os.fchmod(fd, 0o755)
             os.fsync(fd)
             named = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -186,6 +202,9 @@ def _mkdir(path):
                 and stat.S_IMODE(named.st_mode) == 0o755,
                 "new directory replaced during normalization",
             )
+            os.fsync(parent)
+            if on_create:
+                on_create("complete", os.fstat(fd))
         finally:
             os.close(fd)
         os.fsync(parent)
@@ -193,7 +212,7 @@ def _mkdir(path):
         os.close(parent)
 
 
-def _new_file(path, raw, mode):
+def _new_file(path, raw, mode, *, on_create=None):
     parent, name = open_parent(path, trusted_owner=0)
     try:
         fd = os.open(
@@ -204,6 +223,8 @@ def _new_file(path, raw, mode):
         )
         try:
             identity = os.fstat(fd)
+            if on_create:
+                on_create("created", identity)
             LAB.need(os.write(fd, raw) == len(raw), "short exclusive write")
             os.fchmod(fd, mode)
             os.fsync(fd)
@@ -217,10 +238,139 @@ def _new_file(path, raw, mode):
                 "new owned file changed",
             )
             os.fsync(parent)
+            if on_create:
+                on_create("complete", os.fstat(fd))
         finally:
             os.close(fd)
     finally:
         os.close(parent)
+
+
+def _metadata(info):
+    return dict(
+        device=info.st_dev,
+        inode=info.st_ino,
+        uid=info.st_uid,
+        mode=info.st_mode,
+        nlink=info.st_nlink,
+        size=info.st_size,
+    )
+
+
+def intended_assets(output, image, policy):
+    planned = {str(output): dict(kind="directory", mode=0o700)}
+    for path in (G.BASE, G.BUNDLE, G.BUNDLE / "producer", G.BUNDLE / "witness"):
+        planned[str(path)] = dict(kind="directory", mode=0o755)
+    for path, data, mode in (
+        (Path(C.ALIAS), image, 0o755),
+        (NEW_POLICY, policy, 0o644),
+        *(
+            (Path(row["path"]), row["data"].encode(), row["mode"])
+            for row in p.canary_spec()
+        ),
+    ):
+        planned[str(path)] = dict(
+            kind="file",
+            mode=mode,
+            size=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        )
+    return planned
+
+
+def inventory_assets(baseline):
+    """Every intended path, including absent/unknown and confirmed partial files.
+
+    Unconfirmed/replaced nodes never supply contents; only our recorded FD's same
+    regular inode is read with a finite expected-size bound. No repair/delete.
+    """
+    inventory = {}
+    for path, spec in baseline["intended_assets"].items():
+        record = inventory[path] = dict(state="unknown")
+        parent = fd = None
+        try:
+            parent, name = open_parent(Path(path), trusted_owner=0)
+            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            record.update(state="present", metadata=_metadata(info))
+            created = baseline["asset_confirmations"].get(path, {})
+            record["confirmation"] = created
+            original = created.get("created", {})
+            same = (info.st_dev, info.st_ino) == (
+                original.get("device"),
+                original.get("inode"),
+            )
+            if (
+                spec["kind"] == "file"
+                and same
+                and stat.S_ISREG(info.st_mode)
+                and info.st_nlink == 1
+            ):
+                LAB.need(
+                    info.st_size <= spec["size"],
+                    "created file exceeds expected finite bound",
+                )
+                fd = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent
+                )
+                pinned = os.fstat(fd)
+                LAB.need(
+                    (pinned.st_dev, pinned.st_ino) == (info.st_dev, info.st_ino),
+                    "inventory file replaced",
+                )
+                raw = bytearray()
+                while len(raw) <= spec["size"]:
+                    part = os.read(fd, min(65536, spec["size"] + 1 - len(raw)))
+                    if not part:
+                        break
+                    raw.extend(part)
+                after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                LAB.need(
+                    len(raw) == info.st_size
+                    and (after.st_dev, after.st_ino) == (info.st_dev, info.st_ino),
+                    "inventory content/identity changed",
+                )
+                record["sha256"] = hashlib.sha256(raw).hexdigest()
+        except FileNotFoundError:
+            record["state"] = "absent"
+        except BaseException as exc:
+            record.update(state="unknown", error=type(exc).__name__)
+        finally:
+            for descriptor in (fd, parent):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except BaseException as exc:
+                        record.update(state="unknown", close_error=type(exc).__name__)
+    return inventory
+
+
+def validate_inventory(inventory, baseline):
+    LAB.need(
+        bool(baseline.get("intended_assets"))
+        and set(inventory) == set(baseline["intended_assets"]),
+        "incomplete intended inventory",
+    )
+    for path, spec in baseline["intended_assets"].items():
+        row = inventory[path]
+        facts = row.get("metadata", {})
+        confirmation = row.get("confirmation", {}).get("complete", {})
+        LAB.need(
+            row["state"] == "present"
+            and facts.get("uid") == 0
+            and (facts.get("device"), facts.get("inode"))
+            == (confirmation.get("device"), confirmation.get("inode"))
+            and stat.S_IMODE(facts.get("mode", 0)) == spec["mode"],
+            "missing/partial/unknown intended asset: " + path,
+        )
+        LAB.need(
+            stat.S_ISDIR(facts["mode"])
+            if spec["kind"] == "directory"
+            else stat.S_ISREG(facts["mode"])
+            and facts["nlink"] == 1
+            and facts["size"] == spec["size"]
+            and row.get("sha256") == spec["sha256"],
+            "intended asset type/content differs: " + path,
+        )
 
 
 def invariants(output, baseline, *, require_new=False):
@@ -229,13 +379,7 @@ def invariants(output, baseline, *, require_new=False):
     for name, operation in (
         ("parent", lambda: network.root_snapshot()),
         ("old_assets", old_assets),
-        (
-            "new_assets",
-            lambda: {
-                path: _read(Path(path), 64 * 1024 * 1024)[1]
-                for path in baseline.get("new_assets", {})
-            },
-        ),
+        ("new_assets", lambda: inventory_assets(baseline)),
         ("loaded_profiles", lambda: p.cg._kernel_text(PROFILES, 256 * 1024)),
     ):
         try:
@@ -248,9 +392,7 @@ def invariants(output, baseline, *, require_new=False):
             elif name == "old_assets":
                 LAB.need(value == baseline["old_assets"], "old assets changed")
             elif name == "new_assets":
-                LAB.need(
-                    value == baseline.get("new_assets", {}), "new staged assets changed"
-                )
+                validate_inventory(value, baseline)
             else:
                 actual, expected = (
                     collections.Counter(value.splitlines()),
@@ -268,11 +410,31 @@ def invariants(output, baseline, *, require_new=False):
 
 def stage(output):
     baseline = guard(output)
+    image, _ = _read(G.PYTHON.resolve(strict=True), 64 * 1024 * 1024, 0o755)
+    policy, _ = _read(SOURCE_POLICY)
+    baseline["intended_assets"] = intended_assets(output, image, policy)
+    baseline["asset_confirmations"] = {}
+
+    def confirm(path, phase, info):
+        key = str(path)
+        baseline["asset_confirmations"].setdefault(key, {})[phase] = _metadata(info)
+        number = list(baseline["intended_assets"]).index(key)
+        LAB.save_json(
+            output / f"asset-{number}-{phase}.json",
+            dict(path=key, phase=phase, metadata=_metadata(info)),
+        )
+
     p.old.private_output(output)
-    baseline["root_before"] = network.root_snapshot()
-    LAB.save_json(output / "root-before.json", baseline["root_before"])
-    LAB.save_json(output / "baseline.json", baseline)
     try:
+        fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            confirm(output, "created", os.fstat(fd))
+            confirm(output, "complete", os.fstat(fd))
+        finally:
+            os.close(fd)
+        baseline["root_before"] = network.root_snapshot()
+        LAB.save_json(output / "root-before.json", baseline["root_before"])
+        LAB.save_json(output / "baseline.json", baseline)
         p.collect_features(output, expected_abi_sha256=baseline["pins"]["ABI_SHA256"])
         for name, path in (
             ("yama", "/proc/sys/kernel/yama/ptrace_scope"),
@@ -302,8 +464,6 @@ def stage(output):
             and _read(output / "candidate-compile.stderr")[0] == b"",
             "current candidate compilation failed/warned",
         )
-        image, _ = _read(G.PYTHON.resolve(strict=True), 64 * 1024 * 1024, 0o755)
-        policy, _ = _read(SOURCE_POLICY)
         LAB.save_json(
             output / "install-intent.json",
             dict(
@@ -312,14 +472,35 @@ def stage(output):
                 profile=str(NEW_POLICY),
                 profile_sha256=hashlib.sha256(policy).hexdigest(),
                 public_nonkey_canaries=p.canary_spec(),
+                intended_assets=baseline["intended_assets"],
             ),
         )
-        _new_file(Path(C.ALIAS), image, 0o755)
-        _new_file(NEW_POLICY, policy, 0o644)
+        _new_file(
+            Path(C.ALIAS),
+            image,
+            0o755,
+            on_create=lambda phase, info: confirm(Path(C.ALIAS), phase, info),
+        )
+        _new_file(
+            NEW_POLICY,
+            policy,
+            0o644,
+            on_create=lambda phase, info: confirm(NEW_POLICY, phase, info),
+        )
         for path in (G.BASE, G.BUNDLE, G.BUNDLE / "producer", G.BUNDLE / "witness"):
-            _mkdir(path)
+            _mkdir(
+                path,
+                on_create=lambda phase, info, path=path: confirm(path, phase, info),
+            )
         for row in p.canary_spec():
-            _new_file(Path(row["path"]), row["data"].encode(), row["mode"])
+            _new_file(
+                Path(row["path"]),
+                row["data"].encode(),
+                row["mode"],
+                on_create=lambda phase, info, path=Path(row["path"]): confirm(
+                    path, phase, info
+                ),
+            )
         code, _ = p.old._retained_query(
             [
                 "apparmor_parser",
@@ -343,10 +524,8 @@ def stage(output):
             + collections.Counter({C.PROFILE + " (enforce)": 1}),
             "expected new loaded label only",
         )
-        baseline["new_assets"] = {
-            str(path): _read(path, 64 * 1024 * 1024)[1]
-            for path in (Path(C.ALIAS), NEW_POLICY)
-        }
+        baseline["new_assets"] = inventory_assets(baseline)
+        validate_inventory(baseline["new_assets"], baseline)
         LAB.save_json(output / "staged.json", baseline)
         return baseline
     except BaseException as exc:

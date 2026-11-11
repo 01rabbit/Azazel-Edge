@@ -109,16 +109,42 @@ def stage_fixture(tmp_path, monkeypatch, fault=None):
 
     monkeypatch.setattr(s.p.old, "_retained_query", query)
 
-    def write(path, data, mode):
+    def write(path, data, mode, *, on_create=None):
         assert (output / "root-before.json").exists() and (
             output / "install-intent.json"
         ).exists()
         assert str(path) not in installed
         calls.append("new:" + str(path))
         installed[str(path)] = data
+        info = SimpleNamespace(
+            st_dev=1,
+            st_ino=100 + len(installed),
+            st_uid=0,
+            st_mode=stat.S_IFREG | mode,
+            st_nlink=1,
+            st_size=len(data),
+        )
+        if on_create:
+            on_create("created", info)
+            on_create("complete", info)
 
     monkeypatch.setattr(s, "_new_file", write)
-    monkeypatch.setattr(s, "_mkdir", lambda path: calls.append("mkdir:" + str(path)))
+
+    def mkdir(path, *, on_create=None):
+        calls.append("mkdir:" + str(path))
+        info = SimpleNamespace(
+            st_dev=1,
+            st_ino=200 + len(calls),
+            st_uid=0,
+            st_mode=stat.S_IFDIR | 0o755,
+            st_nlink=2,
+            st_size=0,
+        )
+        if on_create:
+            on_create("created", info)
+            on_create("complete", info)
+
+    monkeypatch.setattr(s, "_mkdir", mkdir)
 
     def kernel(path, limit):
         return OLD + s.C.PROFILE + " (enforce)\n" if path == s.PROFILES else "1\n"
@@ -127,6 +153,21 @@ def stage_fixture(tmp_path, monkeypatch, fault=None):
     monkeypatch.setattr(
         s, "invariants", lambda *a, **k: calls.append("independent_invariants")
     )
+
+    def inventory(baseline):
+        values = {}
+        for path, spec in baseline["intended_assets"].items():
+            confirmation = baseline["asset_confirmations"][path]
+            facts = dict(confirmation["complete"])
+            facts["uid"] = 0
+            values[path] = dict(
+                state="present", metadata=facts, confirmation=confirmation
+            )
+            if spec["kind"] == "file":
+                values[path]["sha256"] = spec["sha256"]
+        return values
+
+    monkeypatch.setattr(s, "inventory_assets", inventory)
     return output, calls, installed
 
 
@@ -218,6 +259,7 @@ def virtual_root_files(monkeypatch, tmp_path, race=False):
             st_uid=0,
             st_mode=value.st_mode,
             st_nlink=value.st_nlink,
+            st_size=value.st_size,
         )
 
     def named(path, **kwargs):
@@ -279,3 +321,174 @@ def test_new_directory_fd_normalization_checks_named_identity(
         assert stat.S_IMODE(path.stat().st_mode) == 0o755
     with pytest.raises(FileExistsError):
         s._mkdir(path)
+
+
+@pytest.mark.parametrize("kind", ["directory", "file", "dangling"])
+def test_deep_systemd_prefix_refuses_lexists_without_mutation(tmp_path, kind):
+    path = tmp_path / "edge400-telemetry-isolation-.service.d"
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "file":
+        path.write_bytes(b"foreign")
+    else:
+        path.symlink_to(tmp_path / "missing")
+    with pytest.raises(AssertionError, match="deep candidate prefix"):
+        s.reject_unit_material([str(tmp_path)])
+    assert os.path.lexists(path) and len(list(tmp_path.iterdir())) == 1
+
+
+def real_inventory_stage(tmp_path, monkeypatch, fault):
+    """Real exclusive FD writes/inventory/invariants, virtual Root UID metadata.
+
+    Every path is a private test temporary. Kernel/Root guard/parser observations
+    remain synthetic; no AppArmor installation/loading command is executed.
+    """
+    from azazel_edge.outcome.input_auth import (
+        open_parent as parent_reader,
+        read_regular as regular_reader,
+    )
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    python = runtime / "python"
+    python.write_bytes(b"PUBLIC INTERPRETER IMAGE")
+    python.chmod(0o755)
+    aa = tmp_path / "aa"
+    aa.mkdir()
+    candidate = tmp_path / "candidate"
+    candidate.write_bytes(b"PUBLIC CANDIDATE PROFILE")
+    base = tmp_path / "lab"
+    monkeypatch.setattr(s.G, "BASE", base)
+    monkeypatch.setattr(s.G, "BUNDLE", base / "bundle")
+    monkeypatch.setattr(s.G, "PYTHON", python)
+    monkeypatch.setattr(s.C, "ALIAS", str(runtime / "new-alias"))
+    monkeypatch.setattr(s, "NEW_POLICY", aa / "new-policy")
+    monkeypatch.setattr(s, "SOURCE_POLICY", candidate)
+    baseline = dict(
+        pins=dict(ABI_SHA256="a" * 64),
+        old_assets={"old": "unchanged"},
+        loaded_before=OLD,
+    )
+    monkeypatch.setattr(s, "guard", lambda output: baseline)
+    monkeypatch.setattr(s.p.old, "private_output", lambda path: path.mkdir(mode=0o700))
+    monkeypatch.setattr(s.p, "collect_features", lambda *a, **k: None)
+    monkeypatch.setattr(s.network, "root_snapshot", lambda: {"root": "unchanged"})
+    monkeypatch.setattr(s, "old_assets", lambda: {"old": "unchanged"})
+    virtual_root_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        s,
+        "open_parent",
+        lambda path, trusted_owner: parent_reader(path, trusted_owner=os.geteuid()),
+    )
+    monkeypatch.setattr(
+        s,
+        "read_regular",
+        lambda path, **kw: regular_reader(path, **{**kw, "owner": os.geteuid()}),
+    )
+    loaded = []
+    monkeypatch.setattr(
+        s.p.cg,
+        "_kernel_text",
+        lambda path, limit: OLD + (s.C.PROFILE + " (enforce)\n" if loaded else "")
+        if path == s.PROFILES
+        else "1\n",
+    )
+
+    def query(argv, prefix, out):
+        if prefix == "candidate-load":
+            loaded.append(True)
+        s.LAB.save(
+            out / (prefix + ".stderr"),
+            b"warning" if fault == "loadwarning" and loaded else b"",
+        )
+        return 0, b"PUBLIC compiled fixture"
+
+    monkeypatch.setattr(s.p.old, "_retained_query", query)
+    original = s._new_file
+
+    def writing(path, data, mode, **kw):
+        if fault == "partial" and str(path) == s.C.ALIAS:
+            actual_write = os.write
+            monkeypatch.setattr(
+                s.os, "write", lambda fd, raw: actual_write(fd, raw[:3])
+            )
+        original(path, data, mode, **kw)
+        if fault == "alias" and str(path) == s.C.ALIAS:
+            raise RuntimeError("synthetic after first alias")
+
+    monkeypatch.setattr(s, "_new_file", writing)
+    return tmp_path / "output", baseline
+
+
+@pytest.mark.parametrize("fault", ["alias", "partial", "loadwarning"])
+def test_real_failure_inventory_covers_every_intended_path_and_partial_creation(
+    tmp_path, monkeypatch, fault
+):
+    output, baseline = real_inventory_stage(tmp_path, monkeypatch, fault)
+    with pytest.raises((RuntimeError, AssertionError)):
+        s.stage(output)
+    inventory = json.loads((output / "new_assets-after.json").read_bytes())
+    assert len(inventory) == 12 and set(inventory) == set(baseline["intended_assets"])
+    assert all(
+        row["state"] in ("present", "absent", "unknown") for row in inventory.values()
+    )
+    alias = inventory[s.C.ALIAS]
+    assert alias["state"] == "present" and "created" in alias["confirmation"]
+    assert alias["metadata"]["inode"] == alias["confirmation"]["created"]["inode"]
+    if fault == "partial":
+        assert (
+            alias["metadata"]["size"] == 3 and "complete" not in alias["confirmation"]
+        )
+        assert alias["sha256"] != baseline["intended_assets"][s.C.ALIAS]["sha256"]
+    if fault in ("alias", "partial"):
+        assert any(row["state"] == "absent" for row in inventory.values())
+        with pytest.raises(AssertionError):
+            s.validate_inventory(inventory, baseline)
+    else:
+        assert all(row["state"] == "present" for row in inventory.values())
+        for path in s.p.canary_spec():
+            assert (
+                inventory[path["path"]]["sha256"]
+                == baseline["intended_assets"][path["path"]]["sha256"]
+            )
+    assert (output / "install-intent.json").exists() and not (
+        output / "staged.json"
+    ).exists()
+    assert (output / "parent-after.json").exists() and (
+        output / "old_assets-after.json"
+    ).exists()
+    assert (output / "loaded_profiles-after.json").exists()
+    assert list(output.glob("asset-*-created.json"))
+
+
+def test_empty_or_unconfirmed_inventory_cannot_report_unchanged(tmp_path, monkeypatch):
+    with pytest.raises(AssertionError):
+        s.validate_inventory({}, dict(intended_assets={}))
+    path = tmp_path / "unconfirmed"
+    path.write_bytes(b"public")
+    from azazel_edge.outcome.input_auth import open_parent as parent_reader
+
+    virtual_root_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        s,
+        "open_parent",
+        lambda path, trusted_owner: parent_reader(path, trusted_owner=os.geteuid()),
+    )
+    baseline = dict(
+        intended_assets={
+            str(path): dict(
+                kind="file",
+                mode=0o644,
+                size=6,
+                sha256=hashlib.sha256(b"public").hexdigest(),
+            )
+        },
+        asset_confirmations={},
+    )
+    inventory = s.inventory_assets(baseline)
+    assert (
+        inventory[str(path)]["state"] == "present"
+        and "sha256" not in inventory[str(path)]
+    )
+    with pytest.raises(AssertionError):
+        s.validate_inventory(inventory, baseline)
