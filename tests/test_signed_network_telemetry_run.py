@@ -331,8 +331,9 @@ def test_query_worker_uses_real_validator_positional_signature(monkeypatch):
 
 
 @pytest.mark.parametrize("candidate", [False, True])
+@pytest.mark.parametrize("output_state", ["fresh", "existing", "dangling"])
 def test_direct_context_complete_lifecycle_real_service_capture_synthetic_actors(
-    tmp_path, monkeypatch, candidate
+    tmp_path, monkeypatch, candidate, output_state
 ):
     """Actual orchestration/decision/capture/parser; synthetic actors/source/clock/IO."""
     from contextlib import contextmanager
@@ -451,10 +452,25 @@ def test_direct_context_complete_lifecycle_real_service_capture_synthetic_actors
         ),
     )
 
+    # Root offline validation executes both reviewed physical guards unchanged.
+    # Host nonroot authoring uses only an explicit ownership adapter here.
+    preflight = run.observer.material.preflight.old
+    if os.geteuid() != 0:
+        monkeypatch.setattr(
+            preflight, "private_output", lambda output: output.mkdir(mode=0o700)
+        )
+    if output_state == "existing":
+        (work / "live").mkdir(mode=0o700)
+    elif output_state == "dangling":
+        (work / "live").symlink_to(work / "never-created")
+
     @contextmanager
     def live(output, **kwargs):
+        log.append("fake-live-entry")
         assert kwargs["initialization"] is ctx.initialization
-        output.mkdir()
+        assert output.is_dir() and output.stat().st_mode & 0o777 == 0o700
+        if os.geteuid() == 0:
+            run.observer.proof.p._output(output)
         launch = dict(
             client_launch_before_ns=clock.ns,
             client_launch_after_ns=clock.ns,
@@ -471,21 +487,27 @@ def test_direct_context_complete_lifecycle_real_service_capture_synthetic_actors
         log.append("natural-live-helper-return")
 
     monkeypatch.setattr(run.observer, "live", live)
-    result = run.run_telemetry_assignment(
-        work,
-        **{
-            k: "a" * 64
-            for k in (
-                "manifest_sha256",
-                "start_head",
-                "source_commit",
-                "archive_sha256",
-                "core_sha256",
-                "abi_sha256",
-                "interpreter_sha256",
-            )
-        },
-    )
+    pins = {
+        k: "a" * 64
+        for k in (
+            "manifest_sha256",
+            "start_head",
+            "source_commit",
+            "archive_sha256",
+            "core_sha256",
+            "abi_sha256",
+            "interpreter_sha256",
+        )
+    }
+    if output_state != "fresh":
+        with pytest.raises(FileExistsError):
+            run.run_telemetry_assignment(work, **pins)
+        assert "fake-live-entry" not in log
+        assert log[-1] == "direct-owned-context-close"
+        assert not (work / "run-facts.json").exists()
+        assert (work / "live").is_symlink() == (output_state == "dangling")
+        return
+    result = run.run_telemetry_assignment(work, **pins)
     assert result["status"] == "run_facts_complete"
     assert result["record"]["service_receipt"] and result["record"]["capture"]
     assert (
