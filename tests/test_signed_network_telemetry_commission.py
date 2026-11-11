@@ -390,7 +390,8 @@ class Case:
         )
         main.g.write(
             main.g.UNITS / main.g.WITNESS,
-            witness_unit(),
+            # The real armor writer appends the confinement argument itself.
+            witness_unit().replace(" --apparmor-profile edge400-witness", ""),
         )
         bundle = main.g.BUNDLE
         base, self.pk, self.wk, *_ = make_policy(
