@@ -187,3 +187,19 @@ partial numeric observations. Final JSON describes observations only, never a
 PASS, resume/admission authority, live trial result or AA-only denial attribution.
 These tests mock source/kernel/syscall observations explicitly; no actual role,
 hidepid/Yama/LSM or complete Root precheck result has been established.
+
+## Controller result-validator component
+
+`telemetry_isolation_result.py` adds pure fixed-frame validation only, before the
+Root controller is implemented. `parse_ready` checks a single bounded retained
+frame against Root's actual boot/frozen worker SHA, exact role marker and typed
+identity/public-buffer shape. `validate_result` requires unchanged canonical
+context and the exact ordered 38 operations, legitimate per-operation errnos,
+actual complete interface/system sample structure and coverage, self-read sanity,
+self-only numeric enumeration and explicitly unexercised setns. Unknown rows,
+bool/int/float substitutions, missing observations and partial/fatal results
+refuse. No acceptance flags or score are generated. Root must still authenticate
+the actual pipe/unit/source/mount/FD and before/after target-liveness bindings;
+caller-authored JSON does not become proof through these local checks. Tests use
+synthetic frames and the real telemetry parser on synthetic proc text, not a
+running role or actual kernel-access result.
