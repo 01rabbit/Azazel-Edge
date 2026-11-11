@@ -290,3 +290,9 @@ boot-local kernel metadata, not an inode, secret or proof of authority; pairing 
 with the actual boot UUID prevents treating a value from another boot as current.
 Separate confined Root probes establish permission availability only for their
 actual tested role/UID; they do not substitute for authenticated commissioning.
+
+The fixed read-only cutover proof runs its authorized observer subprocess with
+working directory `/`. Its UID, groups, script, environment and five-second
+timeout remain fixed. Caller-controlled modules in a writable working directory
+cannot substitute for witness verification. The protected interpreter, package
+path and installation remain required trust boundaries.
