@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -616,6 +617,61 @@ def ready(bundle, python, system):
     return p, r, python, code_refs
 
 
+def _ensure_dropin_directory(path):
+    """Set exact mode only on our newly created directory, through its owned FD.
+
+    Protected root-owned parents exclude other-role replacement. This does not
+    claim protection against a hostile root/same-authority directory replacer.
+    Existing names are validated unchanged, never repaired or followed.
+    """
+    from .input_service import check_directory
+
+    parent, name = open_parent(path, trusted_owner=0)
+    fd = None
+    try:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            check_directory(path, 0, 0o755)
+            return
+        created = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(created.st_mode)
+            or created.st_uid != 0
+            or stat.S_IMODE(created.st_mode) & ~0o700
+        ):
+            raise OutcomeJournalError(
+                "new drop-in directory identity/permissions unsafe"
+            )
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+
+        def same(mode):
+            opened = os.fstat(fd)
+            named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if any(
+                not stat.S_ISDIR(value.st_mode)
+                or value.st_uid != 0
+                or (value.st_dev, value.st_ino) != (created.st_dev, created.st_ino)
+                or stat.S_IMODE(value.st_mode) != mode
+                for value in (opened, named)
+            ):
+                raise OutcomeJournalError("new drop-in directory changed; no repair")
+
+        same(stat.S_IMODE(created.st_mode))
+        os.fchmod(fd, 0o755)
+        os.fsync(fd)
+        same(0o755)
+        os.fsync(parent)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent)
+
+
 class Switch:
     def __init__(self, bundle, python=None, system=None):
         require_root()
@@ -776,18 +832,7 @@ class Switch:
                         raise OutcomeJournalError(
                             "unit fragments changed while stopping"
                         )
-                    parent, name = open_parent(self.system.directory, trusted_owner=0)
-                    try:
-                        try:
-                            os.mkdir(name, 0o755, dir_fd=parent)
-                        except FileExistsError:
-                            pass
-                        os.fsync(parent)
-                    finally:
-                        os.close(parent)
-                    from .input_service import check_directory
-
-                    check_directory(self.system.directory, 0, 0o755)
+                    _ensure_dropin_directory(self.system.directory)
                     self._publish(target, body, expected)
                     note("profile_written")
                     self.system.reload()

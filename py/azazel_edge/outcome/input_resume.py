@@ -208,6 +208,7 @@ def run_live_resumable(
     input_max_bytes,
     input_max_records,
     authentication_policy=None,
+    terminal_stop_registration=None,
 ):
     if journal_directory is None:
         raise ValueError("input resume requires a journal directory")
@@ -237,6 +238,12 @@ def run_live_resumable(
         }:
             raise OutcomeJournalError("output aliases authentication storage")
         authentication = InputAuthentication(trust)
+    terminal_registration_sha256 = None
+    if terminal_stop_registration is not None:
+        from .input_terminal import validate_terminal_registration
+        terminal_registration_sha256 = validate_terminal_registration(authentication, terminal_stop_registration)
+    terminal = None
+    result = None
     with BoundedInput(
         input_path,
         max_bytes=input_max_bytes,
@@ -267,7 +274,7 @@ def run_live_resumable(
             if not math.isfinite(last_wall) or not math.isfinite(last_mono):
                 raise OutcomeJournalError("clock continuity unavailable")
             next_sample = last_mono
-            while True:
+            while terminal is None:
                 now = time.time()
                 mono = time.monotonic()
                 if (
@@ -289,12 +296,19 @@ def run_live_resumable(
                 data = source.snapshot(journal.input_position())
                 count = 0
                 for line in source.lines(journal.input_position(), data):
+                    parsed = _parse(line.raw) if terminal_registration_sha256 is not None else None
+                    if type(parsed) is dict and parsed.get("pipeline") == "rust_live_origin_v1":
+                        from .input_terminal import prepare_terminal_stop
+                        terminal = prepare_terminal_stop(line, journal, registration_sha256=terminal_registration_sha256)
+                        break
                     observe_input(
                         line, journal, collector, live_floor=live_floor, now=time.time()
                     )
                     count += 1
                     if count >= MAX_BATCH_RECORDS:
                         break
+                if terminal is not None:
+                    break  # Never sample/observe/finalize across the terminal boundary.
                 # Revalidate bytes before any result can be committed/emitted.
                 source.snapshot(journal.input_position())
                 end_wall = time.time()
@@ -333,3 +347,6 @@ def run_live_resumable(
                         max_bytes=max_output_bytes,
                     )
                 time.sleep(max(0.05, poll_seconds))
+        if terminal is not None:
+            result = terminal.after_journal_close(journal, source)
+    return result

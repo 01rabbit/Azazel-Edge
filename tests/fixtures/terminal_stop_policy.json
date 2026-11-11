@@ -1,0 +1,1 @@
+{"schema_version":"outcome-telemetry-policy/v1","policy_version":"terminal-stop-lab-v1","actions":{"throttle":{"metric":"interface_rx_bytes_delta","direction":"observe","target_or_range":{},"observation_window":{"pre_seconds":1,"post_seconds":1},"guardrails":[]}}}
