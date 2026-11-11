@@ -112,10 +112,11 @@ semantically different rule content is treated as an error and nothing is delete
 Multiple nft rules for the same source/scope remain independently releasable. A newer
 nft task must not supersede an older tagged rule, because both rules can coexist.
 
-### tc TBF — throttle
+### Legacy tc TBF — recovery only
 
-The current throttle uses the interface root qdisc, so only one root owner can be
-current. G1b adds a deterministic qdisc handle and records expected TBF semantics:
+The legacy throttle used the interface root qdisc, so only one root owner could
+be current. Current automatic throttles are nft flow limits; this path does not
+apply new tc roots. G1b adds a deterministic qdisc handle and records expected TBF semantics:
 
 - handle;
 - rate (`256 kbit/s`);
@@ -124,6 +125,12 @@ current. G1b adds a deterministic qdisc handle and records expected TBF semantic
 
 Release deletes the root qdisc only when readback matches the exact owned handle and
 TBF parameters. If another root qdisc/handle is present, it is not deleted.
+The complete qdisc readback must also be unambiguous: a matching root with an
+explicit child qdisc is refused because deleting the root would destroy that
+unowned subtree. Duplicate roots, malformed identity or unknown parent topology
+are verification failures, never verified absence. An independent clsact/ingress
+hook is preserved. See the [legacy tc virtual protocol](outcome-legacy-tc-confinement.md)
+for the separate AppArmor permission and real-kernel recovery checks.
 
 A newer successfully activated throttle may supersede an older throttle task for the
 same root qdisc resource. This supersession rule is not used for nft tasks.
