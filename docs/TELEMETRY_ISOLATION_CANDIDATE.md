@@ -2,8 +2,8 @@
 
 This is a separate lab commissioning candidate. A separate Root parser-only
 reference compiled the candidate with warnings fatal, without loading it. No new
-alias/role has run; the fixed worker is implemented, but Root orchestration and
-installation remain absent. No candidate role qualification is claimed. The original confined telemetry result remains **commissioning_blocked**:
+alias/role has run; the fixed worker and manual Root controller are implemented
+but have not executed against a candidate role. No candidate role qualification is claimed. The original confined telemetry result remains **commissioning_blocked**:
 netdev/loadavg/uptime EACCES, meminfo readable. Root's later stat-only measurement
 found `/proc/<worker-PID>/net/dev` UID/GID 0, regular 0444. It did not test an owner
 rule or worker access; never assume that inode belongs to UID61002.
@@ -204,7 +204,7 @@ caller-authored JSON does not become proof through these local checks. Tests use
 synthetic frames and the real telemetry parser on synthetic proc text, not a
 running role or actual kernel-access result.
 
-## Root staging component (no actor loop yet)
+## Root staging prerequisites
 
 `telemetry_isolation_setup.stage(output)` is callable code for a later explicitly
 reviewed Root run, not an automatic command. It requires the NEW
@@ -232,5 +232,52 @@ new-asset and loaded-profile checks even when one check or evidence write fails.
 No actors, namespaces, signer, real keys, witness, journal, trial or qualification
 are created by this staging component. Its tests stub Root tools/kernel metadata;
 no actual installation, policy load or candidate access test has been performed.
-The next controller component must compose this with both live roles and all
-cleanup proofs before returning any complete precheck result.
+The manual controller composes this with both live roles and all cleanup proofs
+before returning any complete precheck result; actual commissioning is unrun.
+
+
+## Manual one-case controller (code only, unrun)
+
+`telemetry_isolation_controller.run(output)` is the only manual Root composition;
+it has no CLI or VM/retry engine. Invoke only after complete source freeze,
+independent review, explicit new opt-in and externally staged/verified old account,
+profile and alias baseline. It calls guarded staging before creating two fixed
+namespaces with intent/confirmed identities and dummy es; no traffic or native
+core is launched. The private namespace workspace is added to the intended asset
+inventory before creation. All heavy setup precedes the fixed 15-second roles.
+
+Peer starts first, then probe. Root records three original FIFO counterparts,
+retains READY before strict parsing, and verifies typed effective settings plus
+actual source/identity/namespace/proc-view/FD evidence for each role. Only the exact
+`{pid,dumpable}` projection reaches the Root kernel collector. Root requires same
+UID/label, distinct Tgid/network namespace, stable known-live peer/PID1 before
+sending the fixed public-buffer frame, and stable targets afterward before peer
+stop. Raw replies, stderr, return codes and actual input-byte counts are retained
+before result parsing. Replies have a two-second deadline and finite stream caps;
+slow, malformed, missing or oversized output fails without retry or retuning.
+
+The exact transcript is **38 rows: 34 negative attempts**, self-read sanity, actual
+sample, enumeration, and explicitly unexercised setns. A complete worker JSON
+alone is insufficient. Only after transport/source/kernel/mount/FD/target bindings,
+full result validation and every cleanup/invariant gate may the controller return
+`new_role_precheck_complete` for this boot/process-thread-group case. It sets
+`authorizes_transition=False`, `experiment=False`, `production_admission=False`.
+The previous old-profile blocked result is retained and explicitly not retested.
+
+Finally, every fixed actor stop and full-PID1 cgroup/descendant proof is attempted.
+Root clients are drained/reaped and their pipes closed before namespace deletion.
+`actor-cleanup.json` is separate from reserved
+`namespace-evidence/cleanup.json`. Unknown cgroups, failed proof persistence,
+unreaped clients or unknown namespace residents prevent deletion; only matching
+owned FDs are closed, never reused foreign descriptor numbers. Known empty owned
+namespaces can be cleaned after a failed probe while its failure stays sticky.
+Parent/old/new-asset/loaded-profile invariant attempts run independently even after
+other cleanup or persistence failures. Failure retains raw evidence, named unknown
+scopes and the used VM; no partial result or repair/resume path is published.
+
+Controller tests use synthetic Root/namespace/actor observations and real private
+stdio echo children only, not hardened candidate actors. No actual profile load,
+role execution, hidepid qualification, trial or production admission is claimed.
+The three-FIFO rule applies to this stateless precheck only. A signed observer's
+journal/sidecar/witness lifecycle needs a separate reviewed pre-API fence design;
+do not silently reuse or expand this descriptor contract for that observer.
