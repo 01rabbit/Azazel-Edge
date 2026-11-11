@@ -34,9 +34,9 @@ The modules live under `tests/real_systemd`. The phase script's fixed namespace
 preparation child, run script's fixed Root-query child and observer script's fixed
 initialize/live roles are internal unit entrypoints, not general operator CLIs.
 The following sequence describes the reviewed protocol; it does not authorize
-execution while commissioning is blocked. Complete end-to-end synthetic
-reader-to-calculator composition is still under development; do not infer a
-positive calculation result from component unit tests.
+execution while commissioning is blocked. A complete synthetic
+reader-to-calculator composition is tested below. This exercises the data
+contracts; it does not qualify the blocked real observer or authorize a trial.
 
 ## Freeze and provision before any assignment
 
@@ -240,3 +240,39 @@ authentication of caller-authored JSON or flags**. Only then may Root pass
 `{"manifest_sha256": manifest_digest(manifest), "records": records}` to existing
 `measure_experiment` and finish existing RunLedger receipts. That calculator's
 window/coverage/release/attribution/5 ms gates and withhold behavior remain unchanged.
+
+
+## Synthetic composition validation
+
+`tests/test_signed_network_composition.py` constructs four explicitly synthetic
+assignments in the frozen two-pair order, with distinct ephemeral producer and
+witness keys, boots, scopes, sessions and registrations. It uses real Ed25519
+verification, public registration checks (including physical native-input paths
+when run as root), journal-prefix signatures, collector calls and their durable
+sidecar recorder, then the full reader, freshness gate and unchanged existing
+`measure_experiment`. Signature, replay, clock, service and measurement validators
+are not replaced with success stubs. Native-session inputs include both digit and
+letter prefixes; original signed identifiers remain unchanged.
+
+Telemetry, clock sources and operator/namespace/stop/readback receipts are
+synthetic protocol fixtures. The collector has no journal persistence attached;
+journal frames and witness anchors are assembled and signed fixture material.
+This does **not** exercise an actual ObservationJournal/WitnessStore service,
+Linux service account, kernel enforcement, native provider or network workload.
+
+All 13 composition tests passed in an offline Linux-root container with zero
+capabilities, no new privileges, read-only source/root filesystem and private
+scratch storage. The positive case traverses all four unchanged reader results,
+returns the same measurement objects from the freshness gate, and reaches the
+existing controlled pilot calculation with no integrity rejections and two
+complete pairs. Negative cases retain original service/live facts while refusing
+malformed signed closes, missing terminal records in either arm, wrong callback
+bytes/order, early probes, incomplete or out-of-horizon coverage, excessive timing
+uncertainty and missing client audits. Missing release remains a downstream
+measurement withholding condition even if import can produce calculation inputs.
+One complete pair cannot replace the four registered assignments.
+
+The final combined offline Linux-root regression passed **340 tests**. Earlier
+root-only fixture-path failures and the independently discovered malformed-close
+acceptance were retained, corrected and revalidated; validators were not bypassed.
+The real old-profile commissioning result at the top remains blocked.
