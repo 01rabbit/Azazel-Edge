@@ -34,7 +34,7 @@ def public_auth_binding():
     data = trust.data
     origin = strict(origin_raw)
     need(
-        data["schema_version"] == "outcome-input-trust/v3"
+        data["schema_version"] in ("outcome-input-trust/v3", "outcome-input-trust/v4")
         and [data[k] for k in ("producer_uid", "observer_uid", "witness_uid")]
         == [61001, 61002, 0],
         "fixed public trust role context required",
@@ -57,6 +57,11 @@ def public_auth_binding():
         trust_schema=data["schema_version"],
         origin_schema=origin["schema_version"],
         origin_mode=origin["mode"],
+        **(
+            {"witness_transport": data["witness_transport"]}
+            if data["schema_version"] == "outcome-input-trust/v4"
+            else {}
+        ),
         **{
             k: data[k]
             for k in (

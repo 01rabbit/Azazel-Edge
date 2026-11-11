@@ -19,6 +19,7 @@ SOURCE_POLICY = SRC / "tests/real_systemd/edge400-observer-telemetry-lab.apparmo
 INSTALLED_POLICY = Path("/etc/apparmor.d") / role.PROFILE
 FLAG = "EDGE_SIGNED_NETWORK_TELEMETRY"
 SOURCE_FILES = (
+    "signed_network_telemetry_transport.py",
     "signed_network_plan.py",
     "signed_network_telemetry_contract.py",
     "signed_network_telemetry_binding.py",
@@ -50,7 +51,19 @@ def pin(value):
 
 def source_paths():
     return [SRC / "tests/real_systemd" / name for name in SOURCE_FILES] + [
-        SOURCE_POLICY
+        SOURCE_POLICY,
+        *(
+            SRC / "py/azazel_edge/outcome" / (name + ".py")
+            for name in (
+                "input_transport",
+                "input_auth",
+                "input_witness",
+                "input_service",
+                "input_live",
+                "input_resume",
+                "input_terminal",
+            )
+        ),
     ]
 
 

@@ -65,8 +65,12 @@ def _base_created(output):
         os.close(parent)
 
 
-def _configure(callback, created):
+def _configure(callback, created, namespace_identity):
     original = g.write
+    namespace = dict(
+        zip(("device", "inode"), initializer.proof.legacy._pair(namespace_identity))
+    )
+    lab.need(all(v > 0 for v in namespace.values()), "owned EDGE namespace required")
 
     def protected_write(path, data, mode=0o644):
         if path == g.BASE / "native/protected.yaml":
@@ -88,6 +92,13 @@ def _configure(callback, created):
                 "exact current witness command required",
             )
             data = data.replace(expected, expected.replace(" -I -m ", " -I -B -m "), 1)
+            lab.need(
+                "NetworkNamespacePath=" not in data,
+                "witness namespace already configured",
+            )
+            data += (
+                "\n[Service]\nNetworkNamespacePath=" + setup.role.NSFS_TARGETS[0] + "\n"
+            )
         result = original(path, data, mode)
         if path in (g.UNITS / g.UNIT, g.UNITS / g.WITNESS):
             created(path, data)
@@ -95,6 +106,15 @@ def _configure(callback, created):
 
     g.write = protected_write  # BEFORE provider captures its template writer.
     plan.p.configure()
+    prepare = g.prepare
+
+    def prepare_abstract(*args, **kwargs):
+        lab.need(
+            "witness_network_namespace" not in kwargs, "fixed owned namespace only"
+        )
+        return prepare(*args, **kwargs, witness_network_namespace=namespace)
+
+    g.prepare = prepare_abstract
     g.ENV.clear()
     g.ENV.update(plan.native_environment("c0"))
     g.observer = callback
@@ -335,7 +355,7 @@ def commission_telemetry(
                 ),
             )
 
-        _configure(initialize, created)
+        _configure(initialize, created, pair)
         lab.need(not os.path.lexists(g.BASE), "new scope only")
         lab.save_json(
             output / "auth-scope-create-intent.json",

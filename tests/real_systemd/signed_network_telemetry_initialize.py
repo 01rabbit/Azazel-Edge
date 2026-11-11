@@ -19,6 +19,7 @@ import signed_network_plan as plan
 import signed_network_observer as observer
 import signed_network_telemetry_contract as role
 import signed_network_telemetry_material as material
+from signed_network_telemetry_transport import witness_binding
 from signed_network_telemetry_binding import public_auth_binding
 import signed_network_telemetry_proof as proof
 import signed_network_scope as scope
@@ -144,7 +145,7 @@ def prelaunch_unit_material(mode, output):
     return rows
 
 
-def _current_binding(*, current, namespace, source_sha256, kernel):
+def _current_binding(*, current, namespace, source_sha256, kernel, output, phase):
     """Fixed shared lab metadata only; callers independently verify inputs.
 
     No dynamic role/path selectors or cryptographic scope/label claim. Return
@@ -162,6 +163,9 @@ def _current_binding(*, current, namespace, source_sha256, kernel):
         roles={mode: role.observer_spec(mode) for mode in ("initialize", "live")},
         policy_file_sha256=hashlib.sha256(policy_raw).hexdigest(),
         policy_sha256=plan.manifest_digest(payload),
+    )
+    binding["witness_actor"] = witness_binding(
+        binding["public_auth"], namespace, output, phase
     )
     return binding, policy_raw
 
@@ -209,7 +213,12 @@ def initialize(
     kernel = g.boot()
     lab.boot_reference(kernel)
     binding, policy_raw = _current_binding(
-        current=current, namespace=namespace, source_sha256=source_sha256, kernel=kernel
+        current=current,
+        namespace=namespace,
+        source_sha256=source_sha256,
+        kernel=kernel,
+        output=output,
+        phase="initialize-initial",
     )
     argv = observer.role_argv("initialize", telemetry_lab_v2=True)
     lab.save_json(output / "initializer-intent.json", dict(argv=argv, binding=binding))
@@ -257,6 +266,11 @@ def initialize(
         lab.need(
             auth_before_go == binding["public_auth"],
             "public auth context changed before GO",
+        )
+        lab.need(
+            witness_binding(auth_before_go, namespace, output, "initialize-before-go")
+            == binding["witness_actor"],
+            "witness changed before initializer GO",
         )
         lab.save_json(
             output / "initializer-verified-bundle.json",
@@ -312,6 +326,11 @@ def initialize(
         lab.need(
             auth_after_init == binding["public_auth"],
             "public auth context changed after initialization",
+        )
+        lab.need(
+            witness_binding(auth_after_init, namespace, output, "initialize-after-init")
+            == binding["witness_actor"],
+            "witness changed after initialization",
         )
         result = dict(
             initialization=value,

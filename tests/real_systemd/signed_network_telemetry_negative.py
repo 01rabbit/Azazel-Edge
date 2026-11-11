@@ -28,14 +28,15 @@ class SyntheticPrepare:
 def synthetic_prepare_frame(policy, *, kernel_boot_id, session_ref):
     """One context-correct prepare envelope, deliberately unauthenticatable.
 
-    Uses only a current public v3 policy, actual raw boot UUID and caller's fresh
+    Uses only a current public v3/v4 policy, actual raw boot UUID and caller's fresh
     lowercase native session ID. It creates no lifecycle/sequence acceptance.
     """
     if type(policy) is not TrustPolicy:
         raise OutcomeJournalError("explicit public TrustPolicy required")
     data = policy.data
     if (
-        data["schema_version"] != "outcome-input-trust/v3"
+        data["schema_version"]
+        not in ("outcome-input-trust/v3", "outcome-input-trust/v4")
         or [data[k] for k in ("producer_uid", "observer_uid", "witness_uid")]
         != [61001, 61002, 0]
         or type(kernel_boot_id) is not str

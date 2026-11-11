@@ -266,7 +266,12 @@ def live(
     kernel = g.boot()
     lab.boot_reference(kernel)
     binding, _ = init._current_binding(
-        current=current, namespace=namespace, source_sha256=source_sha256, kernel=kernel
+        current=current,
+        namespace=namespace,
+        source_sha256=source_sha256,
+        kernel=kernel,
+        output=output,
+        phase="live-initial",
     )
     _initialized(initialization, binding)
     argv = init.observer.role_argv("live", telemetry_lab_v2=True)
@@ -308,6 +313,8 @@ def live(
                 namespace=init._namespace(namespace_fd, namespace_identity),
                 source_sha256=source_sha256,
                 kernel=g.boot(),
+                output=output,
+                phase="live-" + phase,
             )
             lab.save_json(output / ("live-binding-" + phase + ".json"), sampled)
             lab.need(
