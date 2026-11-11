@@ -109,7 +109,15 @@ def _query_worker(pins):
         os.environ.get("EDGE_SIGNED_NETWORK_TELEMETRY") == "1" and os.geteuid() == 0,
         "explicit v2 Root query required",
     )
-    inputs = validated_telemetry_inputs(**pins)
+    inputs = validated_telemetry_inputs(
+        pins["manifest_sha256"],
+        pins["start_head"],
+        **{
+            key: value
+            for key, value in pins.items()
+            if key not in ("manifest_sha256", "start_head")
+        },
+    )
     prepared = old._json(phase.WORK / "prepared.json")
     records = [
         old.scope.load(path)
