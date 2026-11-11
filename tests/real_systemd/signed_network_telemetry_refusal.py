@@ -37,7 +37,14 @@ def refuse_synthetic_input(
     output = Path(output)
     namespaces = main.NamespaceSetup(output, baseline)
     owned, tracked, initialized, failure, evidence = set(), {}, None, None, None
-    original = (g.write, g.prepare, g.observer, dict(g.ENV), plan.p.a.NATIVE)
+    original = (
+        g.write,
+        g.prepare,
+        g.observer,
+        dict(g.ENV),
+        plan.p.a.NATIVE,
+        g.Systemd.witness,
+    )
     cleanup, namespace_cleanup = None, None
     try:
         namespaces.prepare()
@@ -87,7 +94,7 @@ def refuse_synthetic_input(
                 ),
             )
 
-        main._configure(initialize, created, pair)
+        main._configure(initialize, created, pair, owner=namespaces, output=output)
         lab.need(not os.path.lexists(g.BASE), "new scope only")
         lab.save_json(
             output / "auth-scope-create-intent.json",
@@ -184,7 +191,14 @@ def refuse_synthetic_input(
                 "outer namespace cleanup incomplete",
             ),
         )
-        g.write, g.prepare, g.observer, environment, plan.p.a.NATIVE = original
+        (
+            g.write,
+            g.prepare,
+            g.observer,
+            environment,
+            plan.p.a.NATIVE,
+            g.Systemd.witness,
+        ) = original
         g.ENV.clear()
         g.ENV.update(environment)
         if errors:

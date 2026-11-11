@@ -14,6 +14,7 @@ import signed_network_telemetry_commission_setup as setup
 from signed_network_telemetry_namespaces import NamespaceSetup
 import signed_network_telemetry_initialize as initializer
 from signed_network_telemetry_live import live
+from signed_network_telemetry_switch_witness import WitnessProof
 import signed_network_read as reader
 from telemetry_isolation_result import _sample
 from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier, read_regular
@@ -65,7 +66,7 @@ def _base_created(output):
         os.close(parent)
 
 
-def _configure(callback, created, namespace_identity):
+def _configure(callback, created, namespace_identity, *, owner, output):
     original = g.write
     namespace = dict(
         zip(("device", "inode"), initializer.proof.legacy._pair(namespace_identity))
@@ -115,6 +116,13 @@ def _configure(callback, created, namespace_identity):
         return prepare(*args, **kwargs, witness_network_namespace=namespace)
 
     g.prepare = prepare_abstract
+    witness = g.Systemd.witness
+    proof_adapter = WitnessProof(owner, output)
+
+    def witness_in_edge(system, bundle, policy):
+        return proof_adapter.run(witness, system, bundle, policy)
+
+    g.Systemd.witness = witness_in_edge
     g.ENV.clear()
     g.ENV.update(plan.native_environment("c0"))
     g.observer = callback
@@ -306,7 +314,14 @@ def commission_telemetry(
     output = Path(output)
     namespaces = NamespaceSetup(output, baseline)  # Kept before any prepare mutation.
     owned, tracked, initialized, failure, evidence = set(), {}, None, None, None
-    original = (g.write, g.prepare, g.observer, dict(g.ENV), plan.p.a.NATIVE)
+    original = (
+        g.write,
+        g.prepare,
+        g.observer,
+        dict(g.ENV),
+        plan.p.a.NATIVE,
+        g.Systemd.witness,
+    )
     try:
         namespaces.prepare()
         fd, pair = namespaces.edge()
@@ -355,7 +370,7 @@ def commission_telemetry(
                 ),
             )
 
-        _configure(initialize, created, pair)
+        _configure(initialize, created, pair, owner=namespaces, output=output)
         lab.need(not os.path.lexists(g.BASE), "new scope only")
         lab.save_json(
             output / "auth-scope-create-intent.json",
@@ -440,7 +455,14 @@ def commission_telemetry(
         if errors:
             namespaces.failed = True
         attempt("namespace/marker close", namespaces.close)
-        g.write, g.prepare, g.observer, environment, plan.p.a.NATIVE = original
+        (
+            g.write,
+            g.prepare,
+            g.observer,
+            environment,
+            plan.p.a.NATIVE,
+            g.Systemd.witness,
+        ) = original
         g.ENV.clear()
         g.ENV.update(environment)
         if errors:
