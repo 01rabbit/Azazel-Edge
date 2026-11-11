@@ -112,22 +112,25 @@ def _sample(sample):
         and all(type(v) is int and v >= 0 for v in sample["network"].values()),
         "actual complete interface counters required",
     )
-    keys = {
-        "load1",
-        "load5",
-        "load15",
+    integers = {
         "memory_total_kib",
         "memory_available_kib",
         "swap_total_kib",
         "swap_free_kib",
-        "uptime_seconds",
     }
+    floats = {"load1", "load5", "load15", "uptime_seconds"}
     _need(
         type(sample["system"]) is dict
-        and set(sample["system"]) == keys
+        and set(sample["system"]) == integers | floats
         and all(
-            type(v) in (int, float) and math.isfinite(v) and v >= 0
-            for v in sample["system"].values()
+            type(sample["system"][key]) is int and sample["system"][key] >= 0
+            for key in integers
+        )
+        and all(
+            type(sample["system"][key]) is float
+            and math.isfinite(sample["system"][key])
+            and sample["system"][key] >= 0
+            for key in floats
         )
         and type(sample["evidence_ref"]) is str
         and re.fullmatch("procfs-sample:[0-9a-f]{24}", sample["evidence_ref"]),

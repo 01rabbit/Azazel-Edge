@@ -263,3 +263,30 @@ def test_complete_probe_gate_refuses_partial_typed_or_unsupported_facts(
 def test_duplicate_nonfinite_trailing_or_oversized_raw_frame_refuses(wire):
     with pytest.raises((ValueError, OSError)):
         r.parse_ready(wire, "probe", boot=BOOT, worker_sha256=SHA)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("memory_total_kib", 1000.5),
+        ("memory_total_kib", 1000.0),
+        ("memory_available_kib", 500.0),
+        ("swap_total_kib", 0.0),
+        ("swap_free_kib", 0.0),
+        ("load1", 1),
+        ("load5", 0),
+        ("load15", 0),
+        ("uptime_seconds", 1000),
+    ],
+)
+def test_parser_metric_type_substitution_refuses_without_rewriting(
+    tmp_path, key, value
+):
+    start, observed = final(tmp_path)
+    original = observed["operations"][1]["sample"]["system"][key]
+    assert type(original) is (int if "_kib" in key else float)
+    observed["operations"][1]["sample"]["system"][key] = value
+    wire = raw(observed)
+    with pytest.raises(ValueError, match="actual global sample metrics"):
+        r.validate_result(wire, start, peer_pid=123)
+    assert raw(observed) == wire
