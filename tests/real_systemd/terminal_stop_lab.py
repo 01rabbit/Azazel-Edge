@@ -72,6 +72,35 @@ def ready_for(raw, position):
     return frames[-1]["kind"] == "input_ready" and frames[-1]["data"] == position
 
 
+
+def isolated_api_preflight():
+    """Read-only staging check before any unit/profile/account/key mutation."""
+    from azazel_edge.outcome.input_auth import read_regular
+
+    probe = (
+        "import inspect,json; "
+        "import azazel_edge.outcome.input_resume as resume; "
+        "import azazel_edge.outcome.input_terminal as terminal; "
+        "print(json.dumps(dict(resume=resume.__file__,terminal=terminal.__file__,"
+        "optional_api='terminal_stop_registration' in inspect.signature(resume.run_live_resumable).parameters)))"
+    )
+    result = subprocess.run(
+        [str(g.PYTHON), "-I", "-B", "-c", probe], capture_output=True, text=True, timeout=5
+    )
+    need(result.returncode == 0, "isolated Edge API import unavailable; stage protected site-packages path before new VM assignment")
+    need(len(result.stdout) <= 4096 and len(result.stderr) <= 8192, "isolated API probe output oversized")
+    value = json.loads(result.stdout)
+    need(type(value) is dict and set(value) == {"resume", "terminal", "optional_api"}
+         and value["optional_api"] is True, "isolated optional Edge API unavailable")
+    pins = {}
+    for name, filename in (("resume", "input_resume.py"), ("terminal", "input_terminal.py")):
+        expected = SRC / "py/azazel_edge/outcome" / filename
+        need(value[name] == str(expected), "isolated import came from wrong package source")
+        raw, _ = read_regular(expected, owner=0, max_bytes=1024 * 1024)
+        pins[name] = dict(path=str(expected), sha256=sha(raw))
+    return pins
+
+
 def guard():
     from azazel_edge.outcome.input_auth import read_regular
     need(os.environ.get(FLAG) == "1", "explicit terminal VM opt-in required")
@@ -96,7 +125,8 @@ def guard():
         files[name + "_sha256"] = sha(raw)
     boot = g.boot()
     boot_reference(boot)
-    return dict(source_commit=source, core_sha256=core, kernel_boot_id=boot, **files)
+    return dict(source_commit=source, core_sha256=core, kernel_boot_id=boot,
+                isolated_api=isolated_api_preflight(), **files)
 
 
 def role_argv(mode, case):

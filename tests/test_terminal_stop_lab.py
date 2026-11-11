@@ -180,3 +180,53 @@ def test_effective_unit_rejects_reopen_authority_or_unregistered_command(field, 
     with pytest.raises(AssertionError):
         lab.validate_effective(value, "positive")
     assert "Restart=no" in lab.role_argv("live", "positive")
+
+
+def test_isolated_api_missing_import_refuses_before_any_preparation(monkeypatch, tmp_path):
+    calls = []
+
+    def missing(argv, **kwargs):
+        calls.append(argv)
+        assert "env" not in kwargs
+        return SimpleNamespace(returncode=1, stdout="", stderr="ModuleNotFoundError: azazel_edge")
+
+    monkeypatch.setattr(lab.subprocess, "run", missing)
+    monkeypatch.setattr(lab, "guard", lab.isolated_api_preflight)
+    monkeypatch.setattr(lab.g, "prepare_lab", lambda: pytest.fail("keys/scope must not be created"))
+    output = tmp_path / "never-created"
+    with pytest.raises(AssertionError, match="import unavailable"):
+        lab.run_case("positive", output)
+    assert not output.exists()
+    assert calls[0][1:3] == ["-I", "-B"]
+
+
+def test_isolated_api_wrong_package_source_refuses_before_material_access(monkeypatch):
+    import azazel_edge.outcome.input_auth as auth
+
+    wrong = dict(resume="/usr/lib/other/azazel_edge/outcome/input_resume.py",
+                 terminal=str(lab.SRC / "py/azazel_edge/outcome/input_terminal.py"), optional_api=True)
+    monkeypatch.setattr(lab.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(wrong), stderr=""))
+    monkeypatch.setattr(auth, "read_regular", lambda *a, **kw: pytest.fail("wrong package must refuse before file access"))
+    with pytest.raises(AssertionError, match="wrong package"):
+        lab.isolated_api_preflight()
+
+
+def test_isolated_api_requires_reviewed_protected_modules(monkeypatch):
+    import azazel_edge.outcome.input_auth as auth
+
+    expected = dict(resume=str(lab.SRC / "py/azazel_edge/outcome/input_resume.py"),
+                    terminal=str(lab.SRC / "py/azazel_edge/outcome/input_terminal.py"), optional_api=True)
+    monkeypatch.setattr(lab.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(expected), stderr=""))
+    checked = []
+
+    def protected(path, *, owner, max_bytes):
+        checked.append((path, owner))
+        return b"reviewed-module", None
+
+    monkeypatch.setattr(auth, "read_regular", protected)
+    pins = lab.isolated_api_preflight()
+    assert {str(path) for path, owner in checked if owner == 0} == {expected["resume"], expected["terminal"]}
+    assert pins["resume"]["sha256"] == lab.sha(b"reviewed-module")
+    expected["optional_api"] = False
+    with pytest.raises(AssertionError, match="optional Edge API"):
+        lab.isolated_api_preflight()

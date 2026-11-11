@@ -19,6 +19,21 @@ root-protected `/etc/edge400-disposable-vm` marker. Remove external IPv4/IPv6
 default routes after staging; no network access, listener, traffic, model,
 provider, namespace, or defense action is needed. Stage a root-protected
 `SOURCE_REVISION` containing the exact combined 40-character source revision.
+Before freezing an unused dependency template, the operator must stage a
+root-owned mode0644 `.pth` file in that runtime's **actual site-packages**
+(for example `/opt/edge400-runtime/lib/python3.12/site-packages/edge400-source.pth`)
+containing only the absolute path line `/opt/edge400-src/py` followed by newline.
+Its ancestor directories must be root-owned and not group/other writable. This
+is the existing isolated runtime packaging prerequisite, not an environment
+fallback: witness and role entry points run with `-I`; `PYTHONPATH` cannot supply
+that import. The harness now runs the actual runtime Python with `-I -B`, imports
+both reviewed Edge API modules, requires the optional parameter, and verifies
+module `__file__` paths are exactly in protected reviewed source, retaining their
+hashes. Missing/wrong imports refuse before account/profile setup, preparation,
+keys, bundles or actors. `-B` prevents bytecode writes during this precheck.
+Never repair and retry either already-used failed scope; retain it and use a new
+VM assignment after correcting the unused template.
+
 Keep all artifacts private; raw signed records and source paths are retained.
 
 On each unused VM, set `EDGE_TERMINAL_VM_TESTS=1`,
