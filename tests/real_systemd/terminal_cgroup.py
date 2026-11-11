@@ -168,4 +168,3 @@ def group_empty(group, actor_units):
         if fd is not None:
             os.close(fd)
         os.close(root)
-
