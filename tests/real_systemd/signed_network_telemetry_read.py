@@ -30,6 +30,57 @@ def _same(left, right):
     need(canonical(left) == canonical(right), "original v2 metadata binding differs")
 
 
+def _effective(snap, directory, mode):
+    unit = role.observer_spec(mode)["unit"]
+    bus = "/org/freedesktop/systemd1/unit/" + unit.replace("-", "_2d").replace(
+        ".", "_2e"
+    )
+    commands = dict(
+        systemctl=[
+            "systemctl",
+            "show",
+            unit,
+            "--property=" + ",".join(proof.p.EFFECTIVE),
+        ],
+        busctl=[
+            "/usr/bin/busctl",
+            "--system",
+            "--json=short",
+            "get-property",
+            "org.freedesktop.systemd1",
+            bus,
+            "org.freedesktop.systemd1.Service",
+            *proof.p.old.HOOKS,
+        ],
+    )
+    raw = {}
+    for backend, argv in commands.items():
+        prefix = directory / (mode + "-effective-" + backend)
+        _same(snap.json(str(prefix) + ".argv.json", maximum=16384), argv)
+        result = snap.json(str(prefix) + ".result.json", maximum=4096)
+        need(
+            set(result) == {"returncode", "error"}
+            and type(result["returncode"]) is int
+            and result["returncode"] == 0
+            and result["error"] is None
+            and snap.raw(str(prefix) + ".stderr", maximum=65536)[0] == b"",
+            "original effective backend failed or warned",
+        )
+        raw[backend] = snap.raw(str(prefix) + ".stdout", maximum=65536)[0]
+    rows = raw["systemctl"].decode().splitlines()
+    need(all("=" in row for row in rows), "malformed effective raw properties")
+    pairs = [row.split("=", 1) for row in rows]
+    extra = {key: value for key, value in pairs if key in proof.p.EXTRA}
+    need(
+        len(pairs) == len({key for key, _ in pairs}) and set(extra) == proof.p.EXTRA,
+        "missing/duplicate original proc properties",
+    )
+    base = "\n".join(
+        row for row in rows if row.split("=", 1)[0] not in proof.p.EXTRA
+    ).encode()
+    return {**proof.p.old.merged_effective(base, raw["busctl"]), **extra}
+
+
 def _role_bundle(snap, mode, binding):
     directory = phase.WORK / ("initialize" if mode == "initialize" else "live")
     name = "initializer" if mode == "initialize" else "live"
@@ -61,8 +112,10 @@ def _role_bundle(snap, mode, binding):
     _same(ready, data["ready"])
     proof.legacy.validate_role_identity(actor["identity"])
     _same(actor["identity"], ready["identity"])
+    effective = _effective(snap, directory, mode)
+    _same(effective, data["effective"])
     proof.p._validate_effective(
-        data["effective"], role.observer_spec(mode), proof.reserved_argv(mode)
+        effective, role.observer_spec(mode), proof.reserved_argv(mode)
     )
     for key, expected in dict(
         mode=mode,
