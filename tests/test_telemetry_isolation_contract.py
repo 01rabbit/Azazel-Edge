@@ -240,3 +240,22 @@ def test_new_profile_only_declares_separate_candidate_and_explicit_mediation_req
     assert "/opt/edge400-runtime/bin/edge-observe ix," not in raw
     old = (directory / "edge400.apparmor").read_text()
     assert c.PROFILE not in old and c.ALIAS not in old
+
+
+def test_source_root_permission_is_only_literal_read_directory_metadata():
+    directory = Path(__file__).parent / "real_systemd"
+    profile = (directory / "edge400-observer-telemetry-lab.apparmor").read_text()
+    source_rules = [
+        line.strip()
+        for line in profile.splitlines()
+        if line.strip().startswith("/opt/edge400-src/")
+    ]
+    assert source_rules.count("/opt/edge400-src/ r,") == 1
+    assert set(source_rules) == {
+        "/opt/edge400-src/ r,",
+        "/opt/edge400-src/py/ r,",
+        "/opt/edge400-src/py/** r,",
+        "/opt/edge400-src/tests/ r,",
+        "/opt/edge400-src/tests/** r,",
+    }
+    assert "/opt/edge400-src/ r," not in (directory / "edge400.apparmor").read_text()

@@ -1,9 +1,9 @@
-# Optional telemetry isolation candidate: static stage only
+# Optional telemetry isolation candidate: commissioning blocked
 
-This is a separate lab commissioning candidate. A separate Root parser-only
-reference compiled the candidate with warnings fatal, without loading it. No new
-alias/role has run; the fixed worker and manual Root controller are implemented
-but have not executed against a candidate role. No candidate role qualification is claimed. The original confined telemetry result remains **commissioning_blocked**:
+This is a separate lab commissioning candidate. Root's first actual case loaded
+the candidate, then blocked before READY and every probe operation because the
+protected source reader lacked source-root directory read permission. No candidate
+role qualification is claimed; that used VM is retained and never retried. The original confined telemetry result remains **commissioning_blocked**:
 netdev/loadavg/uptime EACCES, meminfo readable. Root's later stat-only measurement
 found `/proc/<worker-PID>/net/dev` UID/GID 0, regular 0444. It did not test an owner
 rule or worker access; never assume that inode belongs to UID61002.
@@ -156,7 +156,7 @@ Root's later all-actor cgroup cleanup remains mandatory. No later probe or
 privilege/namespace restoration runs after an unexpected success.
 
 
-## Fixed peer/probe worker (unrun)
+## Fixed peer/probe worker (unqualified)
 
 `telemetry_isolation_worker.py --worker peer|probe` is now the literal worker
 entrypoint reserved in Root's expected argv. It cannot install/load policy, act
@@ -231,12 +231,12 @@ intent. Independent invariant attempts continue through parent-state, old-asset,
 new-asset and loaded-profile checks even when one check or evidence write fails.
 No actors, namespaces, signer, real keys, witness, journal, trial or qualification
 are created by this staging component. Its tests stub Root tools/kernel metadata;
-no actual installation, policy load or candidate access test has been performed.
+those unit checks do not perform installation, policy loading or candidate access.
 The manual controller composes this with both live roles and all cleanup proofs
-before returning any complete precheck result; actual commissioning is unrun.
+before returning any complete precheck result; v1 remains blocked as recorded below.
 
 
-## Manual one-case controller (code only, unrun)
+## Manual one-case controller (v1 blocked)
 
 `telemetry_isolation_controller.run(output)` is the only manual Root composition;
 it has no CLI or VM/retry engine. Invoke only after complete source freeze,
@@ -281,3 +281,29 @@ role execution, hidepid qualification, trial or production admission is claimed.
 The three-FIFO rule applies to this stateless precheck only. A signed observer's
 journal/sidecar/witness lifecycle needs a separate reviewed pre-API fence design;
 do not silently reuse or expand this descriptor contract for that observer.
+
+
+## Actual v1 refusal and narrow source-directory delta
+
+Root ran frozen source `7271d51c853e608032b8ec71098f41e1a88a5236` on a NEW
+unused VM with boot `4d50bb01-b6dd-498b-9de3-4fa21e3138be`. The guest component
+checks passed **235 tests in 3.93 seconds**. Actual candidate loading succeeded,
+but peer startup failed **before READY and all probe operations**. The protected
+`read_regular(SOURCE)` directory walk attempted to open `/opt/edge400-src/`;
+Root's retained kernel audit confirms an enforcing new-profile file-class open
+denial with requested/denied mask `r`, fsuid61002, ouid0, PID1964. The generic
+source/role/boot marker refusal followed the worker's blocked frame; it does not
+mean a READY marker or any isolation proof was obtained.
+
+The separate next-source change adds only literal `/opt/edge400-src/ r,` to the
+NEW candidate profile. This permits source-root directory metadata/listing needed
+by the physical protected-parent walk. It grants no root-level file contents,
+write, execute, mmap, arbitrary subtree or source-revision-file permission. Existing
+py/tests rules and the entire old profile/aliases/defaults remain unchanged. This
+static regression is not actual access proof; a reviewed different source and
+NEW v2 VM must repeat current compilation and the complete candidate precheck.
+
+Root verified actor/cgroup/namespace quiescence and parent/old/new-asset invariants
+for the failed v1 case, archived original evidence and stopped the VM. The v1
+case remains **BLOCKED**, with zero probe operations, no retry/repair and no trial,
+resume, admission or claim that either old or new telemetry gate passed.

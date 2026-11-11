@@ -10,6 +10,7 @@ profile edge400-observer-telemetry-lab /opt/edge400-runtime/bin/edge-observe-tel
   /opt/edge400-runtime/** mr,
   /opt/edge400-runtime/bin/edge-observe-telemetry-lab ix,
   /usr/bin/python3.12 mr,
+  /opt/edge400-src/ r,
   /opt/edge400-src/py/ r,
   /opt/edge400-src/py/** r,
   /opt/edge400-src/tests/ r,
