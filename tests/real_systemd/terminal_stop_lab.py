@@ -14,8 +14,8 @@ import uuid
 
 SRC = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(SRC / "py"), str(SRC / "tests"), str(Path(__file__).parent)]
-import armor as a
-import terminal_cgroup as cg
+import armor as a  # noqa: E402
+import terminal_cgroup as cg  # noqa: E402
 
 g = a.g
 POLICY = SRC / "tests/fixtures/terminal_stop_policy.json"
