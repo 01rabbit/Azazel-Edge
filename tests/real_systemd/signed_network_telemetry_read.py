@@ -199,8 +199,26 @@ def _role_bundle(snap, mode, binding):
 
 def _runtime_context(snap, inputs, prepared, facts, trust, terminal):
     need(
-        prepared["schema_version"] == "signed-network-telemetry-prepared/v2",
-        "v2 prepared context required",
+        set(prepared)
+        == {
+            "schema_version",
+            "inputs",
+            "kernel_boot_id",
+            "trust_policy",
+            "registration",
+            "initialization",
+            "namespace_kind",
+            "assignment_mode_sha256",
+            "measurement_completed",
+            "production_admission",
+        }
+        and prepared["schema_version"] == "signed-network-telemetry-prepared/v2"
+        and prepared["namespace_kind"]
+        == plan.telemetry_assignment_mode()["namespace_kind"]
+        and prepared["measurement_completed"]
+        is prepared["production_admission"]
+        is False,
+        "closed v2 prepared context required",
     )
     initial = snap.json(phase.WORK / "initialize/initializer-result.json")
     binding = initial["binding"]
@@ -239,6 +257,8 @@ def _runtime_context(snap, inputs, prepared, facts, trust, terminal):
         == inputs["external_pins"]["interpreter_sha256"],
         "current public ABI/interpreter differs",
     )
+    for key in ("policy_sha256", "policy_file_sha256"):
+        _same(binding[key], terminal["context"][key])
     public = binding["public_auth"]
     need(
         public["trust_sha256"] == trust.digest

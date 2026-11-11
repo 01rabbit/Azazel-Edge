@@ -344,6 +344,9 @@ class TelemetryFixture(Fixture):
         self.put(phase.WORK / "initialize/initializer-result.json", initial)
         prepared.update(
             schema_version="signed-network-telemetry-prepared/v2",
+            namespace_kind=plan.telemetry_assignment_mode()["namespace_kind"],
+            measurement_completed=False,
+            production_admission=False,
             initialization=initial,
             assignment_mode_sha256=prepared["inputs"]["assignment_mode_sha256"],
         )
@@ -746,3 +749,15 @@ def test_cross_four_requires_fresh_original_records_and_shared_external_pins(
         pins["archive_sha256"] = "f" * 64
     with pytest.raises((OSError, ValueError)):
         new.validate_fresh_telemetry_records(fixture.manifest, results, **pins)
+
+
+def test_missing_prepared_mode_is_not_runtime_provenance(tmp_path, monkeypatch):
+    fixture = TelemetryFixture(tmp_path, monkeypatch)
+    valid, _ = fixture.build(1)
+    assert valid["status"] == "calculation_available", valid["reasons"]
+    path = phase.WORK / "prepared.json"
+    prepared = json.loads(fixture.physical(path).read_bytes())
+    del prepared["namespace_kind"]
+    fixture.put(path, prepared)
+    result = reread(fixture)
+    assert result["status"] == "withheld" and result["measurement_record"] is None
