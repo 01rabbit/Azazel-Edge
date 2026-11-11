@@ -48,6 +48,7 @@ def _validate_fresh_records(manifest, read_results, *, core_sha256, telemetry=Fa
     remain mandatory after this function, including baseline full signed chain.
     """
     try:
+        plan.need(type(telemetry) is bool, "closed plan version required")
         _bounded([manifest, read_results])
         _hex(core_sha256, 64)
         assignments = validate_manifest(manifest)

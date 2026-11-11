@@ -20,6 +20,13 @@ INSTALLED_POLICY = Path("/etc/apparmor.d") / role.PROFILE
 FLAG = "EDGE_SIGNED_NETWORK_TELEMETRY"
 SOURCE_FILES = (
     "signed_network_telemetry_phase.py",
+    "signed_network_telemetry_read.py",
+    "signed_network_read.py",
+    "signed_network_freshness.py",
+    "signed_network_recording.py",
+    "signed_network_service.py",
+    "signed_network_clock.py",
+    "signed_network_run.py",
     "signed_network_telemetry_switch_witness.py",
     "signed_network_telemetry_transport.py",
     "signed_network_plan.py",

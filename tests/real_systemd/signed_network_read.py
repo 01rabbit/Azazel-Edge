@@ -359,7 +359,9 @@ class _Snapshot:
             )
 
 
-def _root_probes(snap, record, inputs, event, candidate):
+def _root_probes(
+    snap, record, inputs, event, candidate, *, expected_source_identity=None
+):
     proof = snap.json(phase.WORK / "namespace-boot.json", maximum=8192)
     need(
         proof["kernel_boot_id"] == record["kernel_boot_id"]
@@ -397,7 +399,12 @@ def _root_probes(snap, record, inputs, event, candidate):
             recording.canonical(receipt) == recording.canonical(record[key])
             and launch["namespace_identity"] == edge
             and launch["pid"] == receipt["root_pid"]
-            and record["source_identity"] == run._source_identity(),
+            and record["source_identity"]
+            == (
+                run._source_identity()
+                if expected_source_identity is None
+                else expected_source_identity
+            ),
             "root raw launch/pin binding",
         )
         probes[label] = service.recorded_root_probe(
@@ -454,6 +461,10 @@ def _read_assignment_artifacts(
     resistance to a malicious root producing fabricated unsigned lab receipts.
     Original service/live facts survive later authentication/calculation failure.
     """
+    if contract is not None:
+        from signed_network_telemetry_read import _TelemetryReader
+
+        need(type(contract) is _TelemetryReader, "closed v2 reader contract required")
     result = dict(
         status="withheld",
         reasons=[],
@@ -657,7 +668,7 @@ def _read_assignment_artifacts(
                 )
         _require_ordered_callbacks(calls, events)
         if contract is not None:
-            contract.verify_context(
+            result["root_runtime_metadata"] = contract.verify_context(
                 snap, inputs, prepared, facts, trust, terminal, calls
             )
         clock = qualify_clock(
@@ -669,6 +680,11 @@ def _read_assignment_artifacts(
             controller_start=record["controller_start_anchor"],
             controller_end=record["controller_end_anchor"],
             recorded=calls,
+            **(
+                {}
+                if contract is None
+                else {"controller_samples": contract.controller_samples}
+            ),
         )
         result["clock_qualification"] = clock
         need(
