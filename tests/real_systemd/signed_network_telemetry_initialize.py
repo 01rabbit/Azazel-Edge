@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import select
 import stat
 import subprocess
@@ -93,6 +94,55 @@ def _drain(process, output, deadline, prefix="initialization"):
     return {name: bytes(raw) for name, raw in buffers.items()}
 
 
+def prelaunch_unit_material(mode, output):
+    """Reject every applicable on-disk override BEFORE a fixed role can start.
+
+    Closed initializer/live specs only; this helper launches no actor or GO.
+    Actual lookup output and errors are retained before strict path validation.
+    """
+    unit = role.observer_spec(mode)["unit"]
+    output = Path(output)
+    proof.p._output(output)
+    code, raw = proof.p.old._retained_query(
+        ["systemd-analyze", "unit-paths"], mode + "-launch-unit-paths", output
+    )
+    stderr = material._read(output / (mode + "-launch-unit-paths.stderr"), 4096)
+    lab.need(
+        code == 0
+        and 0 < len(raw) <= 16384
+        and raw.endswith(b"\n")
+        and b"\r" not in raw
+        and stderr == b"",
+        "actual bounded unit paths unavailable",
+    )
+    rows = raw.decode("ascii").splitlines()
+    lab.need(
+        0 < len(rows) <= 128 and len(set(rows)) == len(rows),
+        "duplicate/malformed unit paths",
+    )
+    names = {
+        "service.d",
+        *(unit + suffix for suffix in ("", ".d", ".wants", ".requires", ".upholds")),
+    }
+    parts = unit.removesuffix(".service").split("-")
+    names.update("-".join(parts[:i]) + "-.service.d" for i in range(1, len(parts)))
+    for row in rows:
+        parent = Path(row)
+        lab.need(
+            re.fullmatch(r"/[A-Za-z0-9_.@/-]+", row)
+            and str(parent) == row
+            and "//" not in row
+            and all(p not in (".", "..") for p in parent.parts),
+            "malformed actual unit search path",
+        )
+        for name in sorted(names):
+            lab.need(
+                not os.path.lexists(parent / name),
+                "preexisting inherited fixed-role unit material refused",
+            )
+    return rows
+
+
 def initialize(
     output,
     *,
@@ -108,6 +158,8 @@ def initialize(
     No manifest is required. No receipt/file existence substitutes for successful
     current checks. Caller must already own a fresh scope and live witness, and
     must stop/prove all outer actors before namespace cleanup on ANY failure.
+    Outer fresh provisioning must already make BASE traversable (intended0755)
+    with creation provenance. This helper never repairs a used directory/mode.
     """
     g.guard()
     material.pin(source_sha256)
@@ -125,6 +177,7 @@ def initialize(
     proof.p._output(output)
     namespace = _namespace(namespace_fd, namespace_identity)
     unit = role.INITIALIZER_UNIT
+    prelaunch_unit_material("initialize", output)
     lab.need(
         scope._known_collected(scope._state(unit))
         and lab.cg.group_empty("/system.slice/" + unit, (unit,)),

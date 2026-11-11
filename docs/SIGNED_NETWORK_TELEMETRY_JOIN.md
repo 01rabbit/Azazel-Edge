@@ -135,3 +135,23 @@ Tests use synthetic Root/unit/proof observations and real private client IO,
 including a stuck owned client killed/reaped by the helper itself. They do not
 execute a hardened initializer, policy loader, authenticated scope or VM. Live
 caller/phase dispatch and single-current-source commissioning remain unwired.
+
+
+### Initializer prelaunch inherited-material refusal
+
+Before Popen, `prelaunch_unit_material('initialize'|'live', output)` obtains the
+actual systemd lookup paths with the existing fixed two-second retained query.
+It checks every path for the selected literal unit, `.d`, `.wants`, `.requires`,
+`.upholds`, every applicable dash-prefix `.service.d` and global `service.d`.
+LEXISTS includes dangling aliases. This prevents an inherited hook/dependency
+from running before the later effective-property proof could reject it. Unknown
+modes, query errors/diagnostics, duplicate/malformed/oversize paths refuse before
+launch or GO. Original argv/stdout/stderr/result remain private evidence. There
+is no caller-supplied unit or path selection; live composition is still unwired.
+
+The outer provisioner must make the **newly created** Root-owned fixture BASE
+traversable with its intended 0755 mode and retain creation provenance before
+calling this helper. In particular, an operator umask077 may leave a new BASE
+0700 unless the outer fresh-creation path explicitly establishes its intended
+mode. This helper does not chmod, repair or reuse an existing/used directory.
+The precondition is separate from the private Root output's required 0700 mode.

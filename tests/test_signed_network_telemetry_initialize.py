@@ -71,6 +71,11 @@ def fixture(tmp_path, monkeypatch, fault=None):
         return expected
 
     monkeypatch.setattr(call, "_namespace", namespace)
+    monkeypatch.setattr(
+        call,
+        "prelaunch_unit_material",
+        lambda mode, output: events.append("unit-material"),
+    )
     monkeypatch.setattr(call.scope, "_state", lambda unit: {"synthetic": "absent"})
     monkeypatch.setattr(
         call.scope, "_known_collected", lambda value: fault != "existing"
@@ -420,3 +425,150 @@ def test_controller_itself_forcibly_reaps_a_real_owned_stuck_private_client(
             child.wait()
             for stream in (child.stdin, child.stdout, child.stderr):
                 stream.close()
+
+
+def unit_query_fixture(tmp_path, monkeypatch, raw=None, code=0, stderr=b""):
+    first, second = tmp_path / "units-first", tmp_path / "units-second"
+    first.mkdir()
+    second.mkdir()
+    stdout = (
+        raw if raw is not None else (str(first) + "\n" + str(second) + "\n").encode()
+    )
+    monkeypatch.setattr(call.proof.p, "_output", lambda output: None)
+    reading = call.material._read
+
+    def read(path, limit=1024 * 1024, mode=None):
+        if str(path).endswith("launch-unit-paths.stderr"):
+            assert limit == 4096
+            return stderr
+        return reading(path, limit, mode)
+
+    monkeypatch.setattr(call.material, "_read", read)
+
+    def query(argv, prefix, output):
+        assert argv == ["systemd-analyze", "unit-paths"]
+        assert prefix in ("initialize-launch-unit-paths", "live-launch-unit-paths")
+        call.lab.save(output / (prefix + ".stdout"), stdout)
+        call.lab.save(output / (prefix + ".stderr"), stderr)
+        call.lab.save_json(output / (prefix + ".argv.json"), argv)
+        call.lab.save_json(output / (prefix + ".result.json"), dict(returncode=code))
+        return code, stdout
+
+    monkeypatch.setattr(call.proof.p.old, "_retained_query", query)
+    return first, second, stdout
+
+
+@pytest.mark.parametrize("mode", ["initialize", "live"])
+def test_actual_search_paths_are_checked_for_closed_modes_and_raw_query_retained(
+    tmp_path, monkeypatch, mode
+):
+    first, second, raw = unit_query_fixture(tmp_path, monkeypatch)
+    assert call.prelaunch_unit_material(mode, tmp_path) == [str(first), str(second)]
+    assert (tmp_path / (mode + "-launch-unit-paths.stdout")).read_bytes() == raw
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        call.role.INITIALIZER_UNIT,
+        call.role.INITIALIZER_UNIT + ".d",
+        call.role.INITIALIZER_UNIT + ".wants",
+        call.role.INITIALIZER_UNIT + ".requires",
+        call.role.INITIALIZER_UNIT + ".upholds",
+        "service.d",
+        "edge400-.service.d",
+        "edge400-signed-.service.d",
+        "edge400-signed-network-.service.d",
+        "edge400-signed-network-telemetry-.service.d",
+    ],
+)
+@pytest.mark.parametrize("kind", ["existing", "dangling"])
+def test_inherited_material_any_actual_path_refuses_before_any_launch_or_go(
+    tmp_path, monkeypatch, name, kind
+):
+    guard = call.prelaunch_unit_material
+    args, events, sent = fixture(tmp_path, monkeypatch)
+    _, second, raw = unit_query_fixture(tmp_path, monkeypatch)
+    node = second / name  # Ensure the second path is checked too.
+    if kind == "dangling":
+        node.symlink_to(second / "absent-target")
+    elif name.endswith((".d", ".wants", ".requires", ".upholds")):
+        node.mkdir()
+    else:
+        node.write_text("[Service]\nExecStartPre=/usr/bin/true\n")
+    monkeypatch.setattr(call, "prelaunch_unit_material", guard)
+    with pytest.raises(AssertionError, match="inherited"):
+        call.initialize(tmp_path, **args)
+    assert "launch" not in events and sent == [] and "stop-proof" not in events
+    assert (tmp_path / "initialize-launch-unit-paths.stdout").read_bytes() == raw
+    assert node.is_symlink() if kind == "dangling" else node.exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "nonzero",
+        "timeout",
+        "stderr",
+        "empty",
+        "duplicate",
+        "relative",
+        "parent",
+        "double",
+        "space",
+        "escaped",
+        "blank",
+        "cr",
+        "unterminated",
+        "oversize",
+    ],
+)
+def test_bad_unit_query_refuses_with_originals_and_never_launches(
+    tmp_path, monkeypatch, fault
+):
+    guard = call.prelaunch_unit_material
+    args, events, sent = fixture(tmp_path, monkeypatch)
+    rows = {
+        "empty": b"",
+        "duplicate": b"/etc/systemd/system\n/etc/systemd/system\n",
+        "relative": b"etc/systemd/system\n",
+        "parent": b"/etc/systemd/../system\n",
+        "double": b"/etc//systemd/system\n",
+        "space": b"/etc/systemd/unit path\n",
+        "escaped": b"/etc/systemd/unit\\040path\n",
+        "blank": b"/etc/systemd/system\n\n",
+        "cr": b"/etc/systemd/system\r\n",
+        "unterminated": b"/etc/systemd/system",
+        "oversize": b"/" + b"a" * 16384 + b"\n",
+    }
+    _, _, raw = unit_query_fixture(
+        tmp_path,
+        monkeypatch,
+        raw=rows.get(fault),
+        code=None if fault == "timeout" else 1 if fault == "nonzero" else 0,
+        stderr=b"query diagnostic" if fault == "stderr" else b"",
+    )
+    monkeypatch.setattr(call, "prelaunch_unit_material", guard)
+    with pytest.raises((AssertionError, ValueError)):
+        call.initialize(tmp_path, **args)
+    assert "launch" not in events and sent == []
+    assert (tmp_path / "initialize-launch-unit-paths.stdout").read_bytes() == raw
+    assert (tmp_path / "initialize-launch-unit-paths.result.json").exists()
+
+
+def test_valid_actual_lookup_guard_composes_before_launch_and_go(tmp_path, monkeypatch):
+    guard = call.prelaunch_unit_material
+    args, events, sent = fixture(tmp_path, monkeypatch)
+    unit_query_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(call, "prelaunch_unit_material", guard)
+    result = call.initialize(tmp_path, **args)
+    assert result["initialization"]["initialized_empty"] is True
+    assert sent == [call.role.GO] and "launch" in events
+    assert (tmp_path / "initialize-launch-unit-paths.result.json").exists()
+
+
+@pytest.mark.parametrize("mode", [True, None, "initialize.service", "../../initialize"])
+def test_prelaunch_guard_never_accepts_arbitrary_unit_or_mode(tmp_path, mode):
+    with pytest.raises(ValueError):
+        call.prelaunch_unit_material(mode, tmp_path)
+    assert list(tmp_path.iterdir()) == []
