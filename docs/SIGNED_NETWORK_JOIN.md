@@ -183,3 +183,48 @@ fixed unit cgroup also passes the full PID1-view emptiness check. Any read error
 timeout, unknown state, loaded replacement or descendant remains a sticky failure;
 all other fixed actors still receive their stop attempt. This is not a generic
 nonzero-command-success exception or permission to address other units.
+
+## Real confined observer worker
+
+`signed_network_observer.py` is now the fixed role entrypoint for initialization
+and one live observer. It has no workload, kernel query, service-control or VM
+orchestration loop. The initializer uses the actual root-owned fixture policy,
+current registered authentication, existing journal APIs and identical `es`/0.25s
+persistence context. It refuses unavailable real procfs coverage under the existing
+label instead of broadening permissions. Initialization must be a genuinely empty
+new source/journal; it is never a used-history reset.
+
+The live worker requires the actual signed prepare/start prefix before recording.
+It archives `observer-start-context.json` with original source-prefix offset/hash,
+policy/registration/scope/identity and an actual clock bracket. That file is **not
+readiness**: the root controller must still verify the actual journal's exact
+durable `input_ready` position, then collect the real baseline before service H0.
+The raw kernel UUID, injective `kernel-boot-<UUID>` journal reference and original
+systemd `%b` wire boot ID (UUID's 32 hex digits) remain separate. Every authenticated
+wire boot ID must match that explicit current-kernel mapping; no wire is rewritten.
+
+The unchanged `run_live_resumable` runs inside `record_collector`, explicitly
+passing only its protected registration path to the optional terminal-stop API.
+There is no replacement live loop, signal catch, forced finalization, recovery
+retry or backfill. After actual capture/core stop, a natural verified terminal
+return closes the recorder. The worker retains the original terminal wire/decoded
+bytes, final source binding, closed journal and a separate fresh role-authorized
+read-only witness acknowledgement. The emitted receipt remains terminal CONTROL,
+not measurement success or resume authority; pending loss remains visible.
+
+Both worker names are fixed and retain the existing observer UID/group, AppArmor
+label, zero capability set, AF_UNIX restriction and fixed provider-edge namespace
+path. `Restart=no`, `DefaultDependencies=no`, a 40-second runtime and five-second
+stop timeout are explicit. Before workload, the root-only `effective_observer`
+check verifies actual effective command, UID/group/profile/capability/address-family
+settings, namespace path, restart/runtime bounds, empty extra hooks/activation
+dependencies, and actual kernel UID/caps/bounding set/label/cgroup/namespace. It
+fences PID/starttime across that readback. This check grants no observer authority.
+
+The operational assignment functions and evidence join remain unfinished and the
+old untracked `signed_network_measure.py` is not an entrypoint. No four-assignment
+manifest or source has been frozen and no signed network assignment has run.
+The eventual first slice must require the actual signed release in an original
+recorded collector callback with its unchanged real receipt epoch. Missing or
+missed callbacks withhold the join while preserving service/provider facts; the
+first slice will not invent or supplement an observer receipt.
