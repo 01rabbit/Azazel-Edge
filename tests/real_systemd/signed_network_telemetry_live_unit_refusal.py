@@ -103,7 +103,8 @@ def _foreign(output, create=False, phase="immediate"):
 
 
 def _snapshot(output, phase):
-    records = {}
+    records = {"public_auth": main.initializer.public_auth_binding()}
+    lab.save_json(output / (phase + "-public-auth.json"), records["public_auth"])
     directory = g.BUNDLE / "observer"
     info = os.lstat(directory)
     names = sorted(os.listdir(directory))
