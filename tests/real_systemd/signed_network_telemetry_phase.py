@@ -153,6 +153,7 @@ class TelemetryAssignmentContext:
         self.owned, self.tracked, self.created = set(), {}, {}
         self.initialization = self.transport_context = None
         self.closed = self.ready = False
+        self.cleanup_error = None
         self.original = (
             g.write,
             g.prepare,
@@ -197,6 +198,8 @@ class TelemetryAssignmentContext:
     def close(self):
         global _active
         if self.closed:
+            if self.cleanup_error is not None:
+                raise self.cleanup_error
             return
         self.closed = True
         errors, processes = [], []
@@ -266,6 +269,17 @@ class TelemetryAssignmentContext:
             if errors:
                 self.namespaces.failed = True
             namespace_cleanup = attempt("namespace close", self.namespaces.close)
+            attempt(
+                "namespace proof",
+                lambda: lab.need(
+                    type(namespace_cleanup) is dict
+                    and namespace_cleanup.get("cleanup_verified") is True
+                    and namespace_cleanup.get("errors") == [],
+                    "namespace cleanup unknown",
+                ),
+            )
+            if errors:
+                self.namespaces.failed = True
             for name, operation, expected in (
                 ("parent", setup.n.root_snapshot, self.baseline["root_before"]),
                 ("assets", setup._assets, self.baseline["assets"]),
@@ -308,6 +322,10 @@ class TelemetryAssignmentContext:
                     ),
                 ),
             )
+            lab.need(not errors, "assignment cleanup incomplete: " + str(errors))
+        except BaseException as exc:
+            self.cleanup_error = exc
+            raise
         finally:
             (
                 g.write,
@@ -320,7 +338,6 @@ class TelemetryAssignmentContext:
             g.ENV.clear()
             g.ENV.update(environment)
             _active = None
-        lab.need(not errors, "assignment cleanup incomplete: " + str(errors))
 
     def _created(self, path, data):
         info = os.stat(path, follow_symlinks=False)
