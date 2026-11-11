@@ -75,7 +75,7 @@ jobs:
           sudo chmod o+x "$HOME"
           set -o pipefail
           sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
-            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py tests/test_outcome_native_confinement_linux.py tests/test_outcome_socket_boundary_linux.py | tee input-auth-uids.log
+            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py tests/test_outcome_native_confinement_linux.py tests/test_outcome_socket_boundary_linux.py tests/test_outcome_witness_abstract_linux.py | tee input-auth-uids.log
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
