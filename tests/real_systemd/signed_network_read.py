@@ -272,8 +272,39 @@ def terminal_chain(trust, source, frames, verifier, result, wire, decoded):
         "exact single signed session",
     )
     pending, committed = {}, set()
+    active, recovering = False, False
+    position = dict(offset=0, sha256=sha(b""))
     for frame in frames:
-        if frame["kind"] in ("begin", "commit"):
+        kind, data = frame["kind"], frame["data"]
+        if kind == "header":
+            continue  # Unique first header is checked above and fully bound by caller.
+        if kind == "session_open":
+            need(
+                not active and data == {"boot_id": n.boot_reference(kernel)},
+                "invalid journal session open",
+            )
+            active, recovering = True, True
+            continue
+        need(active, "journal transition outside active session")
+        if kind == "session_close":
+            need(
+                data == {"boot_id": n.boot_reference(kernel)} and not pending,
+                "invalid journal clean close",
+            )
+            active = False
+            continue
+        if kind == "cursor":
+            need(not recovering or data["missed"] is True, "observed recovery cursor")
+            position = data["position"]
+        elif kind == "input_ready":
+            need(recovering and data == position, "invalid journal recovery fence")
+            recovering = False
+        elif kind == "begin":
+            need(
+                not recovering and data["boot_id"] == n.boot_reference(kernel),
+                "begin outside ready boot-bound session",
+            )
+        if kind in ("begin", "commit"):
             data = frame["data"]
             key = (data["execution_id"], data["objective_id"])
             meta = {name: data[name] for name in META}
@@ -290,7 +321,10 @@ def terminal_chain(trust, source, frames, verifier, result, wire, decoded):
                 )
                 _outcome(data["outcome"])
                 committed.add(key)
-    need(not pending and not lost, "pending/lost windows remain unavailable")
+    need(
+        not active and not pending and not lost,
+        "pending/lost windows remain unavailable",
+    )
     return events
 
 

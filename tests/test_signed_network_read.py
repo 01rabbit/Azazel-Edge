@@ -164,14 +164,14 @@ def terminal_material(tmp_path, monkeypatch):
         ("header", {}),
         ("session_open", dict(boot_id=context["boot_ref"])),
         ("input_ready", dict(offset=0, sha256=reader.sha(b""))),
-        ("session_close", {}),
+        ("session_close", dict(boot_id=context["boot_ref"])),
         ("session_open", dict(boot_id=context["boot_ref"])),
     ]
     for index, pos in enumerate(positions):
         rows.append(("cursor", dict(position=pos, missed=index in (0, 1, 4))))
         if index == 1:
             rows.append(("input_ready", pos))
-    rows.append(("session_close", {}))
+    rows.append(("session_close", dict(boot_id=context["boot_ref"])))
     _, frames = journal(rows)
     return (
         source_reader,
@@ -382,3 +382,57 @@ def test_complete_callback_order_and_multiplicity_remain_exact():
             BenefitInputError, match="exact ordered signed callback coverage"
         ):
             reader._require_ordered_callbacks(calls, events)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missingcloseboot",
+        "wrongcloseboot",
+        "extraclosefield",
+        "doubleopen",
+        "doubleclose",
+        "orphancursor",
+        "orphanready",
+        "orphanbegin",
+        "orphancommit",
+        "earlyready",
+        "pendingclose",
+    ],
+)
+def test_journal_lifecycle_matches_actual_writer_contract(tmp_path, monkeypatch, fault):
+    from copy import deepcopy
+
+    r, source, frames, result, wire, decoded = terminal_material(tmp_path, monkeypatch)
+    # These are manually assembled synthetic journal frames, not an assertion
+    # that ObservationJournal wrote them. Original source signatures remain real.
+    if fault == "missingcloseboot":
+        frames[-1]["data"] = {}
+    elif fault == "wrongcloseboot":
+        frames[-1]["data"] = dict(boot_id="kernel-boot-other")
+    elif fault == "extraclosefield":
+        frames[-1]["data"]["extra"] = True
+    elif fault == "doubleopen":
+        frames.insert(2, deepcopy(frames[1]))
+    elif fault == "doubleclose":
+        frames.insert(4, deepcopy(frames[3]))
+    elif fault == "orphancursor":
+        frames.insert(4, frames.pop(5))
+    elif fault == "orphanready":
+        frames.insert(4, frames.pop(7))
+    elif fault == "orphanbegin":
+        frames.insert(4, dict(kind="begin", data={}))
+    elif fault == "orphancommit":
+        frames.insert(4, dict(kind="commit", data={}))
+    elif fault == "earlyready":
+        frames.insert(5, frames.pop(7))
+    elif fault == "pendingclose":
+        meta = {name: "identity" for name in reader.META}
+        meta["boot_id"] = result["context"]["boot_ref"]
+        frames.insert(-1, dict(kind="begin", data=meta))
+    before = reader.recording.canonical(frames)
+    with pytest.raises(Exception):
+        reader.terminal_chain(
+            r.trust, source, frames, r.verifier, result, wire, decoded
+        )
+    assert reader.recording.canonical(frames) == before
