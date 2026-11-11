@@ -86,3 +86,64 @@ def test_unknown_actor_quiescence_cannot_delete_owned_namespace(monkeypatch):
     monkeypatch.setattr(t.network, "root_snapshot", lambda: pytest.fail("must refuse first"))
     with pytest.raises(AssertionError, match="retain owned namespace"):
         t.close_namespace_after_actors(assets, dict(errors=[("unit", "unknown")]), {})
+
+
+@pytest.mark.parametrize("name", [t.UNIT, t.UNIT+".d", "service.d", "edge400-.service.d", "edge400-telemetry-.service.d"])
+def test_preexisting_exact_and_global_unit_material_refuses(tmp_path,name):
+    (tmp_path/name).symlink_to(tmp_path/"missing")
+    with pytest.raises(AssertionError, match="unit material"):
+        t.reject_unit_material([tmp_path])
+
+
+def effective():
+    value = dict.fromkeys(t.EFFECTIVE, "")
+    value.update(User="edge400-observer", Group="edge400-observer", AppArmorProfile="edge400-observer",
+                 RestrictAddressFamilies="AF_UNIX", NoNewPrivileges="yes", Restart="no", RuntimeMaxUSec="10s", TimeoutStopUSec="3s",
+                 DefaultDependencies="no", Slice="system.slice", NetworkNamespacePath="/run/netns/fresh",
+                 FragmentPath="/run/systemd/transient/"+t.UNIT, Requires="system.slice", After="system.slice")
+    executable = str(t.g.PYTHON.with_name("edge-observe"))
+    value["ExecStart"] = "{ path="+executable+" ; argv[]="+" ".join([executable,"-I","-B",str(Path(t.__file__).resolve()),"--worker"])+" ; ignore_errors=no ; pid=123 }"
+    return value
+
+
+@pytest.mark.parametrize("field,bad", [("ExecStartPre","/bin/hook"),("ExecStartPost","/bin/hook"),("ExecStop","/bin/hook"),("ExecStopPost","/bin/hook"),
+                                     ("Wants","unexpected.service"),("Requires","unexpected.service"),("Restart","always"),("DropInPaths","/etc/global.conf"),
+                                     ("NetworkNamespacePath","/run/netns/foreign"),("ExecStart","{ path=/bin/other }"),("RuntimeMaxUSec","infinity"),
+                                     ("NoNewPrivileges","no"),("CapabilityBoundingSet","cap_net_admin"),("AppArmorProfile","unconfined"),("RestrictAddressFamilies","AF_UNIX AF_INET")])
+def test_effective_hooks_authority_command_and_bounds_must_match(field,bad):
+    value=effective()
+    t.validate_effective(value,"fresh")
+    value[field]=bad
+    with pytest.raises(AssertionError):
+        t.validate_effective(value,"fresh")
+
+
+def test_bad_pid1_cgroup_view_refuses_before_first_mutation(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(t.subprocess,"run",lambda *a,**k: SimpleNamespace(stdout=str(tmp_path)+"\n"))
+    def bad_view():
+        raise AssertionError("wrong PID1 view")
+    monkeypatch.setattr(t.cg,"_cgroup_view",bad_view)
+    monkeypatch.setattr(t,"guard",t.pre_mutation_checks)
+    monkeypatch.setattr(t.a,"prepare_accounts",lambda:pytest.fail("account mutation before full view"))
+    output=tmp_path/"never-created"
+    with pytest.raises(AssertionError,match="PID1 view"):
+        t.run(output)
+    assert not output.exists()
+
+
+def test_dangling_used_base_alias_is_refused(monkeypatch,tmp_path):
+    path=tmp_path/"used"
+    path.symlink_to(tmp_path/"absent")
+    monkeypatch.setattr(t.g,"BASE",path)
+    with pytest.raises(AssertionError,match="scope/alias"):
+        t.reject_used_base()
+
+
+def test_writable_output_ancestor_refuses_creation(tmp_path):
+    parent=tmp_path/"writable"
+    parent.mkdir(mode=0o777)
+    parent.chmod(0o777)
+    with pytest.raises(OSError,match="ancestor"):
+        t.private_output(parent/"private")
+    assert not (parent/"private").exists()

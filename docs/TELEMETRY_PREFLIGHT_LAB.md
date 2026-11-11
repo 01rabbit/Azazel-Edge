@@ -16,6 +16,11 @@ IPv4/IPv6 default routes. Set `EDGE_TELEMETRY_PREFLIGHT=1`,
 `EDGE_TELEMETRY_ARCHIVE_SHA256` to reviewed pins. The archive SHA is explicitly
 an operator trust-boundary declaration: Root must verify the staged archive
 out of band; the harness verifies protected revision/module/ELF/source hashes.
+Before any output/account/profile mutation, the harness refuses preexisting
+exact-unit, prefix and type-wide drop-in material across actual manager unit
+search paths (including dangling aliases), and requires the actual full PID1
+unified cgroup view. The new output directory is created through a protected
+physical root-owned parent descriptor; writable/symlink ancestors refuse.
 Run only `tests/test_telemetry_preflight.py` with the staged pytest. Defaults skip
 actual commissioning. No execution has been performed by authoring this code.
 
@@ -28,7 +33,12 @@ the same edge-observe alias, UID61002, enforced edge400-observer label, cap0,
 no-new-privileges and AF_UNIX-only unit; Restart=no and bounded runtime are fixed.
 
 A bounded ready/fence handshake lets Root independently pin actual unit PID,
-original PID starttime and namespace inode before the worker samples. No new
+original PID starttime and namespace inode before the worker samples. Before
+releasing that sample fence, Root also validates the effective fixed executable
+and arguments, UID/group, AppArmor, zero capabilities, AF_UNIX, NNP, Restart=no,
+DefaultDependencies=no, runtime/stop limits, slice, namespace path, transient
+fragment, absent drop-ins, empty ExecCondition/StartPre/Post/Stop/Post and
+restricted activation dependencies. Requested launch flags alone do not pass. No new
 observer proc-stat or namespace permissions are needed. The real
 LinuxProcTelemetrySource samples es once. Original sample coverage and separate
 actual per-path read errno/size/hash are retained for /proc/net/dev, loadavg,
