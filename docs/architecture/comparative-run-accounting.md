@@ -59,3 +59,37 @@ partial-tail refusal, write durability failure, private-file boundaries, crash
 denominators, repeat/finalization refusal, immutable exports, existing analyzer
 parity and absence of network/subprocess execution. Physical G6 and independent
 efficacy/sample-size review remain separate gates.
+
+## Explicit v2 unqualified-attempt accounting
+
+The default `RunLedger` remains `azazel-benefit-run-ledger/v1`. A newly created
+ledger may explicitly select `allow_unqualified_attempts=True`, which writes
+`azazel-benefit-run-ledger/v2`. Reopening that file requires both the externally
+retained exact head and the same explicit option. V1 refuses the option on
+reopen; default mode refuses v2. There is no migration, repair or automatic
+format selection, and historical ledgers remain unchanged.
+
+Only v2 supports
+`record_unqualified_attempt(assignment_id, run_id, reason_code, evidence_sha256)`.
+It requires an already running matching assignment/run and appends a terminal
+`unqualified` status. The closed reasons are `clock_withheld`,
+`safety_unmeasured`, `execution_failed`, `cleanup_unverified`, and
+`operator_interrupted`. The evidence reference must be an exact lowercase
+SHA256. The event contains no performance metrics, horizon assertion, safety
+counts or inferred zeros. It cannot be retried, finished, promoted or replaced
+with a new run for that assignment.
+
+Snapshots preserve the assignment, run, reason and evidence hash. Their analyzer
+`observations.runs` excludes unqualified attempts: the existing analyzer retains
+the complete preregistered denominator and reports those assignments as missing,
+with incomplete pairs. This is terminal local accounting, not a successful or
+completed measurement. The reason/hash are operator declarations, not source
+authentication, a witness receipt, verified cleanup, admission or authority to
+execute anything. No runtime action is performed by recording an attempt.
+
+The existing exclusive lifetime lock, append hash chain, file/parent fsync,
+externally retained head and poisoned-writer/no-repair rules also apply to v2.
+A failed fsync never publishes an acknowledged terminal head; uncertain visible
+bytes cannot authorize reopening against the earlier checkpoint. Real-file tests
+cover all five reasons, reopen/mode mismatch, terminality, missing-denominator
+analysis, competing locks, incomplete tails and injected durability failure.

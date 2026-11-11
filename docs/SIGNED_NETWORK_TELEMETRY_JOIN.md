@@ -1,15 +1,21 @@
 # Optional signed telemetry join: interface and scoped commissioning
 
-There is one [scoped positive init/live/terminal result](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12),
-plus a separate exact signature-refusal case, and no frozen four-assignment manifest. The existing signed-network preparation/runner still selects the
-legacy role and **rejects the new manifest**. Do not use this component as an
-operator entrypoint or interpret structural validation as permission to proceed.
-The old-profile telemetry gap remains blocked. The separately completed v6
-stateless precheck is compatibility evidence at its own tested source, not admission
-for another source or scope. The new explicit v2 empty-preparation/topology API is described in
-[SIGNED_TELEMETRY_ASSIGNMENT_PREPARE.md](SIGNED_TELEMETRY_ASSIGNMENT_PREPARE.md);
-that new path remains runtime unrun. Legacy signed-network entry points still
-reject the new manifest. Structural validation or old receipts are not admission.
+There is a [scoped positive init/live/terminal result](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12),
+a separate signature-refusal case, and a [frozen four-VM pilot](SIGNED_TELEMETRY_VM_PILOT_20261112.md).
+The explicit v2 [preparation](SIGNED_TELEMETRY_ASSIGNMENT_PREPARE.md),
+[runner](SIGNED_NETWORK_TELEMETRY_RUN_V2.md) and
+[reader](SIGNED_TELEMETRY_READ_V2.md) are separate opt-in lab APIs. The pilot
+remains withheld: three timing refusals and four unmeasured safety categories
+prevent comparative qualification. Its historical source does not qualify a
+later source or scope. The reader now preserves diagnostic calculations while
+always withholding safety qualification until independent observations exist.
+
+Legacy signed-network entry points still select the legacy role and **reject
+the new manifest**. Old defaults and the old-profile telemetry gap are unchanged.
+Structural validation, a stateless precheck or old receipts are not production
+admission or permission to proceed. The component design notes below describe
+mandatory boundaries; current integration and runtime status is in the linked
+v2 documents and pilot report.
 
 ## Explicit plan and external pins
 
@@ -33,15 +39,16 @@ types canonically. It does **not** authenticate imported JSON or independently
 establish that declared pin values came from Root. The legacy validator still
 rejects v2, preventing legacy preparation from provisioning an old role for it. The separate
 v2 preparation requires explicit opt-in and compares independent pins with current
-protected material; it does not supply a runner or four-record analysis.
+protected material. The separate v2 runner and reader supply their own strict
+composition; preparation alone supplies neither execution nor analysis.
 
 Source hashes describe the constructor's current checkout. Root's mandatory
 external source-archive hash verification on host/guest and protected revision
 boundary authenticates the source; these selected hashes are not a replacement
 recursive source proof. The reviewed Root proof module is now present and mandatory in the source-pin
-map, using its actual bytes; missing or changed entries refuse. The final worker
-and remaining consumed helpers must still be integrated/reviewed before any final
-plan/source freeze. Changes invalidate previous hashes.
+map, using its actual bytes; missing or changed entries refuse. Consumed worker
+and helper bytes must be included and reviewed before each plan/source freeze.
+Changes invalidate previous hashes; an earlier pilot never qualifies new bytes.
 
 ## Current protected material, without installation or activation
 
@@ -72,9 +79,9 @@ Tests use explicitly synthetic Root/tool observations. No actual compiler, polic
 load or hardened role is exercised by this chunk. Old defaults/profiles/aliases,
 product registration and journal schemas remain unchanged.
 
-## Remaining separately reviewed boundary
+## Mandatory separately reviewed boundary
 
-The future worker must emit PRE-API READY before opening trust/source/policy,
+The worker must emit PRE-API READY before opening trust/source/policy,
 journal/sidecar/witness or telemetry handles. Root must verify both actual fixed
 roles, source/alias/profile, typed effective properties, private proc mounts,
 three original FIFO identities and owned provider namespace before sending the
@@ -137,8 +144,8 @@ of whole-scope quiescence or admission.
 Tests use synthetic Root/unit/proof observations and real private client IO,
 including a stuck owned client killed/reaped by the helper itself. They do not
 execute a hardened initializer, policy loader, authenticated scope or VM. Separate
-manual init/live commissioning now has the scoped result linked above; trial
-phase/run dispatch remains unwired.
+manual init/live commissioning has the scoped result linked above. The explicit
+v2 dispatch and its withheld historical pilot are documented separately.
 
 
 ### Initializer prelaunch inherited-material refusal
@@ -151,7 +158,7 @@ LEXISTS includes dangling aliases. This prevents an inherited hook/dependency
 from running before the later effective-property proof could reject it. Unknown
 modes, query errors/diagnostics, duplicate/malformed/oversize paths refuse before
 launch or GO. Original argv/stdout/stderr/result remain private evidence. There
-is no caller-supplied unit or path selection; live composition is still unwired.
+is no caller-supplied unit or path selection; v2 live composition retains this gate.
 
 The outer provisioner must make the **newly created** Root-owned fixture BASE
 traversable with its intended 0755 mode and retain creation provenance before
