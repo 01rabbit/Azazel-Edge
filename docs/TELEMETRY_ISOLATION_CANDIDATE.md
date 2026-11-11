@@ -85,3 +85,44 @@ incomplete negative keeps commissioning blocked. Root must stop and prove both
 fixed actor cgroups empty, including descendants, before identity-fenced namespace
 cleanup; retain failures/used VM and verify old policy and parent state unchanged.
 There is no automatic fallback, retry, role selection or existing-trial wiring.
+
+## Root collector helper chunk (no controller or worker)
+
+`telemetry_isolation_preflight.py` now adds callable Root collectors only. It has
+no `run`, worker entrypoint, installation, profile compilation/loading, canary
+creation, sampling IPC or automatic trial wiring. `worker_argv` describes only a
+future fixed command for effective-unit comparison; it is not a functioning CLI.
+Use no command from this component until the remaining code is frozen/reviewed.
+
+`collect_features(output, expected_abi_sha256=...)` retains current public ABI4
+bytes and namespace/ptrace masks before checking an external ABI pin and required
+`userns_create`, `read`, `trace` tokens. Root's separate feature-only VM established
+these metadata paths exist; the opaque `namespaces/userns_create` value is not
+interpreted. Availability is not policy compilation, effective denial or hidepid
+qualification. Later actual commissioning must still retain parser/expanded
+policy output, reject warnings/unsupported enforcement and execute real negatives.
+
+`collect_effective(mode, output)` uses fixed systemctl/typed D-Bus queries for only
+the two literal units. Original argv/stdout/stderr/result files precede parsing.
+Absent empty hooks require actual typed empty-array proof, never assumed defaults;
+ProtectProc/ProcSubset/MountAPIVFS and all existing authority/dependency checks must
+match. Existing collectors have their two-second query bounds; no arbitrary
+Root command is accepted by this API.
+
+`collect_actor(...)` reads only fixed actual-unit PID-derived kernel metadata.
+It retains status, label, cgroup, complete bounded target mountinfo, namespace
+identities, proc owner, finite FD inventory and before/after PID/starttime state,
+plus the expected Root pipe/namespace and actual ready dumpable report. A failed
+check keeps the originals. Dumpable is the worker's future actual prctl report,
+corroborated by Root's proc-directory ownership; it is not invented from a missing
+kernel status field. Mount and FD contract checks then refuse drift or unknowns.
+The fixed private output must already be physical protected Root-owned 0700.
+These helper tests use mocked Root observations; no new role has run.
+
+`canary_spec` describes only PUBLIC NONKEY bytes, four world-readable denial
+canaries and one nontruncating source-write canary. It creates nothing. Actual
+source-write denial will describe the combined DAC/AppArmor boundary honestly.
+The candidate intentionally supplies no namespace FD: a later real namespace-FD
+open denial and unshare test must remain distinct from an **unexercised setns
+syscall**. Invalid-FD calls are not permission evidence, and no Root FD proxy or
+extra namespace-read permission is introduced to manufacture such evidence.
