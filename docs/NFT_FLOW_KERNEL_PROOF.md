@@ -54,7 +54,10 @@ existing `SubprocessReadOnlyRunner` on exactly:
 nft -j list chain inet azazel_edge throttle
 ```
 
-The probe retains full raw stdout/stderr/return code, logical query, actual
+The child applies the same explicit opt-in, protected VM marker, source/core
+pins and no-default-route guards before its query, including when invoked
+directly; its route checks apply inside the owned namespace. The probe retains
+full raw stdout/stderr/return code, logical query, actual
 namespace-exec child arguments, PID/UID/namespace inode, nft binary hash and
 actual query start/end UTC times. The actual validated kernel boot UUID is
 retained in intent and every query receipt and must agree, together with the

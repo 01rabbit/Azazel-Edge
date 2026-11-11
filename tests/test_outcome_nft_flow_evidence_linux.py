@@ -105,8 +105,11 @@ def _probe_child():
     from azazel_edge.outcome.postcondition import SubprocessReadOnlyRunner
     network.require(sys.argv[1:] == ["--root-readonly-nft"] and os.geteuid() == 0 and tuple(flow.QUERY) == QUERY,
                     "fixed root read-only nft child only")
-    identity = _source_identity()
-    kernel_boot = network.read_boot_id()
+    # Direct child invocation must not bypass the explicit root/VM/source/core
+    # gates. Route checks now apply inside the owned namespace as well.
+    pins = _guard()
+    identity = {key: pins[key] for key in ("source_revision", "helper_sha256", "network_driver_sha256")}
+    kernel_boot = pins["kernel_boot_id"]
     binary = shutil.which("nft", path="/usr/sbin:/usr/bin:/sbin:/bin")
     network.require(binary is not None, "trusted nft binary unavailable")
     started = datetime.now(timezone.utc).isoformat()
