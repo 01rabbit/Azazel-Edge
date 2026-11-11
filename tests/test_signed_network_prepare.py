@@ -70,7 +70,10 @@ def test_protected_policy_override_precedes_provider_captured_writer(monkeypatch
     monkeypatch.setattr(d.g, "ENV", dict(d.BASE_ENV))
     monkeypatch.setattr(d.p.a, "NATIVE", False)
     monkeypatch.setattr(d.g, "boot", lambda: "7be45004-1731-4b7c-8e62-59a5ddf129a4")
-    observer_initializer = lambda *args: None
+
+    def observer_initializer(*args):
+        return None
+
     d.configure_assignment(
         {"assignment": {"arm": arm}}, observer_initializer=observer_initializer
     )
