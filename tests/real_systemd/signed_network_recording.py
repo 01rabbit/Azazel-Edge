@@ -35,6 +35,13 @@ def canonical(value):
     ).encode()
 
 
+def _clock_anchor():
+    before = time.monotonic_ns()
+    epoch = time.time_ns()
+    after = time.monotonic_ns()
+    return dict(monotonic_before_ns=before, epoch_ns=epoch, monotonic_after_ns=after)
+
+
 class CallRecording:
     """Exclusive bounded sidecar under the existing observer/** grant.
 
@@ -148,14 +155,19 @@ def record_collector(path, *, policy, policy_source_ref):
         def record_sample(self, *, epoch=None):
             with operation():
                 need(epoch is not None, "explicit real loop epoch required")
+                clock_before = _clock_anchor()
                 start = time.monotonic_ns()
                 result = super().record_sample(epoch=epoch)
+                end = time.monotonic_ns()
+                clock_after = _clock_anchor()
                 sink.append(
                     "sample",
                     dict(
                         epoch=epoch,
                         start_ns=start,
-                        end_ns=time.monotonic_ns(),
+                        end_ns=end,
+                        clock_before=clock_before,
+                        clock_after=clock_after,
                         sample=asdict(result) if result else None,
                     ),
                 )
@@ -164,14 +176,19 @@ def record_collector(path, *, policy, policy_source_ref):
         def observe_event(self, event, *, observed_epoch=None):
             with operation():
                 need(observed_epoch is not None, "explicit intake epoch required")
+                clock_before = _clock_anchor()
                 start = time.monotonic_ns()
                 result = super().observe_event(event, observed_epoch=observed_epoch)
+                end = time.monotonic_ns()
+                clock_after = _clock_anchor()
                 sink.append(
                     "event",
                     dict(
                         epoch=observed_epoch,
                         start_ns=start,
-                        end_ns=time.monotonic_ns(),
+                        end_ns=end,
+                        clock_before=clock_before,
+                        clock_after=clock_after,
                         event=event,
                         accepted=result,
                     ),
@@ -181,14 +198,19 @@ def record_collector(path, *, policy, policy_source_ref):
         def finalize_due(self, *, epoch=None):
             with operation():
                 need(epoch is not None, "explicit finalization epoch required")
+                clock_before = _clock_anchor()
                 start = time.monotonic_ns()
                 result = super().finalize_due(epoch=epoch)
+                end = time.monotonic_ns()
+                clock_after = _clock_anchor()
                 sink.append(
                     "finalize",
                     dict(
                         epoch=epoch,
                         start_ns=start,
-                        end_ns=time.monotonic_ns(),
+                        end_ns=end,
+                        clock_before=clock_before,
+                        clock_after=clock_after,
                         outcomes=[r.to_dict() for r in result],
                     ),
                 )
@@ -311,7 +333,7 @@ def decode_calls(raw):
         need(
             extra
             and type(data) is dict
-            and set(data) == {"epoch", "start_ns", "end_ns"} | extra,
+            and set(data) == {"epoch", "start_ns", "end_ns", "clock_before", "clock_after"} | extra,
             "unknown recorded call",
         )
         need(
@@ -326,7 +348,14 @@ def decode_calls(raw):
             and last_end <= data["start_ns"] <= data["end_ns"],
             "recorded monotonic overlap",
         )
-        last_epoch, last_end = data["epoch"], data["end_ns"]
+        anchors = [data["clock_before"], data["clock_after"]]
+        for anchor in anchors:
+            need(type(anchor) is dict and set(anchor) == {"monotonic_before_ns", "epoch_ns", "monotonic_after_ns"}
+                 and all(type(v) is int and 0 <= v < 2**63 for v in anchor.values()), "actual call clock anchor missing/malformed")
+        before, after = anchors
+        need(last_end <= before["monotonic_before_ns"] <= before["monotonic_after_ns"] <= data["start_ns"]
+             <= data["end_ns"] <= after["monotonic_before_ns"] <= after["monotonic_after_ns"], "recorded clock anchor monotonic overlap")
+        last_epoch, last_end = data["epoch"], after["monotonic_after_ns"]
     return dict(context=metadata, calls=rows[1:-1])
 
 

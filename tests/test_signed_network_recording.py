@@ -275,3 +275,21 @@ def test_caught_operation_failure_never_writes_clean_end(tmp_path, failure):
     with pytest.raises(BenefitInputError, match="unfinished"):
         r.read_calls(path)
     assert input_resume.OutcomeTelemetryCollector is OutcomeTelemetryCollector
+
+
+@pytest.mark.parametrize("after_call", [False, True])
+def test_actual_call_anchors_are_mandatory_and_clock_failure_poisoning_is_sticky(tmp_path, after_call):
+    path = tmp_path / "calls"
+    collect(path)
+    data = r.read_calls(path)["calls"][0]["data"]
+    assert data["clock_before"]["monotonic_after_ns"] <= data["start_ns"]
+    assert data["end_ns"] <= data["clock_after"]["monotonic_before_ns"]
+    with pytest.raises(OSError):
+        with r.record_collector(tmp_path / "failed", policy=POLICY, policy_source_ref="inline"):
+            collector = input_resume.OutcomeTelemetryCollector(source=Source(), policy=OutcomeTelemetryPolicy.from_mapping(POLICY), interface="es")
+            failure = OSError("clock read failed")
+            effects = [r._clock_anchor(), failure] if after_call else failure
+            with patch.object(r, "_clock_anchor", side_effect=effects):
+                collector.record_sample(epoch=100)
+    with pytest.raises(BenefitInputError, match="unfinished"):
+        r.read_calls(tmp_path / "failed")
