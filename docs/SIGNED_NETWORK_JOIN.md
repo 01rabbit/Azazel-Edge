@@ -295,3 +295,11 @@ original failure. Never repair or retry a used/failed assignment.
 The timed assignment runner and authenticated read-only join are still pending.
 Nothing in this segment authorizes starting workload or freezing an actual
 experiment before independent review of the complete frozen source.
+
+Preparation has one narrow cleanup-order exception: if `Assets.setup` fails
+inside the fixed namespace-preparation unit, that unit may immediately call the
+existing `Assets.close` for **its own confirmed created identities** before it
+exits. At that point no namespace workload children or registered actors exist;
+unknown/unconfirmed names and original partial intents remain for review. This is
+not a new partial-cleanup engine. Once provisioning begins, every failure still
+requires verified stop of all fixed actors before namespace deletion.
