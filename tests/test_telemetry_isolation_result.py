@@ -168,7 +168,7 @@ def test_complete_result_preserves_originals_and_returns_no_acceptance_flags(
         "resume_authorized",
     } & set(decoded)
     if mode == "probe":
-        assert len(decoded["operations"]) == 38
+        assert len(decoded["operations"]) == 40
 
 
 @pytest.mark.parametrize(
@@ -233,7 +233,7 @@ def test_complete_probe_gate_refuses_partial_typed_or_unsupported_facts(
     elif fault == "noopread":
         rows[0]["outcome"] = "not_attempted"
     elif fault == "fakesetns":
-        rows[33]["outcome"] = "denied"
+        next(row for row in rows if row["operation"] == "setns")["outcome"] = "denied"
     elif fault == "identitytype":
         value["identity"]["dumpable"] = 1.0
     elif fault == "blocked":
@@ -290,3 +290,23 @@ def test_parser_metric_type_substitution_refuses_without_rewriting(
     with pytest.raises(ValueError, match="actual global sample metrics"):
         r.validate_result(wire, start, peer_pid=123)
     assert raw(observed) == wire
+
+
+@pytest.mark.parametrize("fault", ["missing", "reorder", "enoent", "einval", "success"])
+def test_binfmt_api_requires_both_actual_ordered_permission_denials(tmp_path, fault):
+    start, value = final(tmp_path)
+    rows = value["operations"]
+    assert rows[3]["operation"].endswith("binfmt_misc/status")
+    assert rows[4]["operation"].endswith("binfmt_misc/register")
+    if fault == "missing":
+        rows.pop(4)
+    elif fault == "reorder":
+        rows[3], rows[4] = rows[4], rows[3]
+    elif fault == "success":
+        rows[3]["outcome"] = "unexpected_success"
+    else:
+        rows[3]["errno"] = errno.ENOENT if fault == "enoent" else errno.EINVAL
+    before = deepcopy(value)
+    with pytest.raises(ValueError):
+        r.validate_result(raw(value), start, peer_pid=123)
+    assert value == before

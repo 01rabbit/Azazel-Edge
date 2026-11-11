@@ -130,7 +130,12 @@ def fixture(tmp_path, monkeypatch, fault=None):
         identity = deepcopy(value["identity"])
         return value, dict(
             identity=identity,
-            evidence=dict(namespaces=dict(net=[5, 21 if mode == "peer" else 20])),
+            evidence=dict(
+                namespaces=dict(net=[5, 21 if mode == "peer" else 20]),
+                binfmt_before={
+                    "status": 999 if fault == "binfmtroles" and mode == "probe" else 100
+                },
+            ),
         )
 
     monkeypatch.setattr(c, "_ready", ready)
@@ -243,6 +248,7 @@ def test_complete_synthetic_flow_retains_actor_and_asset_cleanup_separately(
         "reply",
         "missingop",
         "postlive",
+        "binfmtroles",
         "namespaceclose",
         "invariants",
         "actorreceipt",
@@ -397,7 +403,7 @@ def test_ready_handoff_uses_only_pid_dumpable_projection_and_real_counterparts(
     assert calls == ["stdio", "ready", "actor"]
 
 
-@pytest.mark.parametrize("fault", ["pid", "namespace", "boot"])
+@pytest.mark.parametrize("fault", [None, "pid", "namespace", "boot", "binfmt"])
 def test_live_target_drift_is_retained_before_refusal(tmp_path, monkeypatch, fault):
     unit = c.C.role_spec("peer")["unit"]
     state = dict(
@@ -411,7 +417,9 @@ def test_live_target_drift_is_retained_before_refusal(tmp_path, monkeypatch, fau
     proof = dict(
         identity=dict(pid=123),
         evidence=dict(
-            before=deepcopy(state), namespaces=dict(net=[5, 20], mnt=[5, 21])
+            before=deepcopy(state),
+            namespaces=dict(net=[5, 20], mnt=[5, 21]),
+            binfmt_before={"status": 100},
         ),
     )
     if fault == "pid":
@@ -437,8 +445,16 @@ def test_live_target_drift_is_retained_before_refusal(tmp_path, monkeypatch, fau
             )
         ),
     )
-    with pytest.raises(AssertionError, match="known-live"):
+    monkeypatch.setattr(
+        c.p,
+        "binfmt_metadata",
+        lambda pid, evidence: evidence.update(status=999 if fault == "binfmt" else 100),
+    )
+    if fault is None:
         c._live_targets(proof, BOOT, tmp_path, "after")
+    else:
+        with pytest.raises(AssertionError, match="known-live"):
+            c._live_targets(proof, BOOT, tmp_path, "after")
     retained = json.loads((tmp_path / "after-live-targets.json").read_bytes())
     assert retained["state"] == state and retained["boot"] == (
         "wrong" if fault == "boot" else BOOT

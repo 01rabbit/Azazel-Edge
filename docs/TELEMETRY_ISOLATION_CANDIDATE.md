@@ -36,6 +36,43 @@ actual proc row are regression fixtures, not evidence of completed isolation.
 No profile permission, namespace FD grant/proxy or proc visibility/device gate
 changes. Fresh commissioning and all actual negative probes remain required.
 
+## Retained v3 failure and inaccessible binfmt API exception
+
+Root's next fresh case used source `906d06fcb0205f2176e3002cf0a299cad3054580`,
+archive SHA256 `d401f8eb6d2466cfd58890f51cee37b2dd50d831d379eaedc252cd914f3ee4db`,
+boot `4fae818f-3ca8-41cb-a44c-9b6bec2d2795`. Its 268 component tests passed and
+peer READY/UID61002/new enforcing label/capability zeros/NNP were valid. The Root
+parser then refused an inherited `binfmt_misc` mount below `/proc`; no probe ran.
+All actor cgroups/namespaces were absent and parent/old assets unchanged after
+cleanup. This failed VM is stopped, retained and never retried. Private evidence
+archive SHA256 is
+`42ebb2715af16bb6e5d7ab1b35b76d9d23dd051fa6b669569affd3457eb8595f`.
+
+The new exception permits at most one exact `binfmt_misc` filesystem/source,
+root `/`, target `/proc/sys/fs/binfmt_misc`, whose parent mount ID is the sole
+validated private proc mount ID. Every other proc submount, descendant, overlay,
+alias or duplicate refuses. Only the NEW candidate profile explicitly denies
+read/write/execute access to that directory and subtree. The parent mount is
+never unmounted, masked, repaired, toggled or registered by this precheck.
+
+Root collects only stat metadata for the fixed `status` and `register` endpoints
+through each actor's actual root view, before/after identity-fenced collection:
+both must be stable root-owned regular files with identical identities in both
+roles. Existing peer live-target checks repeat the endpoint stats before and
+after probing. There are no endpoint content reads or control writes by Root.
+The worker's two additional fixed operations attempt read-only `status` open and
+write-only `register` open, both nofollow/cloexec, with no create/truncate/write
+payload. Only EACCES/EPERM qualify; absent/unsupported endpoints refuse. Any
+unexpected open closes its owned FD and aborts before further probes.
+
+The fixed result now requires **40 ordered rows: 36 negative attempts plus four
+existing other rows**. No top-level result schema, old profile/default/unit or
+permission grant changes. This is self-process/thread-group visibility plus
+observed denial of the inherited API, not an entirely self-only proc filesystem
+or AA-only attribution (write-open may also be denied by DAC). Endpoint metadata
+unit fixtures are explicitly synthetic; v3 collected none. Current source still
+requires fresh compilation and complete actual positive/negative commissioning.
+
 ## Candidate policy and pure contracts
 
 `tests/real_systemd/edge400-observer-telemetry-lab.apparmor` names only the NEW
@@ -72,7 +109,8 @@ collection, caller-JSON authentication, policy loading or an executable entrypoi
   numeric UID/GID61002/capability zeros, dumpable=1 and distinct Pid=Tgid processes.
 - `validate_proc_view(...)` requires distinct actor/PID1 mount namespaces, matching
   actual proc device, exactly one full root `/proc` with hidepid=4/ptraceable and
-  no group exemption, subset=pid, alternate proc mount or proc submount/overlay.
+  no group exemption, subset=pid or alternate proc mount. Only the exact
+  inaccessible binfmt child described above is exempted from submount refusal.
   Unknown/escaped layouts refuse conservatively. Root must later collect the
   complete target-process mountinfo to EOF within its bound; a supplied string
   cannot establish completeness or effective kernel behavior by itself.
@@ -217,7 +255,7 @@ hidepid/Yama/LSM or complete Root precheck result has been established.
 Root controller is implemented. `parse_ready` checks a single bounded retained
 frame against Root's actual boot/frozen worker SHA, exact role marker and typed
 identity/public-buffer shape. `validate_result` requires unchanged canonical
-context and the exact ordered 38 operations, legitimate per-operation errnos,
+context and the exact ordered 40 operations, legitimate per-operation errnos,
 actual complete interface/system sample structure and coverage, self-read sanity,
 self-only numeric enumeration and explicitly unexercised setns. Unknown rows,
 bool/int/float substitutions, missing observations and partial/fatal results
@@ -279,7 +317,7 @@ stop. Raw replies, stderr, return codes and actual input-byte counts are retaine
 before result parsing. Replies have a two-second deadline and finite stream caps;
 slow, malformed, missing or oversized output fails without retry or retuning.
 
-The exact transcript is **38 rows: 34 negative attempts**, self-read sanity, actual
+The exact transcript is **40 rows: 36 negative attempts**, self-read sanity, actual
 sample, enumeration, and explicitly unexercised setns. A complete worker JSON
 alone is insufficient. Only after transport/source/kernel/mount/FD/target bindings,
 full result validation and every cleanup/invariant gate may the controller return

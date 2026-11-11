@@ -139,6 +139,16 @@ def probe(libc, context, peer, records):
         set(numeric) == {context["identity"]["tgid"]},
         "self process missing from enumeration",
     )
+    for name, flags in (("status", os.O_RDONLY), ("register", os.O_WRONLY)):
+        path = contract.BINFMT + "/" + name
+        _denied(
+            records,
+            "binfmt_denied_open:" + path,
+            lambda path=path, flags=flags: os.open(
+                path, flags | os.O_NOFOLLOW | os.O_CLOEXEC
+            ),
+            resource="fd",
+        )
     for pid in (peer["pid"], 1):
         for suffix in (
             "net/dev",

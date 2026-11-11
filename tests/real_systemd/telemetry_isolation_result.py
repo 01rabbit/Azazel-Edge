@@ -149,6 +149,8 @@ def expected_operations(peer_pid):
             "proc_enumeration",
         )
     }
+    for name in ("status", "register"):
+        expected["binfmt_denied_open:" + c.BINFMT + "/" + name] = denied
     for pid in (peer_pid, 1):
         for suffix in (
             "net/dev",

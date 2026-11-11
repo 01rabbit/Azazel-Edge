@@ -20,6 +20,7 @@ ROLES = {
         "edge400-telemetry-isolation-foreign",
     ),
 }
+BINFMT = "/proc/sys/fs/binfmt_misc"
 IDENTITY_FIELDS = {
     "pid",
     "tgid",
@@ -135,7 +136,7 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
         type(raw) is str and 0 < len(raw.encode()) <= 1024 * 1024,
         "bounded complete mountinfo required",
     )
-    lines, mounts = raw.splitlines(), []
+    lines, mounts, binfmt = raw.splitlines(), [], []
     _need(raw.endswith("\n") and 0 < len(lines) <= 4096, "complete mountinfo required")
     for line in lines:
         fields = line.split()
@@ -162,8 +163,18 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
             ),
             "unknown/escaped mount path",
         )
+        is_binfmt = filesystem == "binfmt_misc"
+        if is_binfmt:
+            _need(
+                root == "/"
+                and target == BINFMT
+                and fields[sep + 2] == "binfmt_misc"
+                and all(re.fullmatch("[1-9][0-9]*", v) for v in fields[:2]),
+                "unknown binfmt mount",
+            )
+            binfmt.append(fields[:2])
         _need(
-            not target.startswith("/proc/")
+            (not target.startswith("/proc/") or is_binfmt)
             and (target != "/proc" or filesystem == "proc"),
             "proc submount/overlay is unsupported",
         )
@@ -189,8 +200,15 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
                 ),
                 "permissive/unknown proc visibility",
             )
-            mounts.append(target)
-    _need(mounts == ["/proc"], "exact one private proc view required")
+            mounts.append(fields[0])
+    _need(len(mounts) == 1, "exact one private proc view required")
+    _need(
+        not binfmt
+        or len(binfmt) == 1
+        and binfmt[0][1] == mounts[0]
+        and binfmt[0][0] != mounts[0],
+        "binfmt must be one child of actual private proc mount",
+    )
 
 
 def validate_pipe_fds(records, expected_stdio):

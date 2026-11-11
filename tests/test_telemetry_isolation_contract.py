@@ -347,3 +347,52 @@ def test_source_root_permission_is_only_literal_read_directory_metadata():
         "/opt/edge400-src/tests/** r,",
     }
     assert "/opt/edge400-src/ r," not in (directory / "edge400.apparmor").read_text()
+
+
+# Unchanged selected v3 rows: the original case refused before probe startup.
+V3_BINFMT = "429 434 0:37 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:352 master:48 - binfmt_misc binfmt_misc rw\n"
+
+
+def test_actual_v3_binfmt_child_row_has_exact_private_proc_parent_binding():
+    raw = ROOT + V2_NSFS + V3_BINFMT + V2_PROC
+    before = raw
+    assert view(raw, proc_device=(0, 47)) is None and raw == before
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        V3_BINFMT.replace("429 434", "429 405"),
+        V3_BINFMT.replace("429 434", "434 434"),
+        V3_BINFMT.replace("429 434", "429 0434"),
+        V3_BINFMT.replace("0:37 / /proc", "0:37 /subtree /proc"),
+        V3_BINFMT.replace(" - binfmt_misc ", " - tmpfs "),
+        V3_BINFMT.replace(" - binfmt_misc binfmt_misc ", " - binfmt_misc other "),
+        V3_BINFMT.replace("binfmt_misc rw,", "binfmt_misc/child rw,"),
+        V3_BINFMT.replace(" /proc/sys/fs/binfmt_misc ", " /proc/sys/fs/other "),
+        V3_BINFMT.replace(" /proc/sys/fs/binfmt_misc ", " /run/binfmt_misc "),
+        V3_BINFMT.replace(
+            " /proc/sys/fs/binfmt_misc ", r" /proc/sys/fs/binfmt_misc\040alias "
+        ),
+        V3_BINFMT + V3_BINFMT,
+        V3_BINFMT
+        + "430 429 0:38 / /proc/sys/fs/binfmt_misc/status rw - tmpfs tmpfs rw\n",
+        V3_BINFMT + "430 434 0:38 / /proc/other rw - tmpfs tmpfs rw\n",
+    ],
+)
+def test_binfmt_exception_never_accepts_other_api_alias_descendant_or_parent(row):
+    with pytest.raises(ValueError):
+        view(ROOT + V2_PROC + row, proc_device=(0, 47))
+
+
+def test_candidate_explicit_binfmt_denial_has_no_new_allow_or_old_profile_delta():
+    directory = Path(__file__).parent / "real_systemd"
+    raw = (directory / "edge400-observer-telemetry-lab.apparmor").read_text()
+    lines = [
+        line.strip() for line in raw.splitlines() if "/proc/sys/fs/binfmt_misc" in line
+    ]
+    assert lines == [
+        "audit deny /proc/sys/fs/binfmt_misc/ rwklmx,",
+        "audit deny /proc/sys/fs/binfmt_misc/** rwklmx,",
+    ]
+    assert "binfmt_misc" not in (directory / "edge400.apparmor").read_text()

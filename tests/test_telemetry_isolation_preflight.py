@@ -159,8 +159,23 @@ def actor_fixture(tmp_path, monkeypatch, fault=None):
     monkeypatch.setattr(p.cg, "_kernel_text", lambda path, limit: texts[path])
     ns_reads = {}
 
-    def metadata(path):
+    def metadata(path, **kwargs):
         ns_reads[path] = ns_reads.get(path, 0) + 1
+        if "/binfmt_misc/" in path:
+            assert kwargs == dict(follow_symlinks=False)
+            if fault == "binfmtmissing":
+                raise FileNotFoundError("synthetic missing endpoint")
+            return SimpleNamespace(
+                st_dev=37,
+                st_ino=1000
+                + (path.endswith("register"))
+                + (100 if fault == "binfmtdrift" and ns_reads[path] > 1 else 0),
+                st_mode=stat.S_IFLNK
+                if fault == "binfmtsymlink"
+                else stat.S_IFREG | 0o644,
+                st_uid=61002 if fault == "binfmtowner" else 0,
+                st_gid=0,
+            )
         if path.endswith("/ns/net"):
             return SimpleNamespace(
                 st_dev=5, st_ino=21 if fault == "nsdrift" and ns_reads[path] > 1 else 20
@@ -221,6 +236,8 @@ def test_actual_root_metadata_fixture_preserves_originals_without_qualification(
     args, texts = actor_fixture(tmp_path, monkeypatch)
     result = p.collect_actor(**args)
     assert result["identity"]["uid"] == 61002 and result["identity"]["dumpable"] == 1
+    assert result["evidence"]["binfmt_before"] == result["evidence"]["binfmt_after"]
+    assert set(result["evidence"]["binfmt_before"]) == {"status", "register"}
     assert result["evidence"]["scope"] == "root_metadata_not_isolation_qualification"
     assert (
         json.loads((tmp_path / "probe-actor-proof.json").read_bytes())["before"]
@@ -244,6 +261,10 @@ def test_actual_root_metadata_fixture_preserves_originals_without_qualification(
         "foreignfd",
         "extrafd",
         "fdmissing",
+        "binfmtmissing",
+        "binfmtdrift",
+        "binfmtsymlink",
+        "binfmtowner",
     ],
 )
 def test_actor_collection_gap_retains_raw_before_refusal(tmp_path, monkeypatch, fault):

@@ -201,6 +201,27 @@ def stdio_identity(process):
     return result
 
 
+def binfmt_metadata(pid, evidence):
+    """Fixed Root stat-only endpoints through actual actor root; never controls."""
+    lab.need(type(pid) is int and 1 < pid < 2**31, "actual endpoint PID required")
+    for name in ("status", "register"):
+        info = os.stat(
+            f"/proc/{pid}/root" + contract.BINFMT + "/" + name, follow_symlinks=False
+        )
+        evidence[name] = dict(
+            device=info.st_dev,
+            inode=info.st_ino,
+            mode=info.st_mode,
+            uid=info.st_uid,
+            gid=info.st_gid,
+        )
+        lab.need(
+            stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0,
+            "actual root-owned regular binfmt endpoint required",
+        )
+    return evidence
+
+
 def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, output):
     """Original Root kernel metadata at ready fence; no probe or sample IPC."""
     _output(output)
@@ -232,6 +253,8 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
             raw[name] = cg._kernel_text(path, limit)
             lab.save(output / (mode + "-" + name + ".raw"), raw[name].encode())
         evidence["raw"] = raw
+        evidence["binfmt_before"] = {}
+        binfmt_metadata(int(pid), evidence["binfmt_before"])
         namespaces = {}
         for name, path in (
             ("net", root + "/ns/net"),
@@ -269,6 +292,8 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
                     target=os.readlink(path),
                 )
             )
+        evidence["binfmt_after"] = {}
+        binfmt_metadata(int(pid), evidence["binfmt_after"])
         evidence["after"] = lab.unit_snapshot(unit)
         evidence["namespace_after"] = {}
         for name, path in (
@@ -281,6 +306,9 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
     finally:
         lab.save_json(output / (mode + "-actor-proof.json"), evidence)
     after = evidence["after"]
+    lab.need(
+        evidence["binfmt_before"] == evidence["binfmt_after"], "binfmt endpoint drift"
+    )
     lab.need(
         all(
             before[k] == after[k]

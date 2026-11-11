@@ -262,6 +262,15 @@ def probe_fixture(monkeypatch, fault=None):
     def opening(path, flags):
         calls.append(("open", (path, flags)))
         assert not flags & os.O_TRUNC and not flags & os.O_CREAT
+        if "/binfmt_misc/" in path:
+            assert flags & os.O_NOFOLLOW and flags & os.O_CLOEXEC
+            assert flags & os.O_ACCMODE == (
+                os.O_WRONLY if path.endswith("register") else os.O_RDONLY
+            )
+            if fault == "binfmt_success":
+                return 99
+            if fault == "binfmt_missing":
+                raise FileNotFoundError(errno.ENOENT, "synthetic missing API")
         if path == "/proc/self/ns/net" and fault == "nsfd_success":
             return 99
         if path.startswith("/proc/123/") or path.startswith("/proc/1/"):
@@ -339,6 +348,7 @@ def test_fixed_probe_covers_all_required_real_operation_shapes_under_synthetic_r
     )
     names = [r["operation"] for r in records]
     for prefix, count in (
+        ("binfmt_denied_open:", 2),
         ("foreign_read_open:", 10),
         ("ptrace_seize:", 2),
         ("public_nonkey_read_open:", 4),
@@ -373,6 +383,7 @@ def test_fixed_probe_covers_all_required_real_operation_shapes_under_synthetic_r
     assert all(
         "azazel-edge-core" not in str(args) for op, args in calls if op == "exec"
     )
+    assert len(records) == 40
     assert calls[0][0] == "memory" and calls[0][1][0] == 456 and calls[0][1][1] > 0
     assert ("memory", (123, 4096)) in calls
 
@@ -390,6 +401,8 @@ def test_fixed_probe_covers_all_required_real_operation_shapes_under_synthetic_r
         ("peer_esrch", "peer_process_vm_readv_valid_public_byte"),
         ("enumeration", "proc_enumeration"),
         ("coverage", "actual_self_sample"),
+        ("binfmt_success", "binfmt_denied_open:/proc/sys/fs/binfmt_misc/status"),
+        ("binfmt_missing", "binfmt_denied_open:/proc/sys/fs/binfmt_misc/status"),
     ],
 )
 def test_fatal_partial_record_aborts_without_any_later_probe(monkeypatch, fault, last):
@@ -402,6 +415,8 @@ def test_fatal_partial_record_aborts_without_any_later_probe(monkeypatch, fault,
         w.worker("probe")
     assert emitted[-1]["kind"] == "blocked"
     assert emitted[-1]["operations"][-1]["operation"] == last
+    if fault == "binfmt_success":
+        assert closed == [99]
     if fault == "peer_esrch":
         assert emitted[-1]["operations"][-1]["outcome"] == "unsupported_error"
     if fault == "exec_success":

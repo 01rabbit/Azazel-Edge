@@ -38,6 +38,9 @@ profile edge400-observer-telemetry-lab /opt/edge400-runtime/bin/edge-observe-tel
   /proc/loadavg r,
   /proc/uptime r,
   /proc/@{pid}/net/dev r,
+  # Inherited non-proc API is inaccessible; never write/register/toggle controls.
+  audit deny /proc/sys/fs/binfmt_misc/ rwklmx,
+  audit deny /proc/sys/fs/binfmt_misc/** rwklmx,
   # Override abstractions/base same-profile read permission. Root readby retained.
   audit deny ptrace (read,trace),
   audit deny signal (send),

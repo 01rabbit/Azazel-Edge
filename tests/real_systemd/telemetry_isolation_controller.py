@@ -213,6 +213,8 @@ def _live_targets(proof, boot, output, label):
         evidence["pid1_stat"] = p.cg._kernel_text("/proc/1/stat", 8192)
         evidence["boot"] = G.boot()
         pid = proof["identity"]["pid"]
+        evidence["binfmt"] = {}
+        p.binfmt_metadata(pid, evidence["binfmt"])
         for name in ("net", "mnt"):
             info = os.stat(f"/proc/{pid}/ns/" + name)
             evidence[name] = [info.st_dev, info.st_ino]
@@ -235,7 +237,8 @@ def _live_targets(proof, boot, output, label):
         and all(
             evidence[k] == proof["evidence"]["namespaces"][k] for k in ("net", "mnt")
         )
-        and evidence["boot"] == boot,
+        and evidence["boot"] == boot
+        and evidence["binfmt"] == proof["evidence"]["binfmt_before"],
         "actual known-live peer/boot drift",
     )
     return evidence
@@ -350,6 +353,11 @@ def run(output):
             proofs["probe"]["evidence"]["namespaces"]["net"]
             != proofs["peer"]["evidence"]["namespaces"]["net"],
             "peer namespace not foreign",
+        )
+        LAB.need(
+            proofs["probe"]["evidence"]["binfmt_before"]
+            == proofs["peer"]["evidence"]["binfmt_before"],
+            "roles see different binfmt endpoint identities",
         )
         before = _live_targets(
             proofs["peer"], baseline["kernel_boot_id"], output, "before"
