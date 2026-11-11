@@ -229,6 +229,16 @@ def test_explicit_public_preparation_and_provision_preserve_exact_v4_while_defau
             ).items()
         }
     )
+    for key in (
+        "EVE_PATH",
+        "NORMALIZED_EVENT_LOG",
+        "DEFENSE_RELEASE_LEDGER",
+        "REDIRECT_POLICY_PATH",
+        "PROTECTED_FLOWS_PATH",
+    ):
+        path = Path(environment["AZAZEL_" + key])
+        path.write_bytes(b"")
+        path.chmod(0o600)
     env_file = f.root / "environment.json"
     env_file.write_bytes(_json(environment))
     env_file.chmod(0o644)
