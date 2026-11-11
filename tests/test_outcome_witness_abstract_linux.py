@@ -295,3 +295,31 @@ def test_explicit_public_preparation_and_provision_preserve_exact_v4_while_defau
     }
     provision(bundle, candidate, registration, incoming, f.wk)
     assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+def test_sealed_witness_proof_refuses_observer_owned_cwd_import_shadow(f, monkeypatch):
+    from azazel_edge.outcome.service_switch import Systemd
+
+    directory = f.root / "observer-owned-cwd"
+    directory.mkdir(mode=0o755)
+    module = directory / "hashlib.py"
+    marker = directory / "shadow-executed"
+    raw = (
+        "import os,sys\n"
+        "assert os.geteuid()==65534\n"
+        f"with open({str(marker)!r},'w') as stream: stream.write('shadow executed')\n"
+        "print('verified')\nsys.exit(0)\n"
+    ).encode()
+    module.write_bytes(raw)
+    module.chmod(0o644)
+    os.chown(module, 65534, 65534)
+    os.chown(directory, 65534, 65534)
+    assert directory.stat().st_uid == module.stat().st_uid == 65534
+    monkeypatch.chdir(directory)
+    missing = f.root / "never-provisioned-bundle"
+    with pytest.raises(
+        OutcomeJournalError, match="fresh protected witness/journal proof unavailable"
+    ):
+        Systemd().witness(missing, f.p)
+    assert not missing.exists() and not marker.exists()
+    assert module.read_bytes() == raw
