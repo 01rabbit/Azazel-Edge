@@ -84,8 +84,15 @@ def collect_features(output, *, expected_abi_sha256):
 
 
 def worker_argv(mode):
-    contract.role_spec(mode)  # Future fixed worker; no CLI exists in this chunk.
-    return [contract.ALIAS, "-I", "-B", str(Path(__file__).resolve()), "--worker", mode]
+    contract.role_spec(mode)
+    return [
+        contract.ALIAS,
+        "-I",
+        "-B",
+        str(Path(__file__).with_name("telemetry_isolation_worker.py").resolve()),
+        "--worker",
+        mode,
+    ]
 
 
 def validate_effective(value, mode):

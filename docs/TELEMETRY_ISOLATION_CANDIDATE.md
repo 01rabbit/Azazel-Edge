@@ -1,8 +1,9 @@
 # Optional telemetry isolation candidate: static stage only
 
-This is a separate lab commissioning candidate. No policy has been compiled or
-loaded, no alias installed, no controller/worker implemented and no VM run by this
-change. The original confined telemetry result remains **commissioning_blocked**:
+This is a separate lab commissioning candidate. A separate Root parser-only
+reference compiled the candidate with warnings fatal, without loading it. No new
+alias/role has run; the fixed worker is implemented, but Root orchestration and
+installation remain absent. No candidate role qualification is claimed. The original confined telemetry result remains **commissioning_blocked**:
 netdev/loadavg/uptime EACCES, meminfo readable. Root's later stat-only measurement
 found `/proc/<worker-PID>/net/dev` UID/GID 0, regular 0444. It did not test an owner
 rule or worker access; never assume that inode belongs to UID61002.
@@ -90,9 +91,9 @@ There is no automatic fallback, retry, role selection or existing-trial wiring.
 
 `telemetry_isolation_preflight.py` now adds callable Root collectors only. It has
 no `run`, worker entrypoint, installation, profile compilation/loading, canary
-creation, sampling IPC or automatic trial wiring. `worker_argv` describes only a
-future fixed command for effective-unit comparison; it is not a functioning CLI.
-Use no command from this component until the remaining code is frozen/reviewed.
+creation, sampling IPC or automatic trial wiring. `worker_argv` now points only to the committed fixed peer/probe worker for
+effective-unit comparison. There is no automatic launcher. Use no command until
+the complete source and remaining Root orchestration are frozen/reviewed.
 
 `collect_features(output, expected_abi_sha256=...)` retains current public ABI4
 bytes and namespace/ptrace masks before checking an external ABI pin and required
@@ -133,8 +134,8 @@ extra namespace-read permission is introduced to manufacture such evidence.
 worker or entrypoint. There is still no Root controller, installation or policy
 loading. Its tests supply explicitly synthetic syscall returns; they establish
 argument/errno/control-flow behavior, not actual permission, hidepid or LSM proof.
-The next worker chunk must perform the real identity/source guard and emit READY
-before waiting for a fixed Root frame; no probes may precede that fence.
+The fixed worker performs its real identity/source guard and emits READY before
+waiting for a fixed Root frame; no probes precede that fence.
 
 The helper binds typed libc interfaces, validates only fixed peer PID/Tgid/boot
 and one-byte public-buffer fields, and bounds a single frame to 16 or 1024 bytes
@@ -153,3 +154,36 @@ unexpected safe-version child (attempt kill/reap after timeout). If reaping is
 denied or fails, retain that fact; it does not pretend no execution occurred.
 Root's later all-actor cgroup cleanup remains mandatory. No later probe or
 privilege/namespace restoration runs after an unexpected success.
+
+
+## Fixed peer/probe worker (unrun)
+
+`telemetry_isolation_worker.py --worker peer|probe` is now the literal worker
+entrypoint reserved in Root's expected argv. It cannot install/load policy, act
+as Root controller, select arbitrary operations/paths or qualify its own output.
+Before READY it requires Linux, the fixed protected source path/bytes, actual
+UID/GID61002, zero E/P/A/B capabilities, NNP, new enforcing label, Pid=Tgid=current
+PID, dumpable=1 and canonical raw boot. It emits source hash/role/identity markers;
+Root's separate frozen archive, marker, effective-unit/mount/FD checks remain
+mandatory. The worker does not invent read permission for Root's revision/marker.
+
+Peer keeps a fixed PUBLIC NONKEY buffer alive while waiting only for `stop`.
+Probe waits for a bounded fixed-field peer frame, then performs self one-byte
+memory-read sanity, actual es telemetry coverage and numeric proc enumeration.
+It then runs the fixed known-peer/PID1 direct/task/root-alias open denials,
+legitimate valid-public-buffer memory read, trace, public canary read-open,
+nontruncating source/stat write-open, safe-version exec, identity/capability/
+profile/user-namespace/network-namespace change, namespace-FD open, IPv4/6 socket
+and nondestructive signal-zero negatives. Open-for-write is labelled honestly;
+no truncate/write payload is used. It executes no defense core. Setns remains
+explicitly unexercised without a namespace FD; no invalid-FD call or proxy is used.
+
+Unsupported errors and any unexpected success emit a fatal partial record and
+nonzero exit, without proceeding to later probes. Unexpected safe-version exec
+is reported as actual execution even if its child exits nonzero. Owned resources
+are closed/reaped as supported by the reviewed helper; Root cgroup cleanup still
+must prove no surviving descendants. Directory-enumeration failures retain their
+partial numeric observations. Final JSON describes observations only, never a
+PASS, resume/admission authority, live trial result or AA-only denial attribution.
+These tests mock source/kernel/syscall observations explicitly; no actual role,
+hidepid/Yama/LSM or complete Root precheck result has been established.
