@@ -109,6 +109,13 @@ def test_duplicate_and_extra_ready_refused():
         s.reserved_argv("../../other")
 
 
+def mountinfo():
+    return "30 1 0:4 / /proc rw - proc proc rw,hidepid=ptraceable\n" + "".join(
+        f"{40 + i} 1 0:5 net:[{20 + i}] {path} rw - nsfs nsfs rw\n"
+        for i, path in enumerate(s.contract.NSFS_TARGETS)
+    )
+
+
 def test_nsfs_contexts_stay_separate():
     base = "30 1 0:4 / /proc rw - proc proc rw,hidepid=ptraceable\n"
     rows = "".join(
@@ -144,7 +151,7 @@ def fixture(tmp_path, monkeypatch):
         s.p,
         "_collect_actor",
         lambda *a, **k: dict(
-            identity=identity(), evidence=dict(raw=dict(mountinfo=""))
+            identity=identity(), evidence=dict(raw=dict(mountinfo=mountinfo()))
         ),
     )
     return SimpleNamespace(stdin=SimpleNamespace(closed=False), poll=lambda: None)
@@ -285,3 +292,73 @@ def test_root_guard_refuses_before_any_query_or_artifact(tmp_path, monkeypatch):
             output=tmp_path,
         )
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("fault", ["empty", "missing", "device", "inode"])
+def test_namespace_object_requires_full_actor_nsfs_binding(fault):
+    handles = {path: [5, 20 + i] for i, path in enumerate(s.contract.NSFS_TARGETS)}
+    text = mountinfo()
+    if fault == "empty":
+        text = ""
+    if fault == "missing":
+        text = "\n".join(text.splitlines()[:-1]) + "\n"
+    if fault == "device":
+        text = text.replace("0:5", "0:6", 1)
+    if fault == "inode":
+        text = text.replace("net:[20]", "net:[99]", 1)
+    with pytest.raises(AssertionError):
+        s._bind_nsfs(text, handles)
+
+
+def test_identical_repeated_systemd_nsfs_rows_are_allowed():
+    handles = {path: [5, 20 + i] for i, path in enumerate(s.contract.NSFS_TARGETS)}
+    text = mountinfo()
+    duplicate = text.splitlines()[1].split()
+    duplicate[0] = "90"
+    s._bind_nsfs(text + " ".join(duplicate) + "\n", handles)
+    duplicate[2] = "0:6"
+    with pytest.raises(AssertionError):
+        s._bind_nsfs(text + " ".join(duplicate) + "\n", handles)
+
+
+@pytest.mark.parametrize("mode", [stat.S_IFDIR, stat.S_IFLNK])
+def test_named_namespace_directory_or_alias_refused(monkeypatch, mode):
+    monkeypatch.setattr(
+        s.os, "stat", lambda *a, **k: SimpleNamespace(st_dev=5, st_ino=20, st_mode=mode)
+    )
+    with pytest.raises(AssertionError):
+        s._namespaces()
+
+
+def test_actual_ordinary_file_metadata_cannot_supply_namespace_proof(
+    tmp_path, monkeypatch
+):
+    ordinary = tmp_path / "ordinary"
+    ordinary.write_bytes(b"not a namespace")
+    info = ordinary.stat()
+    monkeypatch.setattr(s.os, "stat", lambda *a, **k: info)
+    handles = s._namespaces()
+    assert set(handles) == set(s.contract.NSFS_TARGETS)
+    with pytest.raises(AssertionError, match="all three"):
+        s._bind_nsfs("30 1 0:4 / /proc rw - proc proc rw,hidepid=ptraceable\n", handles)
+
+
+def test_composed_empty_actor_mounts_cannot_pass(tmp_path, monkeypatch):
+    process = fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        s.p,
+        "_collect_actor",
+        lambda *a, **k: dict(
+            identity=identity(), evidence=dict(raw=dict(mountinfo=""))
+        ),
+    )
+    with pytest.raises(AssertionError, match="all three"):
+        s.collect_pre_api(
+            "initialize",
+            process,
+            expected_namespace=[5, 20],
+            kernel_boot_id=BOOT,
+            source_sha256=SHA,
+            output=tmp_path,
+        )
+    assert (tmp_path / "initialize-pre-api-root-proof.json").exists()

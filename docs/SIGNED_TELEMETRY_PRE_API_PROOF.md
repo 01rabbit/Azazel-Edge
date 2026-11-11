@@ -15,8 +15,10 @@ typed effective-unit queries and actual Root actor metadata. It checks the fixed
 new unit/label/alias and 40-second lifetime, actual PID/start-time/cgroup, private
 proc view, binfmt endpoint metadata and exactly three original FIFO identities.
 The three literal provider namespace handles are sampled before and after;
-EDGE must match the caller's owned identity, and visible nsfs roots must match
-the named handles. The existing precheck's public roles and two-target namespace
+EDGE must match the caller's owned identity. All three targets must appear in
+actual actor nsfs mount rows; every row must match both the named regular
+namespace object's device and inode. Identical duplicate bind rows are allowed.
+Ordinary files or missing rows do not supply namespace proof. The existing precheck's public roles and two-target namespace
 allowlist remain unchanged. READY alone authenticates nothing.
 
 This is sampled Root metadata, not cryptographic observer-label binding,

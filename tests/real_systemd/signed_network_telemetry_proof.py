@@ -118,20 +118,36 @@ def _namespaces():
     result = {}
     for path in contract.NSFS_TARGETS:
         info = os.stat(path, follow_symlinks=False)
-        lab.need(not p.stat.S_ISLNK(info.st_mode), "namespace alias refused")
+        lab.need(p.stat.S_ISREG(info.st_mode), "regular namespace object required")
         result[path] = [info.st_dev, info.st_ino]
     return result
 
 
 def _bind_nsfs(raw, handles):
+    """Require every literal named handle in the actor's actual nsfs mount rows.
+
+    A regular file by itself is not a namespace proof. The already structurally
+    validated actor mountinfo must independently supply matching device/inode.
+    Duplicate systemd bind rows are allowed only when every row still matches.
+    """
+    lab.need(
+        set(handles) == set(contract.NSFS_TARGETS), "exact namespace handles required"
+    )
+    seen = set()
     for row in raw.splitlines():
         fields = row.split()
         if " - nsfs " in row:
+            lab.need(len(fields) >= 10 and fields[4] in handles, "unknown nsfs target")
+            device, inode = handles[fields[4]]
             lab.need(
-                fields[4] in handles
-                and fields[3] == "net:[" + str(handles[fields[4]][1]) + "]",
+                fields[2] == str(os.major(device)) + ":" + str(os.minor(device))
+                and fields[3] == "net:[" + str(inode) + "]",
                 "actual nsfs handle differs",
             )
+            seen.add(fields[4])
+    lab.need(
+        seen == set(contract.NSFS_TARGETS), "all three actual nsfs targets required"
+    )
 
 
 def collect_pre_api(
