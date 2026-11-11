@@ -162,3 +162,15 @@ source, durable journal and all four unique scopes, then calls the existing
 RunLedger/measurement APIs. A new VM orchestration or accounting engine is not
 required. The untracked draft is not an operational entrypoint; do not freeze an
 experiment or invoke preparation until the complete reviewed source is pinned.
+
+Cgroup absence is accepted only after proving the complete unified cgroup2 view:
+physical protected canonical `/sys/fs/cgroup`, one root (`/`) cgroup2 mount, no
+v1/hybrid or nested overlay, mount device matched to the opened directory, the
+same cgroup namespace as PID 1, and the same full canonical root through PID 1.
+Mount information is read completely to EOF within fixed bounds. Live main/control
+PID membership must agree with the manager's exact `ControlGroup`. Empty group
+names and absent directories are subject to the same hierarchy proof. Unknown,
+missing, subtree or inconsistent views retain the scopes and a failed stop
+receipt. These failures never skip the bounded stop attempts for other actors.
+The future preparation/start phase must check this supported view upfront; a
+shutdown failure still attempts every fixed actor before retaining evidence.

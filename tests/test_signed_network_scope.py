@@ -212,17 +212,19 @@ def test_actor_step_failure_still_attempts_every_unit_and_withholds(monkeypatch,
 
 
 def test_live_descendant_cgroup_not_hidden_by_empty_parent_procs(tmp_path, monkeypatch):
-    path = tmp_path / "system.slice/unit.service"
+    path = tmp_path / ("system.slice/" + s.ACTOR_UNITS[0])
     path.mkdir(parents=True)
     (path / "cgroup.procs").write_text("")
     (path / "cgroup.events").write_text("populated 1\nfrozen 0\n")
-    monkeypatch.setattr(s, "Path", lambda _: tmp_path)
-    assert s._group_empty("/system.slice/unit.service") is False
+    monkeypatch.setattr(
+        s, "_cgroup_view", lambda: os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    )
+    assert s._group_empty("/system.slice/" + s.ACTOR_UNITS[0]) is False
     (path / "cgroup.events").write_text("populated 0\nfrozen 0\n")
-    assert s._group_empty("/system.slice/unit.service") is True
+    assert s._group_empty("/system.slice/" + s.ACTOR_UNITS[0]) is True
     (path / "cgroup.events").write_text("populated 0\npopulated 1\n")
     with pytest.raises(BenefitInputError):
-        s._group_empty("/system.slice/unit.service")
+        s._group_empty("/system.slice/" + s.ACTOR_UNITS[0])
 
 
 def test_cleanup_never_deletes_namespaces_on_systemd_gap(tmp_path, monkeypatch):
@@ -250,3 +252,159 @@ def test_bad_show_shape_refuses(monkeypatch):
     )
     with pytest.raises(BenefitInputError):
         s._state(s.ACTOR_UNITS[0])
+
+
+def mount_line(
+    *, filesystem="cgroup2", root="/", target="/sys/fs/cgroup", device="0:28"
+):
+    return f"38 27 {device} {root} {target} rw,nosuid,nodev,noexec,relatime - {filesystem} cgroup rw\n"
+
+
+@pytest.mark.parametrize(
+    "fault", ["absent", "v1", "hybrid", "subtree", "nested", "alias", "duplicate"]
+)
+def test_unknown_or_partial_cgroup_mount_hierarchy_refuses(fault):
+    raw = mount_line()
+    if fault == "absent":
+        raw = "27 1 0:20 / /sys rw - sysfs sysfs rw\n"
+    elif fault == "v1":
+        raw = mount_line(filesystem="cgroup")
+    elif fault == "hybrid":
+        raw += mount_line(filesystem="cgroup", target="/legacy")
+    elif fault == "subtree":
+        raw = mount_line(root="/system.slice/hidden")
+    elif fault == "nested":
+        raw += mount_line(filesystem="tmpfs", target="/sys/fs/cgroup/system.slice")
+    elif fault == "alias":
+        raw = mount_line(target="/different")
+    else:
+        raw += mount_line()
+    with pytest.raises(BenefitInputError):
+        s._unified_mount(raw)
+
+
+def view_fixture(tmp_path, monkeypatch):
+    actual = tmp_path.stat()
+    device = f"{os.major(actual.st_dev)}:{os.minor(actual.st_dev)}"
+    mount = mount_line(device=device)
+    monkeypatch.setattr(s, "_kernel_text", lambda path, maximum=1024 * 1024: mount)
+    monkeypatch.setattr(
+        s,
+        "_physical_cgroup_root",
+        lambda: os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY),
+    )
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if str(path) in ("/proc/self/ns/cgroup", "/proc/1/ns/cgroup"):
+            return SimpleNamespace(st_dev=4, st_ino=123)
+        if str(path) == "/proc/1/root/sys/fs/cgroup":
+            return actual
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(s.os, "stat", stat)
+    return mount, stat
+
+
+def test_verified_complete_unified_view_allows_genuinely_absent_group(
+    tmp_path, monkeypatch
+):
+    view_fixture(tmp_path, monkeypatch)
+    assert s._group_empty("/system.slice/" + s.ACTOR_UNITS[0]) is True
+    assert s._group_empty("") is True
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["namespace", "manager_mount", "manager_root", "device", "subtree", "absent_mount"],
+)
+def test_group_absence_is_not_empty_under_unknown_view(tmp_path, monkeypatch, fault):
+    mount, stat = view_fixture(tmp_path, monkeypatch)
+    if fault == "namespace":
+        monkeypatch.setattr(
+            s.os,
+            "stat",
+            lambda path, *a, **k: SimpleNamespace(st_dev=4, st_ino=456)
+            if str(path) == "/proc/1/ns/cgroup"
+            else stat(path, *a, **k),
+        )
+    elif fault == "manager_root":
+        monkeypatch.setattr(
+            s.os,
+            "stat",
+            lambda path, *a, **k: SimpleNamespace(st_dev=4, st_ino=456)
+            if str(path) == "/proc/1/root/sys/fs/cgroup"
+            else stat(path, *a, **k),
+        )
+    elif fault == "manager_mount":
+        monkeypatch.setattr(
+            s,
+            "_kernel_text",
+            lambda path, maximum=1024 * 1024: mount_line(device="0:999")
+            if path == "/proc/1/mountinfo"
+            else mount,
+        )
+    elif fault == "device":
+        monkeypatch.setattr(
+            s,
+            "_kernel_text",
+            lambda path, maximum=1024 * 1024: mount_line(device="0:999"),
+        )
+    elif fault == "subtree":
+        monkeypatch.setattr(
+            s,
+            "_kernel_text",
+            lambda path, maximum=1024 * 1024: mount_line(root="/partial"),
+        )
+    else:
+        monkeypatch.setattr(s, "_kernel_text", lambda path, maximum=1024 * 1024: "")
+    for group in ("", "/system.slice/" + s.ACTOR_UNITS[0]):
+        with pytest.raises(BenefitInputError):
+            s._group_empty(group)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "1:name=systemd:/system.slice/unit.service\n",
+        "0::/other.service\n",
+        "0::/system.slice/unit.service\n0::/\n",
+    ],
+)
+def test_live_unit_pid_membership_must_equal_manager_controlgroup(monkeypatch, raw):
+    monkeypatch.setattr(s, "_kernel_text", lambda path, maximum: raw)
+    with pytest.raises(BenefitInputError):
+        s._membership("123", "/system.slice/unit.service")
+
+
+def test_correct_live_unit_pid_unified_membership(monkeypatch):
+    monkeypatch.setattr(
+        s, "_kernel_text", lambda path, maximum: "0::/system.slice/unit.service\n"
+    )
+    s._membership("123", "/system.slice/unit.service")
+
+
+def test_unknown_cgroup_view_still_stops_every_actor_and_forbids_cleanup(monkeypatch):
+    monkeypatch.setattr(s.g, "guard", lambda: None)
+    monkeypatch.setattr(s, "_state", lambda unit: state(""))
+
+    def refuse_view():
+        raise BenefitInputError("unknown layout")
+
+    monkeypatch.setattr(s, "_cgroup_view", refuse_view)
+    calls = []
+    monkeypatch.setattr(s.n, "command", lambda *a, **k: calls.append(a))
+    receipt = s.stop_systemd_actors()
+    assert receipt["status"] == "failed"
+    assert [a for a in calls] == [("systemctl", "stop", unit) for unit in s.ACTOR_UNITS]
+    assert len(receipt["failures"]) == len(s.ACTOR_UNITS)
+
+
+def test_kernel_mount_evidence_reads_to_eof_in_bounded_chunks(tmp_path, monkeypatch):
+    path = tmp_path / "mountinfo"
+    path.write_bytes(b"abcdef")
+    real_read = os.read
+    monkeypatch.setattr(s.os, "read", lambda fd, count: real_read(fd, min(count, 2)))
+    assert s._kernel_text(path, 6) == "abcdef"
+    with pytest.raises(BenefitInputError, match="exceeds bound"):
+        s._kernel_text(path, 5)

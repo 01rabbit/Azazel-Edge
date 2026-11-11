@@ -157,6 +157,127 @@ def reopen_assets(work):
         os.close(directory)
 
 
+def _kernel_text(path, maximum=1024 * 1024):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        raw = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, maximum + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            need(len(raw) <= maximum, "kernel hierarchy evidence exceeds bound")
+        return raw.decode("ascii")
+    finally:
+        os.close(fd)
+
+
+def _unified_mount(raw):
+    rows = []
+    lines = raw.splitlines()
+    need(0 < len(lines) <= 4096, "mount hierarchy evidence unavailable")
+    for line in lines:
+        fields = line.split()
+        need(fields.count("-") == 1, "mount hierarchy malformed")
+        separator = fields.index("-")
+        need(
+            separator >= 6 and len(fields) == separator + 4, "mount hierarchy malformed"
+        )
+        rows.append(
+            dict(
+                device=fields[2],
+                root=fields[3],
+                target=fields[4],
+                filesystem=fields[separator + 1],
+            )
+        )
+    need(
+        not any(row["filesystem"] == "cgroup" for row in rows),
+        "cgroup v1/hybrid hierarchy unsupported",
+    )
+    mounts = [row for row in rows if row["filesystem"] == "cgroup2"]
+    need(
+        len(mounts) == 1
+        and mounts[0]["target"] == "/sys/fs/cgroup"
+        and mounts[0]["root"] == "/",
+        "full canonical unified cgroup2 mount required",
+    )
+    need(
+        not any(row["target"].startswith("/sys/fs/cgroup/") for row in rows),
+        "cgroup subtree overlay unsupported",
+    )
+    need(
+        re.fullmatch(r"[0-9]+:[0-9]+", mounts[0]["device"]) is not None,
+        "cgroup mount device malformed",
+    )
+    return mounts[0]
+
+
+def _physical_cgroup_root():
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in (None, "sys", "fs", "cgroup"):
+            if part is not None:
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+                os.close(fd)
+                fd = child
+            info = os.fstat(fd)
+            need(
+                info.st_uid == 0 and not info.st_mode & 0o022,
+                "cgroup canonical ancestor unprotected",
+            )
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _cgroup_view():
+    """Return an open complete PID1 cgroup2 root, or refuse every absence claim.
+
+    /proc namespace/root links are deliberately kernel-provided identity views;
+    the canonical /sys path is instead walked physically with no symlinks.
+    """
+    own_ns = os.stat("/proc/self/ns/cgroup")
+    manager_ns = os.stat("/proc/1/ns/cgroup")
+    need(
+        (own_ns.st_dev, own_ns.st_ino) == (manager_ns.st_dev, manager_ns.st_ino),
+        "manager cgroup namespace differs",
+    )
+    mount = _unified_mount(_kernel_text("/proc/self/mountinfo"))
+    manager_mount = _unified_mount(_kernel_text("/proc/1/mountinfo"))
+    need(mount == manager_mount, "manager canonical cgroup mount view differs")
+    fd = _physical_cgroup_root()
+    try:
+        info = os.fstat(fd)
+        major, minor = map(int, mount["device"].split(":"))
+        need(
+            (os.major(info.st_dev), os.minor(info.st_dev)) == (major, minor),
+            "cgroup mount device differs",
+        )
+        manager_root = os.stat("/proc/1/root/sys/fs/cgroup")
+        need(
+            (info.st_dev, info.st_ino) == (manager_root.st_dev, manager_root.st_ino),
+            "manager cgroup root differs",
+        )
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _membership(pid, group):
+    need(re.fullmatch(r"0|[1-9][0-9]{0,9}", pid) is not None, "unit PID malformed")
+    if pid != "0":
+        need(
+            group != ""
+            and _kernel_text("/proc/" + pid + "/cgroup", 4096) == "0::" + group + "\n",
+            "unit PID cgroup view inconsistent",
+        )
+
+
 def _state(unit):
     result = n.command(
         "systemctl", "show", unit, "--property=" + ",".join(PROPERTIES), timeout=2
@@ -172,18 +293,31 @@ def _state(unit):
     need(state["LoadState"] in ("loaded", "not-found"), "unknown unit load state")
     group = state["ControlGroup"]
     need(group in ("", "/system.slice/" + unit), "unexpected actor cgroup")
+    _membership(state["MainPID"], group)
+    _membership(state["ControlPID"], group)
     return state
 
 
 def _group_empty(group):
-    if not group:
-        return True
-    directory = Path("/sys/fs/cgroup") / group.lstrip("/")
+    root = _cgroup_view()  # Even an empty/missing group requires a verified hierarchy.
+    fd = None
     try:
-        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        return True  # Removed kernel cgroup cannot retain descendants.
-    try:
+        if not group:
+            return True
+        need(
+            group in {"/system.slice/" + unit for unit in ACTOR_UNITS},
+            "unexpected actor cgroup path",
+        )
+        fd = os.dup(root)
+        for part in group.strip("/").split("/"):
+            try:
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+            except FileNotFoundError:
+                return True  # Absent only in verified complete canonical PID1 view.
+            os.close(fd)
+            fd = child
         values = {}
         for name in ("cgroup.procs", "cgroup.events"):
             child = os.open(
@@ -205,7 +339,9 @@ def _group_empty(group):
         need(populated in ("0", "1"), "cgroup descendant state unavailable")
         return not values["cgroup.procs"].strip() and populated == "0"
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
+        os.close(root)
 
 
 def stop_systemd_actors():
