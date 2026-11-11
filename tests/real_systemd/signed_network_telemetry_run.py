@@ -318,10 +318,21 @@ def run_telemetry_assignment(
             len(rules) == 1 and rules[0].get("comment") == assets.foreign,
             "independent initial foreign canary differs",
         )
+        service_before = time.monotonic_ns()
         peer = assets.spawn(
             "service",
             [g.PYTHON, "-I", "-B", "-u", n.PEER, "service", inputs["ticket"]["run_id"]],
             stdin=True,
+        )
+        service_after = time.monotonic_ns()
+        n.write_new(
+            phase.WORK / "service-peer-launch.json",
+            dict(
+                pid=peer.pid,
+                actual_child_argv=list(map(str, peer.args)),
+                launch_before_ns=service_before,
+                launch_after_ns=service_after,
+            ),
         )
         plan.need(
             n.receive(peer) == dict(kind="ready", nonce=inputs["ticket"]["run_id"]),
@@ -418,10 +429,20 @@ def run_telemetry_assignment(
                     deadline,
                 ],
             )
+            client_after = time.monotonic_ns()
+            n.write_new(
+                phase.WORK / "client-peer-launch.json",
+                dict(
+                    pid=client.pid,
+                    actual_child_argv=list(map(str, client.args)),
+                    launch_before_ns=client_before,
+                    launch_after_ns=client_after,
+                ),
+            )
             record.update(
                 client_argv=list(map(str, client.args)),
                 client_spawn_before_ns=client_before,
-                client_spawn_after_ns=time.monotonic_ns(),
+                client_spawn_after_ns=client_after,
             )
             plan.need(
                 time.monotonic_ns() < client_origin + 200_000_000,
