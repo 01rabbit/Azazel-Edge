@@ -21,6 +21,14 @@ def emit(value):
     print(raw, flush=True)
 
 
+def wait_until(at):
+    while True:
+        remaining = at - time.monotonic_ns()
+        if remaining <= 0:
+            return
+        time.sleep(min(.01, max(0, remaining / 1e9)))
+
+
 def service(nonce):
     started = time.monotonic_ns()
     sel = selectors.DefaultSelector()
@@ -97,31 +105,50 @@ def service(nonce):
 def client(nonce, origin, deadline):
     rows = []
     ack = False
-    def wait_until(at):
-        while time.monotonic_ns() < at:
-            time.sleep(min(.01, (at-time.monotonic_ns())/1e9))
-    def connect(source):
+    objective_errors = []
+    objective_attempt_ns = None
+    objective_attempt_complete = False
+    def connect(source, on_attempt=None):
         connection = socket.socket()
-        connection.settimeout(max(.001, (deadline-time.monotonic_ns())/1e9))
-        connection.bind((source, 0))
-        connection.connect((SERVER, PORT))
-        return connection
+        try:
+            connection.settimeout(max(.001, (deadline-time.monotonic_ns())/1e9))
+            connection.bind((source, 0))
+            if on_attempt is not None:
+                on_attempt()
+            connection.connect((SERVER, PORT))
+            return connection
+        except BaseException:
+            connection.close()
+            raise
     def objective():
-        nonlocal ack
-        wait_until(origin + 400_000_000)
+        nonlocal ack, objective_attempt_ns, objective_attempt_complete
         connection = None
         try:
-            connection = connect(ATK)
+            wait_until(origin + 400_000_000)
+            def mark_attempt():
+                nonlocal objective_attempt_ns
+                at = time.monotonic_ns()
+                if at >= deadline:
+                    raise ValueError("objective attempt missed actual window")
+                objective_attempt_ns = at
+            connection = connect(ATK, mark_attempt)
             connection.settimeout(max(.001, (deadline-time.monotonic_ns())/1e9))
             connection.sendall(b"G" + b"x" * GOAL_BYTES)
             if time.monotonic_ns() < deadline:
                 connection.settimeout(max(.001, (deadline-time.monotonic_ns())/1e9))
                 ack = connection.recv(32) == b"committed\n"
+            objective_attempt_complete = True
         except OSError:
-            pass
+            # A real bounded connect/send/receive failure is still an attempt.
+            objective_attempt_complete = objective_attempt_ns is not None
+        except BaseException as exc:
+            objective_errors.append(type(exc).__name__)
         finally:
             if connection is not None:
-                connection.close()
+                try:
+                    connection.close()
+                except BaseException as exc:
+                    objective_errors.append(type(exc).__name__)
     goal = threading.Thread(target=objective, daemon=True)
     goal.start()
     for number in range(6):
@@ -151,8 +178,11 @@ def client(nonce, origin, deadline):
     goal.join(timeout=1)
     if goal.is_alive():
         raise ValueError("objective client failed to stop")
+    if objective_errors or not objective_attempt_complete:
+        raise ValueError("objective client failed unexpectedly; no complete audit")
     emit(dict(kind="client", nonce=nonce, ended_ns=time.monotonic_ns(),
-              transactions=rows, objective_ack=ack))
+              transactions=rows, objective_ack=ack, objective_attempt_ns=objective_attempt_ns,
+              objective_attempt_complete=objective_attempt_complete))
 
 
 if __name__ == "__main__":

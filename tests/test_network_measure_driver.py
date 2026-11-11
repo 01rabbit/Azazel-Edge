@@ -52,6 +52,7 @@ def peer_audits():
     service = dict(kind="audit", nonce="run", started_ns=1, ended_ns=deadline,
                    origin_ns=origin, deadline_ns=deadline, goal_ns=None, legitimate_accepted=6)
     client = dict(kind="client", nonce="run", ended_ns=deadline, objective_ack=True,
+                  objective_attempt_ns=origin + 400_000_000, objective_attempt_complete=True,
                   transactions=[dict(id="legitimate-" + str(i), elapsed_seconds=.3 + i * .6,
                                      duration_ms=1, error=False) for i in range(6)])
     return origin, deadline, service, client
@@ -64,13 +65,16 @@ def test_client_ack_never_substitutes_for_service_commit_and_lost_horizon_refuse
     capture, receipt = driver.measured_capture(m, m["assignments"][0], "run", safety["0-c0"], origin, deadline, service, client)
     assert receipt["protected_goal_seconds"] is None and receipt["horizon_verified"]
     assert receipt["legitimate_transactions"] == 6
-    for fault in ("missing", "early", "nonce", "duplicates", "service_count"):
+    for fault in ("missing", "early", "nonce", "duplicates", "service_count", "no_attempt", "incomplete_attempt", "late_attempt"):
         s, c = copy.deepcopy(service), copy.deepcopy(client)
         if fault == "missing": s = {}
         if fault == "early": s["ended_ns"] = deadline - 1
         if fault == "nonce": c["nonce"] = "other"
         if fault == "duplicates": c["transactions"][1]["id"] = c["transactions"][0]["id"]
         if fault == "service_count": s["legitimate_accepted"] = 0
+        if fault == "no_attempt": c.pop("objective_attempt_ns")
+        if fault == "incomplete_attempt": c["objective_attempt_complete"] = False
+        if fault == "late_attempt": c["objective_attempt_ns"] = deadline
         with pytest.raises(BenefitInputError):
             driver.measured_capture(m, m["assignments"][0], "run", safety["0-c0"], origin, deadline, s, c)
 
@@ -135,3 +139,149 @@ def test_owned_readback_requires_exact_tuple_protocol_rate_burst_and_owner():
         if fault == "burst": broken["expr"][3]["limit"]["burst"] = 32
         if fault == "drop": broken["expr"].pop()
         with pytest.raises(BenefitInputError): driver.verify_owned_rule(broken, "owner")
+
+
+def namespace_paths(assets, tmp_path, monkeypatch):
+    real_path = Path
+    paths = {name: tmp_path / name for name in assets.names.values()}
+    def mapped(*args):
+        if len(args) == 2 and args[0] == "/run/netns":
+            return paths[args[1]]
+        return real_path(*args)
+    monkeypatch.setattr(driver, "Path", mapped)
+    return paths
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_creation_intent_preserves_unknown_timeout_but_cleans_confirmed_identity(tmp_path, monkeypatch, confirmed):
+    import subprocess
+    from types import SimpleNamespace
+    assets = driver.Assets(tmp_path)
+    paths = namespace_paths(assets, tmp_path, monkeypatch)
+    name = next(iter(assets.names.values()))
+    calls = []
+    def commands(*args, **kwargs):
+        calls.append(args)
+        if args[:3] == ("ip", "netns", "add"):
+            paths[args[3]].write_text("synthetic namespace handle")
+            if not confirmed:
+                raise subprocess.TimeoutExpired("synthetic ip-add", 5)
+        if args[:3] == ("ip", "netns", "del"):
+            paths[args[3]].unlink()
+        return SimpleNamespace(stdout="")
+    monkeypatch.setattr(driver, "command", commands)
+    if confirmed:
+        assets.create_namespace(name)
+        assert name in assets.created
+        assets.close()
+        assert not paths[name].exists()
+    else:
+        with pytest.raises(subprocess.TimeoutExpired): assets.create_namespace(name)
+        assert assets.creation_intents[name]["state"] == "unknown_creation_outcome"
+        assert not assets.created
+        with pytest.raises(BenefitInputError, match="cleanup incomplete"): assets.close()
+        assert paths[name].exists()
+        assert not any(call[:3] in (("ip", "netns", "pids"), ("ip", "netns", "del")) for call in calls)
+    assert (tmp_path / "namespace-intent-1.json").exists()
+
+
+def test_cleanup_attempts_other_children_and_namespaces_after_wait_and_list_failures(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    assets = driver.Assets(tmp_path)
+    paths = namespace_paths(assets, tmp_path, monkeypatch)
+    names = list(assets.names.values())
+    calls = []
+    def commands(*args, **kwargs):
+        calls.append(args)
+        if args[:3] == ("ip", "netns", "add"):
+            paths[args[3]].write_text("synthetic namespace handle")
+        if args[:3] == ("ip", "netns", "pids") and args[3] == names[-1]:
+            raise OSError("synthetic namespace list failure")
+        if args[:3] == ("ip", "netns", "del"):
+            paths[args[3]].unlink()
+        return SimpleNamespace(stdout="")
+    monkeypatch.setattr(driver, "command", commands)
+    for name in names: assets.create_namespace(name)
+    class Stream:
+        closed = False
+        def close(self): self.closed = True
+    class Process:
+        def __init__(self, fail):
+            self.fail, self.waited, self.killed = fail, False, False
+            self.stdin, self.stdout = Stream(), Stream()
+        def poll(self): return 0
+        def wait(self, **kwargs):
+            if self.fail and not self.waited:
+                self.waited = True
+                raise OSError("synthetic wait failure")
+            self.waited = True
+        def kill(self): self.killed = True
+    healthy, failing = Process(False), Process(True)
+    assets.processes = [healthy, failing]
+    with pytest.raises(BenefitInputError, match="cleanup incomplete"): assets.close()
+    assert healthy.waited and failing.killed
+    assert all(stream.closed for proc in assets.processes for stream in (proc.stdin, proc.stdout))
+    assert paths[names[-1]].exists()  # inability to inspect residents must not hide them
+    assert all(not paths[name].exists() for name in names[:-1])
+    cleanup = json.loads((tmp_path / "cleanup.json").read_text())
+    assert not cleanup["cleanup_verified"] and len(cleanup["errors"]) >= 2
+
+
+def test_cleanup_preserves_replaced_foreign_identity_and_continues_owned_namespace(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    assets = driver.Assets(tmp_path)
+    paths = namespace_paths(assets, tmp_path, monkeypatch)
+    names = list(assets.names.values())[:2]
+    deleted = []
+    def commands(*args, **kwargs):
+        if args[:3] == ("ip", "netns", "add"): paths[args[3]].write_text("owned")
+        if args[:3] == ("ip", "netns", "del"):
+            deleted.append(args[3]); paths[args[3]].unlink()
+        return SimpleNamespace(stdout="")
+    monkeypatch.setattr(driver, "command", commands)
+    for name in names: assets.create_namespace(name)
+    paths[names[0]].rename(tmp_path / "retained-original")
+    paths[names[0]].write_text("foreign replacement")
+    with pytest.raises(BenefitInputError, match="cleanup incomplete"): assets.close()
+    assert deleted == [names[1]]
+    assert paths[names[0]].read_text() == "foreign replacement"
+
+
+def test_peer_wait_uses_nonnegative_remaining_time(monkeypatch):
+    import network_measure_peer as peer
+    clock = iter([0, 10])
+    sleeps = []
+    monkeypatch.setattr(peer.time, "monotonic_ns", lambda: next(clock))
+    monkeypatch.setattr(peer.time, "sleep", lambda seconds: sleeps.append(seconds))
+    peer.wait_until(5)
+    assert sleeps == [5 / 1e9]
+
+
+def test_unexpected_objective_thread_error_prohibits_complete_client_audit(monkeypatch):
+    import network_measure_peer as peer
+    clock = [0]
+    monkeypatch.setattr(peer.time, "monotonic_ns", lambda: clock[0])
+    def sleep(seconds):
+        assert seconds >= 0
+        clock[0] += int(seconds * 1e9) + 1
+    monkeypatch.setattr(peer.time, "sleep", sleep)
+    class InlineThread:
+        def __init__(self, target, **kwargs): self.target = target
+        def start(self): self.target()
+        def join(self, **kwargs): pass
+        def is_alive(self): return False
+    class Socket:
+        def settimeout(self, value): pass
+        def bind(self, address): self.source = address[0]
+        def connect(self, address):
+            if self.source == peer.ATK: raise RuntimeError("synthetic unexpected objective failure")
+        def sendall(self, value): pass
+        def recv(self, count): return b"ok\n"
+        def close(self): pass
+    monkeypatch.setattr(peer.threading, "Thread", InlineThread)
+    monkeypatch.setattr(peer.socket, "socket", Socket)
+    emitted = []
+    monkeypatch.setattr(peer, "emit", emitted.append)
+    with pytest.raises(ValueError, match="unexpectedly"):
+        peer.client("unit-only", 0, 5_000_000_000)
+    assert emitted == []

@@ -115,7 +115,8 @@ class Assets:
         self.work = work
         tag = "nm" + uuid.uuid4().hex[:8]
         self.names = {kind: tag + "-" + kind for kind in ("edge", "client", "service")}
-        self.created = []
+        self.created = {}
+        self.creation_intents = {}
         self.processes = []
         self.core = None
         self.events = work / "events.jsonl"
@@ -125,11 +126,34 @@ class Assets:
     def ns(self, kind, *argv, **kwargs):
         return command("ip", "netns", "exec", self.names[kind], *argv, **kwargs)
 
+    def create_namespace(self, name):
+        path = Path("/run/netns", name)
+        require(not path.exists(), "namespace name exists; never predelete")
+        intent = dict(name=name, state="creation_intent")
+        self.creation_intents[name] = intent
+        # Intent survives an ip-add timeout or a crash before identity capture.
+        write_new(self.work / ("namespace-intent-" + str(len(self.creation_intents)) + ".json"), intent)
+        handle = None
+        try:
+            command("ip", "netns", "add", name)
+            handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            identity = os.fstat(handle)
+        except BaseException:
+            if handle is not None:
+                os.close(handle)
+            intent["state"] = "unknown_creation_outcome"
+            # An existing handle is not proof this attempt created it. Never
+            # delete or signal into that namespace without confirmed identity.
+            raise
+        self.created[name] = (handle, identity.st_dev, identity.st_ino)
+        intent["state"] = "confirmed_created"
+        intent["identity"] = dict(device=identity.st_dev, inode=identity.st_ino)
+        write_new(self.work / ("namespace-confirmed-" + str(len(self.creation_intents)) + ".json"), intent)
+
     def setup(self):
         require(all(not Path("/run/netns", name).exists() for name in self.names.values()), "namespace name exists; never predelete")
         for name in self.names.values():
-            command("ip", "netns", "add", name)
-            self.created.append(name)
+            self.create_namespace(name)
             command("ip", "-n", name, "link", "set", "lo", "up")
         for peer, edge_addr, address in (("client", "10.91.1.1", ATK), ("service", "10.91.3.1", SERVER)):
             command("ip", "link", "add", "e" + peer[0], "netns", self.names["edge"],
@@ -195,44 +219,90 @@ class Assets:
         return [item["rule"] for item in data["nftables"] if "rule" in item]
 
     def close(self):
-        for process in reversed(self.processes):
-            if process.poll() is None:
-                process.terminate()
+        errors = []
+
+        def attempt(step, operation):
             try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-            if process.stdin:
-                process.stdin.close()
-            process.stdout.close()
-        # Verify no namespace-resident process before deletion, then absence.
-        for name in reversed(self.created):
-            pids = command("ip", "netns", "pids", name).stdout.split()
-            for value in pids:
-                pid = int(value)
-                # Pin identity before checking namespace membership; PID reuse
-                # must never turn owned cleanup into a host-process signal.
-                try:
-                    pinned = os.pidfd_open(pid)
-                except ProcessLookupError:
-                    continue
-                try:
-                    require(os.stat(f"/proc/{pid}/ns/net").st_ino == os.stat("/run/netns/" + name).st_ino,
-                            "refuse to kill a process outside the owned namespace")
-                    signal.pidfd_send_signal(pinned, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                finally:
-                    os.close(pinned)
-            until = time.monotonic() + 2
-            while command("ip", "netns", "pids", name).stdout.strip() and time.monotonic() < until:
-                time.sleep(.05)
-            require(not command("ip", "netns", "pids", name).stdout.strip(), "owned namespace process remains")
-            command("ip", "netns", "del", name)
-            require(not Path("/run/netns", name).exists(), "owned namespace teardown incomplete")
-        require(all(not Path("/run/netns", name).exists() for name in self.names.values()),
-                "namespace creation outcome uncertain; retain evidence for manual review")
+                return True, operation()
+            except BaseException as exc:
+                errors.append(dict(step=step, exception_type=type(exc).__name__))
+                return False, None
+
+        # A failed terminate/wait/close must never skip another owned child.
+        for number, process in enumerate(reversed(self.processes)):
+            label = "child-" + str(number)
+            ok, running = attempt(label + "-poll", lambda: process.poll() is None)
+            if ok and running:
+                attempt(label + "-terminate", process.terminate)
+            ok, _ = attempt(label + "-wait", lambda: process.wait(timeout=2))
+            if not ok:
+                attempt(label + "-kill", process.kill)
+                attempt(label + "-reap", lambda: process.wait(timeout=2))
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    attempt(label + "-close-stream", stream.close)
+
+        for name, (handle, device, inode) in reversed(list(self.created.items())):
+            path = Path("/run/netns", name)
+
+            def identity_matches():
+                pinned = os.fstat(handle)
+                named = os.stat(path, follow_symlinks=False)
+                require((pinned.st_dev, pinned.st_ino) == (device, inode)
+                        and (named.st_dev, named.st_ino) == (device, inode),
+                        "namespace identity changed; preserve unknown asset")
+
+            ok, _ = attempt(name + "-identity", identity_matches)
+            if not ok:
+                attempt(name + "-close-handle", lambda: os.close(handle))
+                continue
+            ok, residents = attempt(name + "-list-pids", lambda: command("ip", "netns", "pids", name).stdout.split())
+            if ok:
+                for value in residents:
+                    def kill_resident():
+                        pid = int(value)
+                        try:
+                            pinned = os.pidfd_open(pid)
+                        except ProcessLookupError:
+                            return
+                        try:
+                            identity_matches()
+                            require(os.stat(f"/proc/{pid}/ns/net").st_ino == inode,
+                                    "refuse to signal outside the confirmed owned namespace")
+                            signal.pidfd_send_signal(pinned, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        finally:
+                            os.close(pinned)
+                    attempt(name + "-signal-owned-resident", kill_resident)
+
+                def verify_empty():
+                    until = time.monotonic() + 2
+                    while True:
+                        identity_matches()
+                        remaining = command("ip", "netns", "pids", name).stdout.strip()
+                        if not remaining:
+                            return
+                        require(time.monotonic() < until, "owned namespace process remains")
+                        time.sleep(.05)
+                empty, _ = attempt(name + "-verify-empty", verify_empty)
+                if empty:
+                    # Recheck immediately before deletion. Never hide an
+                    # unverifiable resident by merely removing its name.
+                    same, _ = attempt(name + "-predelete-identity", identity_matches)
+                    if same:
+                        attempt(name + "-delete", lambda: command("ip", "netns", "del", name))
+            attempt(name + "-close-handle", lambda: os.close(handle))
+
+        # Check every intended name, including timed-out/unconfirmed adds.
+        # Unknown assets are retained for review, never automatically deleted.
+        for name in self.creation_intents:
+            attempt(name + "-verify-absence", lambda name=name: require(
+                not Path("/run/netns", name).exists(),
+                "namespace remains or creation outcome is unknown; manual review required"))
+        attempt("cleanup-evidence", lambda: write_new(self.work / "cleanup.json", dict(
+            creation_intents=self.creation_intents, errors=list(errors), cleanup_verified=not errors)))
+        require(not errors, "owned asset cleanup incomplete; inspect private cleanup evidence")
 
 
 def receive(process):
@@ -269,6 +339,10 @@ def measured_capture(manifest, assignment, run_id, safety, origin, deadline, ser
     require(type(accepted) is int and 0 <= accepted <= 6
             and sum(row.get("error") is False for row in rows) <= accepted,
             "client/service legitimate audit mismatch")
+    attempted = client.get("objective_attempt_ns")
+    require(type(attempted) is int and origin <= attempted < deadline
+            and client.get("objective_attempt_complete") is True,
+            "objective client did not supply a complete bounded attempt")
     goal = service.get("goal_ns")
     require(goal is None or type(goal) is int and origin <= goal < deadline, "invalid service-owned objective time")
     capture = IndependentServiceCapture(manifest, assignment["id"], run_id=run_id,

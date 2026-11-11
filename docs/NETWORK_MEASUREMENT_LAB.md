@@ -32,6 +32,10 @@ then every 0.6 seconds. Missed launch budgets or late/missing results are failur
 not reasons to move the clock, repeat the attack or substitute replay times.
 The service reports its own objective commit and complete terminal audit;
 client ACK is recorded separately and never substitutes for objective truth.
+The client must also report an actual in-window objective connection attempt
+and completed bounded attempt procedure. Unexpected objective-thread failures
+poison the client audit and cannot become a clean censored objective. Scheduled
+waits compute one remaining interval and never pass negative sleep durations.
 Both peers must cover the actual common horizon. Missing audit, crash, bad
 identity or incomplete legitimate denominator supplies no normalized receipt.
 The service stops processing at H. Release is measured afterward, within a
@@ -50,10 +54,18 @@ local scope. Unknown or positive safety refuses launch; the driver does not
 measure production safety or turn unavailable observations into zeros.
 
 All namespace names contain a fresh random identifier. Existing names are
-refused, never predeleted. Only successfully created namespaces are cleaned up.
-Owned children are terminated/reaped; any residual process is killed only after
-its network namespace inode matches the owned namespace. Namespace removal and
-absence are verified. A foreign-canary nft rule must remain unchanged through
+refused, never predeleted. Creation intent is durably recorded before each
+namespace add. A successful add pins its namespace handle and exact device/inode
+before use; only confirmed identities can be cleaned automatically. A timed-out
+or failed add with an existing handle is an unknown outcome, not ownership
+proof: it is preserved and cleanup fails for manual review. Handle replacement
+also preserves the unknown/foreign asset. Cleanup attempts every other owned
+child and namespace despite earlier errors, writes a private aggregate report,
+and fails after those attempts. Owned children are terminated/reaped; any
+residual process is signaled through a pidfd only after its network namespace
+inode matches the confirmed pinned namespace. Unverifiable residents are not
+hidden by deleting their namespace name. Namespace removal and absence are
+verified. A foreign-canary nft rule must remain unchanged through
 apply/release. Root rules (excluding counters) and IPv4/IPv6 route snapshots must
 match before/after, including on failure. Root sysctl/routes/rules are never
 written. Failure cleanup stops the trial and leaves evidence for review.
