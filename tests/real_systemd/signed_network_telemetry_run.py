@@ -365,6 +365,7 @@ def run_telemetry_assignment(
             len(signed.events) == 2 and len(signed.raw) == len(signed.verifier.raw),
             "unused exact signed prefix required",
         )
+        observer.material.preflight.old.private_output(phase.WORK / "live")
         with observer.live(
             phase.WORK / "live", initialization=ctx.initialization, **ctx.args
         ) as session:
