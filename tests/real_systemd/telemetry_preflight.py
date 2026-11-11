@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import select
+import stat
 import subprocess
 import sys
 import time
@@ -174,6 +175,49 @@ def effective_worker(namespace, output):
     return value
 
 
+def retain_netdev_metadata(expected_state, expected_namespace, output):
+    """Root stat-only receipt, never worker access or self-only mediation proof."""
+    receipt = dict(requested_worker_path="/proc/net/dev", expected_state=expected_state,
+                   expected_namespace=expected_namespace, role_access_proven=False,
+                   owner_rule_works_proven=False, self_only_mediation_proven=False)
+    try:
+        before = lab.unit_snapshot(UNIT)
+        receipt["before"] = before
+        pid = before.get("MainPID")
+        lab.need(type(pid) is str and re.fullmatch(r"[1-9][0-9]{0,9}", pid)
+                 and 1 < int(pid) < 2**31, "canonical actual worker PID required")
+        fields = ("LoadState", "ActiveState", "MainPID", "ControlPID", "ControlGroup")
+        lab.need(before["LoadState"] == "loaded" and before["ActiveState"] == "active"
+                 and before["ControlPID"] == "0"
+                 and all(before[k] == expected_state[k] for k in fields)
+                 and lab.pid_identity(before["pid_stat"]) == lab.pid_identity(expected_state["pid_stat"])
+                 and lab.pid_identity(before["pid_stat"])[0] == pid, "worker identity changed before metadata")
+        path = "/proc/" + pid + "/net/dev"
+        receipt["root_lookup_path"] = path
+        receipt["resolved_lookup_path"] = str(Path(path).resolve(strict=True))
+        ns = os.stat("/proc/" + pid + "/ns/net")
+        receipt["namespace_before"] = dict(device=ns.st_dev, inode=ns.st_ino)
+        lab.need(receipt["namespace_before"] == expected_namespace, "worker namespace differs before metadata")
+        info = os.stat(path)
+        receipt["metadata"] = dict(uid=info.st_uid, gid=info.st_gid, mode=info.st_mode,
+                                   device=info.st_dev, inode=info.st_ino)
+        lab.need(stat.S_ISREG(info.st_mode), "proc netdev metadata is not regular")
+        after = lab.unit_snapshot(UNIT)
+        receipt["after"] = after
+        ns = os.stat("/proc/" + pid + "/ns/net")
+        receipt["namespace_after"] = dict(device=ns.st_dev, inode=ns.st_ino)
+    except BaseException as exc:
+        receipt["lookup_error"] = type(exc).__name__
+        raise
+    finally:
+        lab.save_json(output / "root-netdev-metadata.json", receipt)
+    lab.need(all(before[k] == after[k] for k in fields)
+             and lab.pid_identity(before["pid_stat"]) == lab.pid_identity(after["pid_stat"])
+             and receipt["namespace_after"] == expected_namespace,
+             "worker identity/namespace changed during metadata")
+    return receipt
+
+
 def worker():
     from role_probe import status
     from azazel_edge.outcome.confinement import enforce_capture
@@ -266,6 +310,8 @@ def run(output):
         tracked[UNIT].append(state)
         lab.save_json(output / "root-observed-worker.json", dict(state=state, namespace=namespace))
         lab.save_json(output / "effective-worker.json", effective_worker(assets.names["edge"], output))
+        _, owned_device, owned_inode = assets.created[assets.names["edge"]]
+        retain_netdev_metadata(state, dict(device=owned_device, inode=owned_inode), output)
         stdout, stderr = process.communicate(input=b"sample\n", timeout=12)
         lab.save(output / "worker.stdout", stdout)
         lab.save(output / "worker.stderr", stderr)

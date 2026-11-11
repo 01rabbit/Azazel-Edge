@@ -96,3 +96,40 @@ Its 37 pure tests passed and its actual case failed. Original failure evidence
 was retained and that VM stopped without a retry. The correction uses the actual
 fixed service's typed D-Bus empty-array proofs; missing fields are never assumed
 empty. The successful harness run above used a different source and fresh VM.
+
+## Root-only procfs metadata receipt
+
+A new source adds a Root **stat-only** diagnostic while the actual worker is
+blocked at its ready fence, before sample IPC. The path is derived only from the
+validated fixed unit's canonical MainPID. Unit state, stable PID/starttime and
+owned network-namespace identity must agree before and after lookup; a gap
+retains `root-netdev-metadata.json` and refuses sampling. The protected receipt
+records requested `/proc/net/dev`, derived/resolved `/proc/<PID>/net/dev` lookup,
+UID/GID/mode/device/inode and original identity observations. No file contents,
+worker permission, profile, alias, capability or coverage classification changes.
+The separate VM measurement is recorded below. Even a UID match would not
+prove an AppArmor owner rule works or self-only mediation; UID 0 must remain an
+explicit unresolved owner-rule constraint. Old blocked results remain unchanged.
+
+
+## Recorded netdev inode metadata (separate fresh VM)
+
+Runtime source `268f1bdd1a035cb841ec575791631a94deee353b`, source archive SHA-256
+`b61e1404b3f0e53966fc08b1e31eb28adf798ff70049f8fb12bc823068de1cbd`,
+ran once on a different fresh native aarch64 Ubuntu 24.04 QEMU VM with kernel boot
+`347657fa-10fe-476a-8a3b-55e37dd1e2d2`. All **63 tests passed in 0.57 seconds**.
+The existing observer remained **commissioning_blocked** with the same three
+read denials and unchanged profile, alias, capabilities and coverage rules.
+
+While the actual UID61002 worker was held at its sample fence, Root inspected
+only `/proc/<verified-worker-pid>/net/dev` metadata. Original, before and after PID
+starttime and owned network namespace matched. The regular inode had UID0,
+GID0 and mode `0444`. This is a Root metadata observation, not a successful worker
+read, owner-qualified AppArmor rule test, self-only mediation proof, or permission
+to add a PID wildcard. The retained three proof flags remain false. In particular,
+an owner-qualified rule must not be assumed to match the UID61002 worker.
+
+Independent post-run checks confirmed a collected unit with zero PIDs, an empty
+canonical full-PID1-view cgroup, absent namespaces, no capture base or native core,
+and the retained blocked result. Evidence was archived privately and the VM stopped.
+No comparison, keys, authentication scope or new AppArmor policy was created.
