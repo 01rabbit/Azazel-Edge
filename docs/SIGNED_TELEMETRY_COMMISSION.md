@@ -1,8 +1,8 @@
-# Single authenticated telemetry commissioning: prerequisites component only
+# Single authenticated telemetry commissioning: manual lab helper
 
 No authenticated commissioning case has run for this changed source. There is
-no four-assignment manifest, namespace setup, marker unit or commissioning entrypoint
-in this first chunk. Existing signed-network preparation/runner defaults and all
+no four-assignment manifest or workload. The fixed manual commissioner below
+composes the reviewed prerequisite, namespace, marker and authenticated helpers. Existing signed-network preparation/runner defaults and all
 profiles remain unchanged. The completed v6 stateless role precheck is compatibility
 evidence at its own tested source, not admission for an authenticated scope.
 
@@ -45,12 +45,12 @@ prerequisite receipt, not a complete fresh authenticated case or runtime proof.
 Tests use synthetic Root/kernel/tool observations; they create private test files,
 not actual systemd actors, namespaces or policy.
 
-Later separately reviewed setup must retain every namespace/unit creation intent
-and confirmed owned FD, establish lo and dummy `es` only as required, and add a
+The reviewed namespace setup retains every namespace/unit creation intent
+and confirmed owned FD, establish lo and dummy `es` only as required, and adds a
 fixed cap0/AF_UNIX `p.NET_UNIT` oneshot marker only for provider `Wants/After`
 compatibility. That marker cannot prove namespaces exist. Outer fresh BASE0755
 establishment needs recorded creation ownership, never used-directory repair.
-The current initializer and future live helper must retain equal frozen material,
+The current initializer and live helper must retain equal frozen material,
 public authenticated-scope context and actual pre-API proofs before GO, then reuse
 unchanged witness-first provisioning, sealed native startup, durable input_ready
 and natural verified terminal handling. No fake four-run manifest is needed.
@@ -100,7 +100,7 @@ outer actual all-actor/cgroup/resident guards remain required.
 The unit file is retained as used-case evidence after stop, never reused/deleted.
 
 The real current preflight and marker modules are now mandatory new-plan source
-pins, with no placeholder for the not-yet-implemented namespace context or main.
+pins, alongside the actual namespace context and main; no placeholder modules are pinned.
 Tests use real private file writes plus explicitly synthetic Root/unit metadata;
 no actual systemd unit, namespace, key or hardened role is created by these tests.
 
@@ -140,7 +140,7 @@ retains namespace names, including known earlier creations. Failed state is neve
 retried or repaired. `namespace-actor-cleanup.json` stays separate from the reserved
 `namespace-evidence/cleanup.json`; failed evidence publication blocks success.
 These tests use synthetic namespace/unit observations and real private FDs only.
-There is still no complete authenticated commissioner or new VM result here.
+No authenticated VM result is claimed by these synthetic tests.
 
 The namespace context's failure state is sticky: neither another `prepare()` nor
 `edge()` may reuse it. Before any namespace delete, the actor receipt's output
@@ -148,3 +148,33 @@ directory and that namespace's delete-intent workspace directory are fsynced.
 A directory-fsync failure retains the remaining names while owned FD closure and
 independent after-audits still run. Unit tests exercise actual private directory
 FDs and failure ordering; they do not claim a VM power-loss experiment.
+
+## Fixed authenticated connection composition
+
+`commission_telemetry(output, *, source_commit, archive_sha256, core_sha256,
+abi_sha256, interpreter_sha256)` is the explicit Root manual entrypoint. The
+external archive/profile staging boundary above remains mandatory. It creates
+one fresh scope, never a four-run manifest, ledger, H window or workload.
+
+The exact C0 environment and protected policy are established before provider
+configuration/registration. Witness-first provisioning invokes the current
+initializer; newly created BASE0755 is established through its confirmed owned
+FD, never by repairing a used directory. Ordinary then sealed native startup
+produces a verified two-frame prefix. The current live helper retains pre-API
+proof before GO; Root waits for the actual durable input_ready before stopping
+native production. The witness stays live through verified terminal closure.
+
+Read-only evidence validation retains original source, journal, signed witness
+anchors, terminal wire/decoded bytes and closed collector sidecar. It requires
+exact lifecycle/cursor/header bindings and at least one complete four-coverage
+sample with the original call epoch. Finalization is not required: terminal
+control can precede the first finalize call. The sidecar is observer-owned, not
+cryptographically signed journal evidence. No G5 or service effect is inferred.
+
+Every path attempts owned actor cleanup, followed by all-actor/cgroup and fenced
+namespace cleanup; unknown legacy actors are never killed. A complete result is
+published only after every cleanup/invariant check, with measurement, transition,
+experiment and admission flags false. Tests exercise this composition using real
+ephemeral source/witness signatures and original-byte validators, but synthetic
+Root/process observations and manually assembled journal bytes. They prove no
+actual systemd confinement, journal persistence or current-source VM acceptance.
