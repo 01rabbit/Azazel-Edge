@@ -140,7 +140,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
         )
         controller.g.write(
             controller.g.UNITS / controller.g.WITNESS,
-            "[Service]\nExecStart="
+            "[Service]\nType=notify\nNotifyAccess=main\nExecStart="
             + str(controller.g.PYTHON)
             + " -I -m azazel_edge.outcome.input_witness --policy "
             + str(controller.g.BUNDLE / "trust.json")
