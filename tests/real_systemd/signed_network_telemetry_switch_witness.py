@@ -255,12 +255,16 @@ class WitnessProof:
                         "group_empty", group_empty
                     )[0]
                 # No group signal is permitted after this reap releases its PID.
-                try:
-                    got, reaped = os.waitpid(pid, os.WNOHANG)
-                    lab.need(got == pid, "owned leader not reaped")
-                    status = reaped
-                except BaseException as exc:
-                    receipt["errors"].append("leader_reap:" + type(exc).__name__)
+                if receipt.get("group_empty_before_reap") is True:
+                    try:
+                        got, reaped = os.waitpid(pid, os.WNOHANG)
+                        lab.need(got == pid, "owned leader not reaped")
+                        status = reaped
+                    except BaseException as exc:
+                        receipt["errors"].append("leader_reap:" + type(exc).__name__)
+                else:
+                    self.owner.failed = True
+                    receipt["errors"].append("leader_pid_retained_unknown_group")
             for descriptor in (reply_r, reply_w, go_r, go_w):
                 if descriptor is not None:
                     try:
