@@ -97,6 +97,7 @@ jobs:
         run: cargo build --locked --manifest-path rust/azazel-edge-core/Cargo.toml
       - name: Stage root-owned isolated lab runtime
         run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS /usr/bin/python3 -I .github/scripts/ubuntu_apt_mirror.py
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-venv
           if [ '${{ matrix.flavor }}' != baseline ]; then
@@ -235,6 +236,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS /usr/bin/python3 -I .github/scripts/ubuntu_apt_mirror.py
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends nftables iproute2 conntrack iputils-ping
           python3 -m venv .venv
