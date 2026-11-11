@@ -1,180 +1,127 @@
-# Single authenticated telemetry commissioning: manual lab helper
+# Single authenticated telemetry commissioning: manual API, runtime unrun
 
-No authenticated commissioning case has run for this changed source. There is
-no four-assignment manifest or workload. The fixed manual commissioner below
-composes the reviewed prerequisite, namespace, marker and authenticated helpers. Existing signed-network preparation/runner defaults and all
-profiles remain unchanged. The completed v6 stateless role precheck is compatibility
-evidence at its own tested source, not admission for an authenticated scope.
+`signed_network_telemetry_commission.commission_telemetry(output, *, source_commit,
+archive_sha256, core_sha256, abi_sha256, interpreter_sha256)` now composes one
+fresh authenticated initialization/live/terminal connection on an explicitly
+marked offline disposable VM. It is a manual Root API with five mandatory
+external pins, no CLI or automatic launcher. No authenticated commissioning case
+has run for this changed source. The completed v6 stateless precheck remains
+compatibility evidence at its own source, not admission for this connection.
 
-The isolated helper
-`signed_network_telemetry_commission_setup.preflight(output, *, source_commit,
-archive_sha256, core_sha256, abi_sha256, interpreter_sha256)` takes one new private
-output path and five mandatory independent Root pins. It is fixed to this lab's
-old/new initializer/live families, core, witness, provider network marker name,
-three provider namespace names and externally staged account/profile/alias set.
-It has no arbitrary unit, command, profile, namespace or material path inputs.
+Read-only evidence validation now requires **at least one recorded telemetry
+sample with all four coverage flags true**, preserving the original call epoch.
+Initialization, PRE-API READY or a terminal receipt cannot substitute for that
+gate. Runtime remains **UNRUN** for this changed source; static and fixture checks
+do not establish current-source VM acceptance.
 
-Root must first authenticate the complete source archive on host and guest, then
-extract protected source and record its exact revision. The supplied archive hash
-records that **external** trust boundary; matching revision text is not archive
-proof. Old/provider/new profiles and byte-identical aliases are externally staged
-with current source hashes; this helper neither installs nor reloads them. Old
-account UIDs/groups/nologin/locked status are checked using public account metadata
-and `passwd --status`, never shadow or private-key content.
+## External prerequisites and current-source checks
 
-Before creating output, the helper checks the protected VM marker, exact source
-revision/core ELF/hash, current candidate/interpreter/ABI/feature/loaded-label facts,
-unused output/BASE/three names, all closed unit families absent, actual full-PID1
-cgroup emptiness and no unmanaged native process. Isolated protected imports are
-also checked. No unknown/used state is repaired, predeleted or reused.
+Root must authenticate the complete source archive on host and guest before
+extracting protected source and recording its revision. The supplied archive hash
+records that external boundary; revision text or selected helper hashes alone
+cannot authenticate the archive. Old/provider/new profiles, byte-identical aliases
+and fixed locked accounts must already be staged externally. This API never
+installs, repairs, reloads or broadens those profiles or aliases.
 
-Root parent-network and external-asset/material baselines are captured before the
-private output is created and saved immediately afterward, before compilation or
-any future scope/namespace/unit/key mutation. The actual bounded systemd unit
-lookup query is retained. Every path is checked with LEXISTS for every fixed unit,
-`.d/.wants/.requires/.upholds`, applicable dash-prefix `.service.d` and global
-`service.d`; dangling links, malformed/duplicate paths and query failure refuse.
+`signed_network_telemetry_commission_setup.preflight` checks the protected VM
+marker, source revision, core ELF/hash, interpreter/ABI pins, current protected
+material, feature masks and required enforcing-label facts. Matching installed
+policy text, loaded labels and current compilation are separate observations,
+not cryptographic proof of loaded policy bytes or observer-label binding.
 
-The only executable preparation work is the existing current-profile compile-only
-helper with skip-kernel-load/skip-cache/Werror. No policy is loaded, key generated,
-BASE created, unit started or namespace created. On success or a post-output
-failure, parent network, old/provider assets and current material checks are each
-attempted independently, preserving failures instead of hiding a skipped check.
-Successful output still sets transition/experiment/admission false and is only a
-prerequisite receipt, not a complete fresh authenticated case or runtime proof.
-Tests use synthetic Root/kernel/tool observations; they create private test files,
-not actual systemd actors, namespaces or policy.
+Before creating private evidence, preflight requires unused output/BASE/three
+provider names, all seven fixed actor units absent, the full actual PID1 cgroup
+view empty for those units, no unmanaged native core, and protected imports.
+Account UID/GID/nologin/locked status is checked without reading private keys.
+Root network and external asset/material baselines precede scope mutations.
+Retained actual unit search paths must contain no exact unit, dependency directory,
+applicable dash-prefix drop-in or `service.d`, including dangling entries.
+Current skip-kernel-load/skip-cache/Werror compilation precedes key or actor
+provisioning. Unsupported, used or unknown state refuses without repair/retry.
 
-The reviewed namespace setup retains every namespace/unit creation intent
-and confirmed owned FD, establish lo and dummy `es` only as required, and adds a
-fixed cap0/AF_UNIX `p.NET_UNIT` oneshot marker only for provider `Wants/After`
-compatibility. That marker cannot prove namespaces exist. Outer fresh BASE0755
-establishment needs recorded creation ownership, never used-directory repair.
-The current initializer and live helper must retain equal frozen material,
-public authenticated-scope context and actual pre-API proofs before GO, then reuse
-unchanged witness-first provisioning, sealed native startup, durable input_ready
-and natural verified terminal handling. No fake four-run manifest is needed.
+## Current one-scope flow
 
-The outer commissioner must independently stop/prove every owned actor and client,
-keep legacy families absent, and prove all cgroups/three namespaces empty before
-fenced namespace deletion. Failed/unknown proof retains named scope/evidence; no
-resident-kill shortcut, retry, reset, backfill or profile widening is authorized.
-No H window, workload, service effect, G5 calculation or four-run ledger belongs
-in that single authenticated-connection case.
+1. Construct `NamespaceSetup` before preparation. It owns the three fixed provider
+   namespaces, loopbacks and one dummy `es` in EDGE, with creation intents,
+   confirmed original FDs, named identities and CLOEXEC fences. There is no
+   address, forwarding toggle, workload, nft rule or external route setup.
+2. Start the separately owned `p.NET_UNIT` dependency marker in a fresh dedicated
+   evidence child. Its fixed Root cap0/NNP/AF_UNIX oneshot runs `/usr/bin/true`
+   with RemainAfterExit, Restart=no and no default dependencies. Typed hooks,
+   command, fragment, active-exited PID0 and full cgroup emptiness are checked.
+   This marker supplies dependency compatibility, never namespace/API readiness.
+3. Use the unchanged fixture's exclusive `g.prepare_lab` path to create genuine
+   fresh v4 material and start the witness first. Record newly created core and
+   witness unit ownership. The initializer callback records the exclusive BASE
+   identity and normalizes only that new directory to 0755 through its owned FD;
+   used-directory repair is refused. Private key material retains its own modes.
+4. Call the current telemetry initializer with the fenced parent-owned EDGE FD
+   and independent source/material pins. Then validate current registration,
+   layout, exact C0 native environment and core hash. Start the ordinary core,
+   apply the existing sealed Switch plan and require the actual signed two-frame
+   `session_prepare`/`session_start` prefix on this boot.
+5. Enter the current live helper using the direct successful initialization
+   return and equal current public configuration/material binding. Independently
+   await durable `input_ready` at the exact source prefix, then stop native/capture
+   naturally while observer and witness remain available for terminal CONTROL.
+   A status-only session exposes no client pipes or wait/communicate operation.
+6. Require the typed natural terminal result and clean live-helper teardown.
+   Read original source, journal, signed witness anchors, terminal wire/decoded
+   bytes and closed collector sidecar. Existing validators check signatures,
+   lifecycle, source/journal inode and policy bindings, exact cursor coverage,
+   final witness acknowledgement and the three-event no-workload session. At least
+   one complete four-coverage sample must match its recorded call epoch; terminal
+   CONTROL can precede the first finalize call, so finalization is not required.
 
-## Fixed dependency-marker helper (not namespace setup)
+Both initializer and live use the new fixed units/alias/profile with UID61002,
+cap0/NNP/AF_UNIX, private ptraceable proc view, Restart=no and unchanged 40s/5s
+unit bounds. Before opening authenticated APIs, each worker emits PRE-API READY
+and waits for exact bounded GO. Root independently checks source/boot, effective
+unit command/hooks, PID/start-time/cgroup/label, proc/binfmt metadata, all three
+nsfs identities and exactly the original three FIFOs. Root persists the full
+proof bundle and binding, including directory fsync, before GO. Public trust/origin
+configuration is checked at the caller's fences; its snapshot is not atomic or
+self-authenticating. Actual authentication remains in the unchanged API after GO.
 
-`signed_network_telemetry_marker.Marker(output, baseline)` requires an explicit
-**fresh dedicated marker evidence child**, such as a new `namespace-marker` under
-the preflight output. It refuses an existing directory/alias, so its exclusive
-`commission-unit-paths` artifacts cannot collide with preflight's originals. The
-helper creates that child itself; the outer caller must not precreate it. The
-state object exists before `start()` can mutate anything. The outer namespace owner must retain this
-object on all paths and independently fence all three namespaces before each use.
-The helper itself provides **dependency compatibility only**, not namespace proof,
-authenticated API permission or a complete commissioning entrypoint.
+## Ownership, failure and cleanup
 
-It checks current material/boot, all-family inherited unit material and known
-absent marker/cgroup state. It exclusively creates only fixed `p.NET_UNIT` through
-a protected nofollow parent/owned FD, records intent and inode immediately, then
-establishes exact0644 with that new FD and fsync. It never overwrites, repairs,
-unlinks or reloads profiles. The fixed unit runs only `/usr/bin/true`, oneshot with
-RemainAfterExit, Root user/group, cap0/AF_UNIX/NNP, Restart=no and no default
-dependencies. Its five-second startup/three-second stop settings are fixed; manager
-queries use the existing two-second retained command helper.
+Keep the namespace state through every failure. Its failed/closed states cannot
+be prepared or used again. Initializer/live helpers own their fixed unit, Root
+client and pipes; raw replies precede parsing. They independently stop/prove their
+unit, retain residual streams, boundedly reap the owned client and close pipes.
+Forced reap, unknown state or evidence failure withholds their success result.
 
-Original reload/start/state query outputs precede parsing. Typed empty-hook proof,
-exact executable/argv, effective authority/dependencies/fragment, active-exited
-MainPID/ControlPID0 and full-PID1 cgroup emptiness are required. `marker-verified`
-metadata explicitly sets transition/experiment/admission false and still proves
-no namespace or scope readiness. `stop()` requires a finalized exact0644 protected file with original identity
-and exact fixed bytes/hash, then a current loaded-unit fragment/command/hooks/
-properties/type fence, retained and rechecked before stop. Separate durable
-manager/start intents distinguish file creation from an attempted start. Partial
-creation or reload without start grants **no STOP authority**, even if an inode
-was confirmed. Alternatively, two known-not-found snapshots plus actual full-PID1
-empty cgroup proof establish absence without issuing stop. Unknown, edited,
-replaced or unsupported configuration refuses; failed proof remains failure.
-A no-start/absent receipt is not whole-scope quiescence or namespace-deletion proof;
-outer actual all-actor/cgroup/resident guards remain required.
-The unit file is retained as used-case evidence after stop, never reused/deleted.
+The main commissioner attempts every owned fixed actor with witness last. Legacy
+families are never signalled. It then closes the namespace context, which stops
+only its owned marker and independently inspects all seven actor families,
+canonical full-PID1 cgroups, unmanaged cores, boot and external invariants.
+Marker STOP requires a start attempt, original finalized 0644 file identity/bytes
+and matching current loaded-unit fragment/command/hooks/properties/type. Proven
+absence uses before/after snapshots and full cgroup proof without STOP.
 
-The real current preflight and marker modules are now mandatory new-plan source
-pins, alongside the actual namespace context and main; no placeholder modules are pinned.
-Tests use real private file writes plus explicitly synthetic Root/unit metadata;
-no actual systemd unit, namespace, key or hardened role is created by these tests.
+Namespace deletion requires confirmed creation, unchanged named/FD identities,
+zero residents, workspace identity, durable actor checks and each durable delete
+intent. It never uses `Assets.close` resident signalling. Unknown/replaced names,
+failed setup or persistence retain remaining names; only confirmed original FDs
+may close. Parent network, old/provider assets and current material are audited
+independently before/after cleanup. Scope files/history and used unit files remain
+evidence; no filesystem/default-mode restoration, reset or automatic retry occurs.
+Only temporary Python fixture globals are restored after the call.
 
-## Owned namespace state (authentication still separate)
+## Evidence limits
 
-Construct `signed_network_telemetry_namespaces.NamespaceSetup(output, baseline)`
-BEFORE calling `prepare()` and keep that same object through an outer `finally`
-that calls `close()`. The baseline must be the current direct preflight return,
-not imported JSON authority. The state owns the Assets object before any creation,
-so a partial add cannot lose its creation intent or confirmed original FD.
+Completion describes one authenticated connection only. Collector calls remain
+observer-owned closed sidecar evidence, distinct from signed source/journal/witness
+proof. Pre-API confinement provenance is Root lab metadata, not a new cryptographic
+observer-label field in registration or journal context. Current code pins include
+the actual commissioning and consumed helper modules; further edits require a new
+complete source freeze. Composition fixtures use real ephemeral source/witness
+signatures and original-byte validators, with synthetic Root/process observations
+and manually assembled journal bytes. They prove no actual systemd confinement,
+journal persistence or current-source VM acceptance.
 
-Preparation creates only the three literal provider names, loopback links and
-one dummy `es` in EDGE. No address, route, forwarding toggle, traffic, nft rule,
-authenticated scope, key, witness or core is provisioned. The Root-private
-namespace workspace has intent/confirmed identity, each namespace uses the
-existing pre-add intent/immediate FD confirmation, and all three named/FD pairs
-plus CLOEXEC are rechecked before use. The marker creates its own fresh
-`namespace-marker` evidence child. `edge()` returns only the fenced parent-owned
-EDGE descriptor/pair while this context is ready and open; the descriptor is
-never an actor grant. The namespace/marker receipt keeps all authorization flags
-false and is not authenticated API readiness.
-
-Outer owners must stop their witness/core/observer actors before `close()`.
-This component stops only its owned marker and independently inspects every
-closed old/new actor family, canonical full-PID1 cgroup and unmanaged native scan.
-An unexpected active legacy/outer actor is refused and retained, never signalled.
-It audits parent network, old/provider assets and current material independently
-before and after cleanup, including other failure paths.
-
-Any unknown setup/creation/persistence, actor/group, resident query, named/FD or
-workspace identity prevents namespace deletion. Known cleanup first persists its
-actor checks, then rechecks each named original handle and zero residents before
-a fixed delete command/retained output. It NEVER calls the existing Assets.close
-resident-signalling path. Unknown/replaced names or foreign/reused descriptors
-are preserved; only confirmed original FDs may close. Setup failure conservatively
-retains namespace names, including known earlier creations. Failed state is never
-retried or repaired. `namespace-actor-cleanup.json` stays separate from the reserved
-`namespace-evidence/cleanup.json`; failed evidence publication blocks success.
-These tests use synthetic namespace/unit observations and real private FDs only.
-No authenticated VM result is claimed by these synthetic tests.
-
-The namespace context's failure state is sticky: neither another `prepare()` nor
-`edge()` may reuse it. Before any namespace delete, the actor receipt's output
-directory and that namespace's delete-intent workspace directory are fsynced.
-A directory-fsync failure retains the remaining names while owned FD closure and
-independent after-audits still run. Unit tests exercise actual private directory
-FDs and failure ordering; they do not claim a VM power-loss experiment.
-
-## Fixed authenticated connection composition
-
-`commission_telemetry(output, *, source_commit, archive_sha256, core_sha256,
-abi_sha256, interpreter_sha256)` is the explicit Root manual entrypoint. The
-external archive/profile staging boundary above remains mandatory. It creates
-one fresh scope, never a four-run manifest, ledger, H window or workload.
-
-The exact C0 environment and protected policy are established before provider
-configuration/registration. Witness-first provisioning invokes the current
-initializer; newly created BASE0755 is established through its confirmed owned
-FD, never by repairing a used directory. Ordinary then sealed native startup
-produces a verified two-frame prefix. The current live helper retains pre-API
-proof before GO; Root waits for the actual durable input_ready before stopping
-native production. The witness stays live through verified terminal closure.
-
-Read-only evidence validation retains original source, journal, signed witness
-anchors, terminal wire/decoded bytes and closed collector sidecar. It requires
-exact lifecycle/cursor/header bindings and at least one complete four-coverage
-sample with the original call epoch. Finalization is not required: terminal
-control can precede the first finalize call. The sidecar is observer-owned, not
-cryptographically signed journal evidence. No G5 or service effect is inferred.
-
-Every path attempts owned actor cleanup, followed by all-actor/cgroup and fenced
-namespace cleanup; unknown legacy actors are never killed. A complete result is
-published only after every cleanup/invariant check, with measurement, transition,
-experiment and admission flags false. Tests exercise this composition using real
-ephemeral source/witness signatures and original-byte validators, but synthetic
-Root/process observations and manually assembled journal bytes. They prove no
-actual systemd confinement, journal persistence or current-source VM acceptance.
+Existing product and signed-network defaults remain unchanged. This API creates
+no four-assignment manifest or ledger and performs no H window, traffic workload,
+G5/effect calculation or efficacy assessment. Results keep transition, experiment,
+production admission and measurement completion false. They authorize no trial,
+resume, deployment or production activation.
