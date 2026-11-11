@@ -281,6 +281,12 @@ def _runtime_context(snap, inputs, prepared, facts, trust, terminal):
     return binding
 
 
+def _root_children():
+    return sorted(phase.WORK.glob("namespace-cookie-*-receipt.json")) + sorted(
+        phase.WORK.glob("switch-witness-*-receipt.json")
+    )
+
+
 class _TelemetryReader:
     def __init__(self, pins):
         self.pins = pins
@@ -534,9 +540,42 @@ class _TelemetryReader:
                 and process["returncode"] == 0,
                 "owned client was not cleanly reaped",
             )
-        children = sorted(
-            list(phase.WORK.glob("namespace-cookie-*-receipt.json"))
-        ) + sorted(list(phase.WORK.glob("switch-witness-*-receipt.json")))
+        launches = [
+            snap.json(phase.WORK / (label + "-query-launch.json"))
+            for label in ("baseline", "active", "absence")
+        ] + [
+            snap.json(phase.WORK / (label + "-peer-launch.json"))
+            for label in ("service", "client")
+        ]
+        expected = []
+        for launch in launches:
+            need(
+                type(launch["pid"]) is int
+                and launch["pid"] > 1
+                and type(launch["actual_child_argv"]) is list
+                and launch["actual_child_argv"]
+                and all(type(arg) is str for arg in launch["actual_child_argv"])
+                and type(launch["launch_before_ns"]) is int
+                and type(launch["launch_after_ns"]) is int
+                and 0
+                <= launch["launch_before_ns"]
+                <= launch["launch_after_ns"]
+                < 2**63,
+                "original owned process launch unavailable",
+            )
+            expected.append(dict(pid=launch["pid"], argv=launch["actual_child_argv"]))
+        need(len({row["pid"] for row in expected}) == 5, "original launch PID reused")
+        _same(
+            sorted(
+                [
+                    dict(pid=row["pid"], argv=row["argv"])
+                    for row in receipt["processes"]
+                ],
+                key=lambda row: row["pid"],
+            ),
+            sorted(expected, key=lambda row: row["pid"]),
+        )
+        children = _root_children()
         need(
             type(receipt["root_child_count"]) is int
             and 1 <= receipt["root_child_count"] == len(children) <= 32,
