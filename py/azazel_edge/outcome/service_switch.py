@@ -440,6 +440,7 @@ print('verified')
 """
         result = subprocess.run(
             [sys.executable, "-c", script, str(bundle / POLICY)],
+            cwd="/",
             user=p.data["observer_uid"],
             group=p.data["observer_uid"],
             extra_groups=[],
