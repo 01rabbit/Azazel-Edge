@@ -141,3 +141,10 @@ retried or repaired. `namespace-actor-cleanup.json` stays separate from the rese
 `namespace-evidence/cleanup.json`; failed evidence publication blocks success.
 These tests use synthetic namespace/unit observations and real private FDs only.
 There is still no complete authenticated commissioner or new VM result here.
+
+The namespace context's failure state is sticky: neither another `prepare()` nor
+`edge()` may reuse it. Before any namespace delete, the actor receipt's output
+directory and that namespace's delete-intent workspace directory are fsynced.
+A directory-fsync failure retains the remaining names while owned FD closure and
+independent after-audits still run. Unit tests exercise actual private directory
+FDs and failure ordering; they do not claim a VM power-loss experiment.

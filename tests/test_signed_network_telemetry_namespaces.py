@@ -79,6 +79,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
             **{
                 key: getattr(os, key)
                 for key in (
+                    "fsync",
                     "open",
                     "close",
                     "get_inheritable",
@@ -321,3 +322,87 @@ def test_replaced_workspace_never_receives_cleanup_or_pid_query_writes(
     assert {p.name for p in state.work.iterdir()} == {"foreign"}
     assert len(list(named.iterdir())) == 3
     assert not any(str(e).startswith("delete:") for e in events)
+
+
+def test_failed_prepare_cannot_retry_guard_queries_writes_or_expose_edge(
+    tmp_path, monkeypatch
+):
+    state, _, _, _ = fixture(tmp_path, monkeypatch, "fresh")
+    guards = []
+    monkeypatch.setattr(ns.setup.g, "guard", lambda: guards.append(1))
+    with pytest.raises(AssertionError):
+        state.prepare()
+    before = set(state.output.iterdir())
+    with pytest.raises(AssertionError, match="no retry"):
+        state.prepare()
+    assert guards == [1] and set(state.output.iterdir()) == before
+    with pytest.raises(AssertionError):
+        state.edge()
+    with pytest.raises(AssertionError):
+        state.close()
+
+
+def test_ready_but_poisoned_context_never_exposes_namespace_handle(
+    tmp_path, monkeypatch
+):
+    state, _, _, _ = fixture(tmp_path, monkeypatch)
+    state.prepare()
+    state.failed = True
+    with pytest.raises(AssertionError):
+        state.edge()
+    with pytest.raises(AssertionError):
+        state.close()
+
+
+@pytest.mark.parametrize("fault", [None, "actorsync", "intentsync", "secondintent"])
+def test_actual_private_directory_fsync_order_and_failures_gate_deletion(
+    tmp_path, monkeypatch, fault
+):
+    import stat
+
+    state, named, events, _ = fixture(tmp_path, monkeypatch)
+    state.prepare()
+    synced = []
+
+    def sync(fd):
+        info = os.fstat(fd)
+        assert stat.S_ISDIR(info.st_mode)
+        path = state.output if info.st_ino == state.output.stat().st_ino else state.work
+        assert info.st_ino == path.stat().st_ino
+        synced.append(path)
+        if (
+            fault == "actorsync"
+            and path == state.output
+            or fault == "intentsync"
+            and path == state.work
+            or fault == "secondintent"
+            and synced.count(state.work) == 2
+        ):
+            raise OSError("synthetic directory fsync failure on real owned FD")
+        os.fsync(fd)
+
+    monkeypatch.setattr(ns.os, "fsync", sync)
+    query = ns.material.preflight.old._retained_query
+
+    def recorded(argv, prefix, work):
+        if argv[2] == "del":
+            assert synced[0] == state.output and synced[-1] == state.work
+        return query(argv, prefix, work)
+
+    monkeypatch.setattr(ns.material.preflight.old, "_retained_query", recorded)
+    if fault is None:
+        assert state.close()["cleanup_verified"] is True
+        assert not list(named.iterdir()) and synced == [state.output] + [state.work] * 3
+    else:
+        with pytest.raises(AssertionError):
+            state.close()
+        expected_remaining = 2 if fault == "secondintent" else 3
+        assert len(list(named.iterdir())) == expected_remaining
+        assert (
+            sum(str(e).startswith("delete:") for e in events) == 3 - expected_remaining
+        )
+        assert state.receipt["cleanup_verified"] is False
+        assert (state.output / "namespace-close-after-parent.json").exists()
+    for fd, _, _ in state.assets.created.values():
+        with pytest.raises(OSError):
+            os.fstat(fd)

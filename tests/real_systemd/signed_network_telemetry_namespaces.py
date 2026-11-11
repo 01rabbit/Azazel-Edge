@@ -14,6 +14,14 @@ from telemetry_isolation_controller import _close_namespace_fd
 setup, lab, material = marker.setup, marker.lab, marker.material
 
 
+def _sync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 class NamespaceSetup:
     def __init__(self, output, baseline):
         self.output, self.baseline = Path(output), baseline
@@ -47,7 +55,10 @@ class NamespaceSetup:
             )
 
     def edge(self):
-        lab.need(self.ready and not self.closed, "namespace context is not usable")
+        lab.need(
+            self.ready and not self.failed and not self.closed,
+            "namespace context is not usable",
+        )
         self._fence_all()
         fd, device, inode = self.assets.created[self.assets.names["edge"]]
         return fd, [device, inode]
@@ -78,7 +89,10 @@ class NamespaceSetup:
         lab.need(not errors, "namespace invariants incomplete: " + str(errors))
 
     def prepare(self):
-        lab.need(not self.ready and not self.closed, "new context only; no retry")
+        lab.need(
+            not self.ready and not self.failed and not self.closed,
+            "new context only; no retry",
+        )
         try:
             setup.g.guard()
             material.preflight._output(self.output)
@@ -237,6 +251,7 @@ class NamespaceSetup:
                 self.output / "namespace-actor-cleanup.json", receipt
             ),
         )
+        attempt("actor receipt directory fsync", lambda: _sync_dir(self.output))
         if not receipt["errors"]:
             for index, name in enumerate(reversed(list(self.assets.created)), 1):
                 kind = next(k for k, v in self.assets.names.items() if v == name)
@@ -248,6 +263,7 @@ class NamespaceSetup:
                         self.work / ("namespace-delete-intent-" + str(index) + ".json"),
                         dict(name=name),
                     )
+                    _sync_dir(self.work)
                     self.assets._check(kind)
                     code, _ = material.preflight.old._retained_query(
                         ["ip", "netns", "del", name],
