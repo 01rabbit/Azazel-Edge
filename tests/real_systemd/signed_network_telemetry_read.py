@@ -230,6 +230,15 @@ def _runtime_context(snap, inputs, prepared, facts, trust, terminal):
         binding["roles"],
         {mode: role.observer_spec(mode) for mode in ("initialize", "live")},
     )
+    for key in ("abi_sha256", "interpreter_sha256"):
+        _same(binding["material"][key], inputs["external_pins"][key])
+    need(
+        old.sha(snap.raw(material.preflight.ABI, maximum=1024 * 1024)[0])
+        == inputs["external_pins"]["abi_sha256"]
+        and old.sha(snap.raw(Path(role.ALIAS), maximum=64 * 1024 * 1024)[0])
+        == inputs["external_pins"]["interpreter_sha256"],
+        "current public ABI/interpreter differs",
+    )
     public = binding["public_auth"]
     need(
         public["trust_sha256"] == trust.digest
@@ -626,7 +635,7 @@ class _TelemetryReader:
                 record,
                 record["release"],
                 "absence",
-                "release-callback-ready.json",
+                "absence-callback-ready.json",
             )
         return probe
 
