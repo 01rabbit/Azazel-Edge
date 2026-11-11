@@ -310,3 +310,80 @@ result materialization. It is not reconstructed from the last sample or schedule
 horizon. Together with the original start anchor, per-call anchors and separately
 recorded controller start/end brackets, it supports only the fixed-budget sampled
 clock-consistency qualifier; it cannot prove continuous unsampled stability.
+
+## Manual bounded assignment run (calculation still withheld until segment 3)
+
+After independently reviewing the complete frozen source and successful fresh
+preparation, Root may call
+`signed_network_run.run_assignment(expected_manifest_sha256, expected_start_head)`.
+This is a single manual assignment function, not a VM/accounting/retry engine.
+It revalidates protected inputs against `prepared.json`, actual kernel boot,
+public registration/trust and the actual sole native identity. Only a fresh
+complete signed prepare/start prefix qualifies. An exclusive `run-intent.json`
+claims the attempt before reopening assets; an existing intent refuses without
+stopping another already-started run. No used assignment is retried.
+
+The fixed helpers have only these purposes: bounded authenticated source polling,
+existing Rust-adapter arm/task checks, a fixed explicit ROOT read-only query child
+and bounded raw-envelope transport, and exact closed-recorder callback lookup.
+No replacement source parser, collector loop, G5 pipeline, RunLedger or benefit
+calculator is introduced. The query child is the module's only script entrypoint;
+it checks the marked root VM, frozen input pins, actual boot and owned namespace,
+then runs only the existing `SubprocessReadOnlyRunner` fixed throttle-chain query.
+It is not callable with observer privileges and is no privileged observer proxy.
+
+Sequence and retained facts:
+
+1. Reopen all saved namespace identities through `FencedAssets`. Capture the
+   independent baseline ROOT chain and require the original unique foreign canary.
+   Stage the unchanged service peer and configuration before starting the observer.
+2. Start the existing fixed observer role with private exclusive stdout/stderr.
+   Within two seconds it must remain alive, expose matching startup context,
+   actually persist the exact `input_ready` source-prefix offset/hash, and pass
+   effective-unit/kernel/namespace/PID identity checks. A context file alone is
+   never readiness.
+3. Record an actual controller start clock bracket and actual monotonic H0. The
+   service receives H0 and H0+5s. The unchanged client receives the frozen protocol
+   origin H0+1.25s and actual deadline, and may launch before that target; retain
+   its original argv and real spawn brackets. That scheduled protocol coordinate
+   is not represented as the actual process-start timestamp. Wait for the real
+   baseline interval, append exactly one current fixed EVE record, and retain its
+   bytes and real append brackets. No new event/sample/metric timeline is fabricated.
+4. Poll the existing `SourceVerifier`-authenticated complete prefix. An incomplete
+   writer tail is only not-ready and remains byte-for-byte preserved; complete
+   signature/registration/session/boot/tuple/task mismatches fail immediately.
+   Native decision/provider facts stay unchanged, including disabled C0 status.
+   Both arms retain the same separate ROOT active query; candidate full rule
+   semantics reuse the production parser. Original foreign chain context must
+   remain unchanged. Root queries never enter the live observer.
+5. At actual H, record the controller end bracket and preserve unchanged service
+   and client audits. Existing service capture performs the explicit client-origin
+   coordinate translation. Candidate waits at most 32 seconds from the actual
+   alert append for its signed matching release, then requires independent actual
+   absence with the complete original foreign context. Baseline executes no command
+   and also receives the independent absence query.
+6. Stop actual capture/core first (two-second command bound), keep witness and
+   observer alive, and wait at most two seconds for natural optional terminal drain.
+   Verify closed signed source, actual terminal origin/cursor, journal close and
+   fresh witness state before inspecting the closed recorder. Lookup requires the
+   exact original event's canonical bytes, not only a matching task or Python
+   numeric equality. Preserve the unchanged actual callback receipt epochs; missing
+   decision/release callbacks or terminal pending loss yield `withheld`. No native
+   attempt time is substituted for an observer callback time.
+7. All fixed actor stops/quiescence proof precede existing identity-fenced peer and
+   namespace cleanup. Cleanup, child reap and all log closes continue even after
+   an artifact write/close failure. Failure snapshots retain the last observed raw
+   source (including partial bytes), original facts and sticky failure; they never
+   publish success or authorize repair/retry. A success file appears only after
+   cleanup passes, with status `run_facts_complete` or `withheld` and explicit
+   `measurement_completed=False`, `production_admission=False`.
+
+The 40-second observer bound and 900-row recorder bound are unchanged. Slow but
+otherwise correct runs can fail/withhold; no post-result retuning or retry is
+allowed. The full readonly join/clock/window qualification remains segment 3:
+`run_facts_complete` is not a measurement PASS. Actual live Outcomes/raw calls stay
+separate from any later explicitly labelled ROOT-augmented G5 calculation.
+Before any assignment freeze/VM work, Root must also resolve the existing-label
+procfs commissioning gate with its separate read-only confined precheck. A denied
+sample is a gap, never permission to broaden the profile or substitute an
+unconfined collector.
