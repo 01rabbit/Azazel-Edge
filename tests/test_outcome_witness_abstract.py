@@ -1,8 +1,8 @@
 """Explicit transport contracts; ephemeral crypto, no namespace/role transitions."""
 
 import hashlib
-from types import SimpleNamespace
-from unittest.mock import Mock
+from io import BytesIO
+from unittest.mock import Mock, MagicMock
 
 import pytest
 
@@ -13,6 +13,9 @@ from azazel_edge.outcome import input_transport as t, input_witness as w
 from azazel_edge.outcome.journal import OutcomeJournalError, _json
 
 
+BOOT = "93840600-9e68-4c6b-a778-b918d81dfe02"
+
+
 def policy(tmp_path):
     p, key, *_ = make_policy(tmp_path)
     return TrustPolicy(
@@ -21,7 +24,7 @@ def policy(tmp_path):
             schema_version=t.SCHEMA,
             origin_registration_sha256="f" * 64,
             witness_transport=t.transport(
-                p.data["scope_ref"], dict(device=4, inode=123)
+                p.data["scope_ref"], dict(cookie=123, kernel_boot_id=BOOT)
             ),
         )
     ), key
@@ -32,7 +35,7 @@ def test_policy_v4_digest_binds_canonical_transport_and_copies_nested_input(tmp_
     raw = _json(dict(p.data))
     value = __import__("json").loads(raw)
     q = TrustPolicy(value)
-    value["witness_transport"]["network_namespace"]["inode"] = 456
+    value["witness_transport"]["network_namespace"]["cookie"] = 456
     assert _json(dict(q.data)) == raw and q.digest == hashlib.sha256(raw).hexdigest()
     for target in (
         q.data["witness_transport"],
@@ -57,13 +60,13 @@ def test_policy_v4_digest_binds_canonical_transport_and_copies_nested_input(tmp_
         dict(
             p.data,
             witness_transport=t.transport(
-                p.data["scope_ref"], dict(device=4, inode=456)
+                p.data["scope_ref"], dict(cookie=456, kernel_boot_id=BOOT)
             ),
         )
     )
     assert changed.digest != p.digest
     assert (
-        t.transport("scope-b", dict(device=4, inode=123))["name"]
+        t.transport("scope-b", dict(cookie=123, kernel_boot_id=BOOT))["name"]
         != p.data["witness_transport"]["name"]
     )
 
@@ -105,9 +108,9 @@ def test_exact_policy_transport_refuses_malformed_or_implicit_downgrade(
     elif fault == "ns_extra":
         transport["network_namespace"]["path"] = "/proc/self/ns/net"
     elif fault == "ns_missing":
-        del transport["network_namespace"]["device"]
+        del transport["network_namespace"]["kernel_boot_id"]
     elif fault in ("bool", "float", "zero", "negative", "overflow"):
-        transport["network_namespace"]["inode"] = dict(
+        transport["network_namespace"]["cookie"] = dict(
             bool=True, float=123.0, zero=0, negative=-1, overflow=2**64
         )[fault]
     elif fault in ("v1", "v3"):
@@ -118,18 +121,49 @@ def test_exact_policy_transport_refuses_malformed_or_implicit_downgrade(
         TrustPolicy(value)
 
 
-@pytest.mark.parametrize("fault", ["wrongns", "missing", "nonlinux"])
-def test_both_endpoints_refuse_before_socket_store_or_pathname_access(
+def socket_fixture(monkeypatch, *, raw=None, boot=None):
+    sock = MagicMock()
+    sock.family, sock.type = t.socket.AF_UNIX, t.socket.SOCK_STREAM
+    sock.getsockname.return_value = ""
+    sock.getsockopt.return_value = (
+        (123).to_bytes(8, t.sys.byteorder) if raw is None else raw
+    )
+    sock.__enter__.return_value = sock
+    monkeypatch.setattr(t.sys, "platform", "linux")
+    monkeypatch.setattr(
+        t,
+        "open",
+        lambda *a: BytesIO((BOOT + "\n").encode() if boot is None else boot),
+        raising=False,
+    )
+    return sock
+
+
+@pytest.mark.parametrize(
+    "fault", ["wrongns", "missing", "nonlinux", "badsize", "zero", "badtype", "badboot"]
+)
+def test_both_endpoints_refuse_before_bind_connect_store_or_pathname_access(
     tmp_path, monkeypatch, fault
 ):
     p, _ = policy(tmp_path)
-    monkeypatch.setattr(t.sys, "platform", "linux" if fault != "nonlinux" else "darwin")
-    stat = Mock(return_value=SimpleNamespace(st_dev=4, st_ino=124))
-    if fault == "missing":
-        stat.side_effect = FileNotFoundError()
-    monkeypatch.setattr(t.os, "stat", stat)
-    socket, store, parent = Mock(), Mock(), Mock()
-    monkeypatch.setattr(w.socket, "socket", socket)
+    sock = socket_fixture(monkeypatch)
+    if fault == "wrongns":
+        sock.getsockopt.return_value = (124).to_bytes(8, t.sys.byteorder)
+    elif fault == "missing":
+        sock.getsockopt.side_effect = OSError("unsupported SO_NETNS_COOKIE")
+    elif fault == "nonlinux":
+        monkeypatch.setattr(t.sys, "platform", "darwin")
+    elif fault == "badsize":
+        sock.getsockopt.return_value = b"short"
+    elif fault == "zero":
+        sock.getsockopt.return_value = b"\0" * 8
+    elif fault == "badtype":
+        sock.getsockopt.return_value = 123
+    elif fault == "badboot":
+        monkeypatch.setattr(t, "open", lambda *a: BytesIO(b"invalid\n"))
+    monkeypatch.setattr(w.socket, "SO_PEERCRED", 17, raising=False)
+    store, parent = Mock(), Mock()
+    monkeypatch.setattr(w.socket, "socket", Mock(return_value=sock))
     monkeypatch.setattr(w, "WitnessStore", store)
     monkeypatch.setattr(w, "open_parent", parent)
     monkeypatch.setattr(w.os, "geteuid", lambda: p.data["observer_uid"])
@@ -138,20 +172,23 @@ def test_both_endpoints_refuse_before_socket_store_or_pathname_access(
     monkeypatch.setattr(w.os, "geteuid", lambda: p.data["witness_uid"])
     with pytest.raises(OutcomeJournalError):
         w.serve(p, tmp_path / "key", initialize=True)
-    socket.assert_not_called()
     store.assert_not_called()
     parent.assert_not_called()
+    sock.bind.assert_not_called()
+    sock.connect.assert_not_called()
+    assert sock.__exit__.call_count == 2
 
 
-def test_matching_namespace_address_is_exact_bounded_public_bytes(
+def test_matching_socket_cookie_address_is_exact_bounded_public_bytes(
     tmp_path, monkeypatch
 ):
     p, _ = policy(tmp_path)
-    monkeypatch.setattr(t.sys, "platform", "linux")
-    monkeypatch.setattr(
-        t.os, "stat", lambda path: SimpleNamespace(st_dev=4, st_ino=123)
+    sock = socket_fixture(monkeypatch)
+    address = t.abstract_address(p, sock)
+    assert t.socket_namespace(sock) == dict(cookie=123, kernel_boot_id=BOOT)
+    sock.getsockopt.assert_called_with(
+        t.socket.SOL_SOCKET, getattr(t.socket, "SO_NETNS_COOKIE", 71), 8
     )
-    address = t.abstract_address(p)
     assert (
         address
         == b"\0azazel-edge-witness-v1-"

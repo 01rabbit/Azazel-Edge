@@ -12,7 +12,11 @@ import pytest
 
 from test_outcome_input_auth_linux import Fixture, Child, ROOT
 from azazel_edge.outcome.input_auth import TrustPolicy
-from azazel_edge.outcome.input_transport import transport, abstract_address
+from azazel_edge.outcome.input_transport import (
+    transport,
+    abstract_address,
+    socket_namespace,
+)
 from azazel_edge.outcome import input_witness as w
 from azazel_edge.outcome.journal import OutcomeJournalError, _json
 
@@ -25,7 +29,8 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def f():
     value = Fixture()
-    namespace = os.stat("/proc/self/ns/net")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unbound:
+        namespace = socket_namespace(unbound)
     scope = "abstract-" + secrets.token_hex(12)
     value.p = TrustPolicy(
         dict(
@@ -33,9 +38,7 @@ def f():
             schema_version="outcome-input-trust/v4",
             scope_ref=scope,
             origin_registration_sha256="f" * 64,
-            witness_transport=transport(
-                scope, dict(device=namespace.st_dev, inode=namespace.st_ino)
-            ),
+            witness_transport=transport(scope, namespace),
         )
     )
     value.policy_file.write_bytes(_json(dict(value.p.data)))
@@ -104,7 +107,7 @@ from azazel_edge.outcome.input_transport import abstract_address
 from azazel_edge.outcome.input_witness import send_message,recv_message
 p=TrustPolicy(json.loads(Path(sys.argv[1]).read_bytes()))
 with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
- s.settimeout(1);s.connect(abstract_address(p));send_message(s,{'op':'read'});print(recv_message(s))
+ s.settimeout(1);s.connect(abstract_address(p,s));send_message(s,{'op':'read'});print(recv_message(s))
 """,
         uid=1000,
     )
@@ -160,17 +163,18 @@ def test_occupied_abstract_address_refuses_without_retiring_or_replacing(
         w, "retire_stale_endpoint", lambda *a: pytest.fail("no abstract takeover")
     )
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as holder:
-        holder.bind(abstract_address(f.p))
+        address = abstract_address(f.p, holder)
+        holder.bind(address)
         holder.listen(1)
         with pytest.raises(OSError):
             f.start(initialize=True)
-        assert holder.getsockname() == abstract_address(f.p)
+        assert holder.getsockname() == address
         assert not Path(f.p.data["socket_path"]).exists()
 
 
 def test_wrong_namespace_refuses_before_anchor_creation_or_filesystem_fallback(f):
     value = json.loads(_json(dict(f.p.data)))
-    value["witness_transport"]["network_namespace"]["inode"] += 1
+    value["witness_transport"]["network_namespace"]["cookie"] += 1
     bad = TrustPolicy(value)
     with pytest.raises(OutcomeJournalError, match="network namespace mismatch"):
         w.serve(bad, f.wk, initialize=True)
