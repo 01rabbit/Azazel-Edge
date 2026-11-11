@@ -419,7 +419,8 @@ def run_assignment(manifest_sha, head):
             "actual observer startup origin differs",
         )
         effective = observer.effective_observer(
-            dict(device=assets.created[p.EDGE][1], inode=assets.created[p.EDGE][2])
+            dict(device=assets.created[p.EDGE][1], inode=assets.created[p.EDGE][2]),
+            evidence_directory=phase.WORK,
         )
         n.write_new(phase.WORK / "effective-observer.json", effective)
         record["controller_start_anchor"] = service.record_clock_anchor()

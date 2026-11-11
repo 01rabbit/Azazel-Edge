@@ -108,8 +108,24 @@ def validated_inputs(expected_manifest_sha256, expected_start_head):
     )
 
 
+def reject_observer_material(paths):
+    units = (scope.INITIALIZER_UNIT, scope.OBSERVER_UNIT)
+    names = {"service.d"}
+    for unit in units:
+        names.update(unit + suffix for suffix in ("", ".d", ".wants", ".requires", ".upholds"))
+        parts = unit.removesuffix(".service").split("-")
+        names.update("-".join(parts[:i]) + "-.service.d" for i in range(1, len(parts)))
+    for parent in paths:
+        plan.need(parent.is_absolute() and ".." not in parent.parts, "invalid actual unit search path")
+        for name in names:
+            plan.need(not os.path.lexists(parent / name), "preexisting observer/initializer unit material refused")
+
+
 def fresh_preflight(inputs):
     g.guard()
+    unit_paths = subprocess.run(["systemd-analyze", "unit-paths"], capture_output=True, text=True, check=True, timeout=2)
+    plan.need(0 < len(unit_paths.stdout) <= 16384, "actual unit search paths unavailable")
+    reject_observer_material([Path(row) for row in unit_paths.stdout.splitlines()])
     for path in (
         WORK,
         g.BASE,

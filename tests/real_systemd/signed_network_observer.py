@@ -23,7 +23,7 @@ from signed_network_scope import OBSERVER_UNIT, INITIALIZER_UNIT, _kernel_text
 from signed_network_recording import record_collector
 from signed_network_service import record_clock_anchor
 import terminal_stop_lab as lab
-from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier, read_regular
+from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier, read_regular, open_parent
 from azazel_edge.outcome.input_cursor import BoundedInput
 from azazel_edge.outcome.input_resume import recover_input, run_live_resumable
 from azazel_edge.outcome.input_terminal import TerminalControlStop
@@ -272,6 +272,7 @@ def worker(mode):
 EFFECTIVE_PROPERTIES = (
     *lab.EFFECTIVE_PROPERTIES,
     "NetworkNamespacePath",
+    "ExecCondition",
     "ExecStartPre",
     "ExecStartPost",
     "ExecStop",
@@ -315,6 +316,7 @@ def validate_effective(value):
         "TriggeredBy",
         "Before",
         "Conflicts",
+        "ExecCondition",
         "ExecStartPre",
         "ExecStartPost",
         "ExecStop",
@@ -355,24 +357,56 @@ def validate_effective(value):
     )
 
 
-def effective_observer(namespace_identity):
-    result = subprocess.run(
-        [
-            "systemctl",
-            "show",
-            OBSERVER_UNIT,
-            "--property=" + ",".join(EFFECTIVE_PROPERTIES),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=2,
-    )
-    need(len(result.stdout) <= 32768, "effective observer state oversized")
-    rows = result.stdout.splitlines()
+HOOKS = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")
+BUS_PATH = "/org/freedesktop/systemd1/unit/edge400_2dsigned_2dnetwork_2dobserver_2eservice"
+
+
+def _retained_query(argv, prefix, directory):
+    n.write_new(directory / (prefix + ".argv.json"), argv)
+    code, error, stdout, stderr = None, None, b"", b""
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=2)
+        code, stdout, stderr = result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired as exc:
+        error, stdout, stderr = "TimeoutExpired", exc.stdout or b"", exc.stderr or b""
+    except OSError as exc:
+        error = type(exc).__name__
+    lab.save(directory / (prefix + ".stdout"), stdout)
+    lab.save(directory / (prefix + ".stderr"), stderr)
+    n.write_new(directory / (prefix + ".result.json"), dict(returncode=code, error=error))
+    return code, stdout
+
+
+def merged_effective(text, bus):
+    need(len(text) <= 32768 and len(bus) <= 65536, "effective observer evidence oversized")
+    rows = text.decode("utf-8").splitlines()
     need(all("=" in row for row in rows), "effective observer state malformed")
     value = dict(row.split("=", 1) for row in rows)
-    need(len(value) == len(rows), "duplicate effective observer property")
+    need(len(value) == len(rows) and set(value) - set(HOOKS) == set(EFFECTIVE_PROPERTIES) - set(HOOKS), "effective observer properties missing/duplicate")
+    lines = bus.splitlines()
+    need(len(lines) == len(HOOKS), "typed observer hooks unavailable")
+    for key, line in zip(HOOKS, lines):
+        typed = strict(line)
+        need(type(typed) is dict and set(typed) == {"type", "data"} and typed["type"] == "a(sasbttttuii)"
+             and type(typed["data"]) is list and typed["data"] == [], "typed observer hook not proven empty")
+        need(value.get(key, "") == "", "text/typed observer hook mismatch")
+        value[key] = ""
+    return value
+
+
+def effective_observer(namespace_identity, *, evidence_directory):
+    directory = Path(evidence_directory)
+    parent, _ = open_parent(directory / "unused", trusted_owner=os.geteuid())
+    try:
+        info = os.fstat(parent)
+        need(info.st_uid == os.geteuid() and info.st_mode & 0o7777 == 0o700, "private observer evidence directory required")
+        text_code, text = _retained_query(["systemctl", "show", OBSERVER_UNIT, "--property=" + ",".join(EFFECTIVE_PROPERTIES)], "effective-systemctl", directory)
+        bus_code, bus = _retained_query(["/usr/bin/busctl", "--system", "--json=short", "get-property", "org.freedesktop.systemd1", BUS_PATH,
+                                       "org.freedesktop.systemd1.Service", *HOOKS], "effective-busctl", directory)
+    finally:
+        os.close(parent)
+    need(text_code == bus_code == 0, "effective observer backend unavailable")
+    value = merged_effective(text, bus)
     validate_effective(value)
     state = lab.unit_snapshot(OBSERVER_UNIT)
     pid = state["MainPID"]

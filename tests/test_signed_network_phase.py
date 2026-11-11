@@ -98,6 +98,7 @@ def test_changed_or_unavailable_frozen_inputs_refuse_before_mutation(
 
 
 def preflight_fixture(tmp_path, monkeypatch, fault=None):
+    monkeypatch.setattr(phase.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=str(tmp_path)+"\n"))
     monkeypatch.setattr(phase.g, "guard", lambda: None)
     monkeypatch.setattr(phase.os.path, "lexists", lambda path: False)
     monkeypatch.setattr(
@@ -122,6 +123,8 @@ def preflight_fixture(tmp_path, monkeypatch, fault=None):
         monkeypatch.setattr(
             phase.os.path, "lexists", lambda path: Path(path) == phase.WORK
         )
+    elif fault == "material":
+        monkeypatch.setattr(phase.os.path, "lexists", lambda path: Path(path).name == phase.scope.INITIALIZER_UNIT+".requires")
     elif fault == "namespace":
         monkeypatch.setattr(
             phase.os.path, "lexists", lambda path: str(path).startswith("/run/netns/")
@@ -147,7 +150,7 @@ def preflight_fixture(tmp_path, monkeypatch, fault=None):
 
 
 @pytest.mark.parametrize(
-    "fault", ["used", "namespace", "unit", "cgroup", "core", "runtime"]
+    "fault", ["used", "material", "namespace", "unit", "cgroup", "core", "runtime"]
 )
 def test_precondition_gap_precedes_accounts_profiles_keys_and_actor_mutation(
     tmp_path, monkeypatch, fault
@@ -411,3 +414,18 @@ def test_init_callback_refuses_recovery_without_touching_permissions(monkeypatch
     )
     with pytest.raises(BenefitInputError, match="new-scope"):
         phase._initialize_new_observer(False)
+
+
+@pytest.mark.parametrize("unit",[phase.scope.INITIALIZER_UNIT,phase.scope.OBSERVER_UNIT])
+@pytest.mark.parametrize("suffix",["",".d",".wants",".requires",".upholds"])
+def test_preexisting_observer_and_initializer_material_refuses(tmp_path,unit,suffix):
+    (tmp_path/(unit+suffix)).symlink_to(tmp_path/"missing")
+    with pytest.raises(BenefitInputError,match="unit material"):
+        phase.reject_observer_material([tmp_path])
+
+
+@pytest.mark.parametrize("name",["service.d","edge400-.service.d","edge400-signed-.service.d","edge400-signed-network-.service.d"])
+def test_global_and_prefix_hooks_refuse_before_actor_creation(tmp_path,name):
+    (tmp_path/name).mkdir()
+    with pytest.raises(BenefitInputError,match="unit material"):
+        phase.reject_observer_material([tmp_path])

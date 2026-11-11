@@ -317,7 +317,7 @@ def test_effective_kernel_identity_and_fixed_namespace(tmp_path, monkeypatch, fa
         observer.subprocess,
         "run",
         lambda *a, **k: SimpleNamespace(
-            stdout="\n".join(key + "=" + value for key, value in properties.items())
+            returncode=0, stderr=b"", stdout=(typed_empty_hooks() if a[0][0] == "/usr/bin/busctl" else "\n".join(key + "=" + value for key, value in properties.items() if key not in observer.HOOKS).encode())
         ),
     )
     raw = "123 (observer) " + " ".join(["S"] + ["0"] * 18 + ["123"] + ["0"] * 5)
@@ -372,12 +372,12 @@ def test_effective_kernel_identity_and_fixed_namespace(tmp_path, monkeypatch, fa
     )
     if fault is None:
         assert (
-            observer.effective_observer(dict(device=4, inode=99))["state"]["MainPID"]
+            observer.effective_observer(dict(device=4, inode=99), evidence_directory=tmp_path)["state"]["MainPID"]
             == "123"
         )
     else:
         with pytest.raises(BenefitInputError):
-            observer.effective_observer(dict(device=4, inode=99))
+            observer.effective_observer(dict(device=4, inode=99), evidence_directory=tmp_path)
 
 
 def test_wrong_signed_boot_is_not_relabelled_or_observed(tmp_path, monkeypatch):
@@ -464,3 +464,57 @@ def test_actual_end_anchor_follows_natural_api_and_durable_recorder_close(
     assert result["end_clock_anchor"] == anchors[1]
     assert anchors[1]["monotonic_before_ns"] >= anchors[0]["monotonic_after_ns"]
     assert (directory / "terminal.wire").read_bytes() == wire
+
+
+def typed_empty_hooks():
+    return b"\n".join(json.dumps(dict(type="a(sasbttttuii)",data=[])).encode() for _ in observer.HOOKS)+b"\n"
+
+
+def backend_text():
+    return "\n".join(key+"="+value for key,value in effective_fixture().items() if key not in observer.HOOKS).encode()+b"\n"
+
+
+def test_missing_text_hooks_require_actual_typed_empty_proof():
+    value=observer.merged_effective(backend_text(),typed_empty_hooks())
+    observer.validate_effective(value)
+    with pytest.raises(BenefitInputError):
+        observer.merged_effective(backend_text(),b"")
+    with pytest.raises(BenefitInputError):
+        observer.merged_effective(backend_text()+b"ExecCondition=/bin/hook\n",typed_empty_hooks())
+
+
+@pytest.mark.parametrize("bad",[b'{"type":"as","data":[]}', b'{"data":[]}',b'{"type":"a(sasbttttuii)","data":[["/bin/hook"]]}',b"overflow"*10000])
+def test_typed_hook_missing_wrong_nonempty_or_overflow_refuses(bad):
+    rest=typed_empty_hooks().splitlines()[1:]
+    with pytest.raises((BenefitInputError,ValueError)):
+        observer.merged_effective(backend_text(),b"\n".join([bad,*rest])+b"\n")
+
+
+@pytest.mark.parametrize("timeout",[False,True])
+def test_original_backend_failure_and_timeout_bytes_retained_before_validation(monkeypatch,tmp_path,timeout):
+    import subprocess
+    calls=[]
+    def query(argv,**kwargs):
+        calls.append(argv)
+        if timeout and len(calls)==1:
+            raise subprocess.TimeoutExpired(argv,2,output=b"original partial",stderr=b"original error")
+        return SimpleNamespace(returncode=1,stdout=b"original partial",stderr=b"original error")
+    monkeypatch.setattr(observer.subprocess,"run",query)
+    with pytest.raises(BenefitInputError,match="backend unavailable"):
+        observer.effective_observer({},evidence_directory=tmp_path)
+    assert len(calls)==2 and observer.BUS_PATH in calls[1]
+    for prefix in ("effective-systemctl","effective-busctl"):
+        assert (tmp_path/(prefix+".stdout")).read_bytes()==b"original partial"
+        assert (tmp_path/(prefix+".stderr")).read_bytes()==b"original error"
+
+
+def test_evidence_directory_must_be_existing_physical_private_parent(tmp_path,monkeypatch):
+    monkeypatch.setattr(observer.subprocess,"run",lambda *a,**k:pytest.fail("must refuse before query"))
+    directory=tmp_path/"unsafe"
+    directory.mkdir(mode=0o755)
+    with pytest.raises(BenefitInputError,match="private observer evidence"):
+        observer.effective_observer({},evidence_directory=directory)
+    link=tmp_path/"alias"
+    link.symlink_to(directory)
+    with pytest.raises(OSError):
+        observer.effective_observer({},evidence_directory=link)

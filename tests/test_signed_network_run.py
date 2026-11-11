@@ -335,7 +335,7 @@ def run_fixture(
     monkeypatch.setattr(
         run.observer,
         "effective_observer",
-        lambda identity: (log.append("effective-role") or dict(identity=identity)),
+        lambda identity, *, evidence_directory: (log.append("effective-role") or dict(identity=identity)),
     )
     monkeypatch.setattr(
         run.subprocess,
