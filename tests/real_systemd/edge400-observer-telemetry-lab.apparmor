@@ -1,0 +1,56 @@
+# Optional NEW disposable-lab candidate; never loaded by default/product runtime.
+# Parser/kernel support and actual same-profile isolation remain UNPROVEN.
+abi <abi/4.0>,
+#include <tunables/global>
+profile edge400-observer-telemetry-lab /opt/edge400-runtime/bin/edge-observe-telemetry-lab {
+  #include <abstractions/base>
+  / r,
+  /opt/ r,
+  /opt/edge400-runtime/ r,
+  /opt/edge400-runtime/** mr,
+  /opt/edge400-runtime/bin/edge-observe-telemetry-lab ix,
+  /usr/bin/python3.12 mr,
+  /opt/edge400-src/ r,
+  /opt/edge400-src/py/ r,
+  /opt/edge400-src/py/** r,
+  /opt/edge400-src/tests/ r,
+  /opt/edge400-src/tests/** r,
+  /usr/local/lib/python3.12/** r,
+  /etc/{passwd,group,nsswitch.conf} r,
+  /sys/fs/cgroup/**/cpu.max r,
+  /var/ r,
+  /var/lib/ r,
+  /var/lib/edge400-systemd-lab/ r,
+  /var/lib/edge400-systemd-lab/bundle/ r,
+  /var/lib/edge400-systemd-lab/bundle/{trust.json,origin.json,provisioned.json} r,
+  /var/lib/edge400-systemd-lab/bundle/input r,
+  /var/lib/edge400-systemd-lab/bundle/observer/ r,
+  /var/lib/edge400-systemd-lab/bundle/observer/** rwk,
+  /var/lib/edge400-systemd-lab/bundle/socket/ r,
+  /var/lib/edge400-systemd-lab/bundle/socket/witness.sock rw,
+  /proc/*/attr/apparmor/current r,
+  /proc/*/status r,
+  /proc/*/cgroup r,
+  /proc/sys/kernel/random/boot_id r,
+  /sys/module/apparmor/parameters/enabled r,
+  # Additional directory metadata + three stats paths. Not self-only by policy.
+  /proc/ r,
+  /proc/loadavg r,
+  /proc/uptime r,
+  /proc/@{pid}/net/dev r,
+  # Inherited non-proc API is inaccessible; never write/register/toggle controls.
+  audit deny /proc/sys/fs/binfmt_misc/ rwklmx,
+  audit deny /proc/sys/fs/binfmt_misc/** rwklmx,
+  # Override abstractions/base same-profile read permission. Root readby retained.
+  audit deny ptrace (read,trace),
+  audit deny signal (send),
+  # REQUIRED candidate ABI/feature; unsupported enforcement blocks commissioning.
+  audit deny userns,
+  network unix,
+  audit deny network inet,
+  audit deny network inet6,
+  signal (receive) peer=unconfined,
+  audit deny signal (send) set=(exists) peer=unconfined,
+  audit deny signal (send) set=(exists) peer=edge400-native,
+  ptrace (readby) peer=unconfined,
+}
