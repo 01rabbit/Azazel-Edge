@@ -33,6 +33,7 @@ SOURCE_FILES = (
     "signed_network_observer.py",
     "telemetry_isolation_contract.py",
     "telemetry_isolation_preflight.py",
+    "telemetry_isolation_result.py",
     "telemetry_preflight.py",
     "terminal_cgroup.py",
 )

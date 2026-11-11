@@ -15,6 +15,7 @@ from signed_network_telemetry_namespaces import NamespaceSetup
 import signed_network_telemetry_initialize as initializer
 from signed_network_telemetry_live import live
 import signed_network_read as reader
+from telemetry_isolation_result import _sample
 from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier, read_regular
 from azazel_edge.outcome.input_live import registration
 from azazel_edge.outcome.input_service import layout
@@ -184,6 +185,15 @@ def _evidence(output, trust, prefix, result):
     )
     payload, policy, policy_file_sha = initializer.observer.policy_material()
     reader._require_ordered_callbacks(calls, events)
+    samples = [row["data"] for row in calls["calls"] if row["kind"] == "sample"]
+    lab.need(bool(samples), "closed sidecar lacks an actual telemetry sample")
+    for sample in samples:
+        _sample(sample["sample"])
+        lab.need(
+            reader.recording.canonical(sample["sample"]["epoch"])
+            == reader.recording.canonical(sample["epoch"]),
+            "actual sample epoch differs from recorded call",
+        )
     lab.need(
         reader.recording.canonical(calls["context"])
         == reader.recording.canonical(
