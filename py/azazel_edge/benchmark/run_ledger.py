@@ -16,6 +16,9 @@ import stat
 from .benefit import BenefitInputError, MAX_BYTES, _receipt, _text, manifest_digest, validate_manifest
 
 SCHEMA = "azazel-benefit-run-ledger/v1"
+UNQUALIFIED_SCHEMA = "azazel-benefit-run-ledger/v2"
+UNQUALIFIED_REASONS = frozenset({"clock_withheld", "safety_unmeasured", "execution_failed",
+                                "cleanup_unverified", "operator_interrupted"})
 ZERO = "0" * 64
 MAX_LEDGER_BYTES = 32 * 1024 * 1024
 
@@ -53,7 +56,10 @@ class RunLedger:
     compromise or coordinated rollback of the file and its checkpoint.
     """
 
-    def __init__(self, path, *, manifest=None, expected_head=None):
+    def __init__(self, path, *, manifest=None, expected_head=None, allow_unqualified_attempts=False):
+        if type(allow_unqualified_attempts) is not bool:
+            raise BenefitInputError("explicit boolean ledger mode required")
+        self._schema = UNQUALIFIED_SCHEMA if allow_unqualified_attempts else SCHEMA
         self._fd = None
         self._parent = None
         self._failed = False
@@ -90,7 +96,7 @@ class RunLedger:
             if creating:
                 self._manifest = _decode(_json(manifest))
                 self._assignments = validate_manifest(self._manifest)
-                self._append({"op": "freeze", "schema_version": SCHEMA, "manifest": self._manifest})
+                self._append({"op": "freeze", "schema_version": self._schema, "manifest": self._manifest})
                 os.fsync(self._parent)
             else:
                 if info.st_size > MAX_LEDGER_BYTES:
@@ -120,7 +126,7 @@ class RunLedger:
         if not isinstance(event, dict):
             raise BenefitInputError("invalid ledger event")
         if self._sequence == 0:
-            if set(event) != {"op", "schema_version", "manifest"} or event["op"] != "freeze" or event["schema_version"] != SCHEMA:
+            if set(event) != {"op", "schema_version", "manifest"} or event["op"] != "freeze" or event["schema_version"] != self._schema:
                 raise BenefitInputError("frozen manifest must be first")
             self._manifest = event["manifest"]
             self._assignments = validate_manifest(self._manifest)
@@ -130,6 +136,21 @@ class RunLedger:
             if key not in self._assignments or key in self._runs or any(r["run_id"] == run_id for r in self._runs.values()):
                 raise BenefitInputError("unknown, repeated assignment or run identity")
             self._runs[key] = {"run_id": run_id, "status": "running"}
+        elif event.get("op") == "unqualified_attempt" and set(event) == {
+                "op", "assignment_id", "run_id", "reason_code", "evidence_sha256"}:
+            if self._schema != UNQUALIFIED_SCHEMA:
+                raise BenefitInputError("unqualified attempts require explicit v2 ledger mode")
+            key, run_id = _text(event["assignment_id"]), _text(event["run_id"])
+            previous = self._runs.get(key)
+            if not previous or previous["status"] != "running" or run_id != previous["run_id"]:
+                raise BenefitInputError("unqualified attempt does not match an unfinished run")
+            reason, digest = event["reason_code"], event["evidence_sha256"]
+            if type(reason) is not str or reason not in UNQUALIFIED_REASONS:
+                raise BenefitInputError("unknown unqualified reason code")
+            if type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise BenefitInputError("exact unqualified evidence SHA256 required")
+            self._runs[key] = dict(run_id=run_id, status="unqualified",
+                                   reason_code=reason, evidence_sha256=digest)
         elif event.get("op") == "finish" and set(event) == {"op", "receipt"}:
             receipt = event["receipt"]
             if not isinstance(receipt, dict):
@@ -196,15 +217,23 @@ class RunLedger:
         """Store a caller-observed receipt; no inferred safety zeros or horizon."""
         return self._append({"op": "finish", "receipt": _decode(_json(receipt))})
 
+    def record_unqualified_attempt(self, assignment_id, run_id, reason_code, evidence_sha256):
+        """Terminal local accounting only: no metrics, safety counts or retry."""
+        if self._schema != UNQUALIFIED_SCHEMA:
+            raise BenefitInputError("unqualified attempts require explicit v2 ledger mode")
+        return self._append({"op": "unqualified_attempt", "assignment_id": assignment_id,
+                             "run_id": run_id, "reason_code": reason_code,
+                             "evidence_sha256": evidence_sha256})
+
     def snapshot(self):
         """All assignments, including unstarted/crashed runs, stay visible."""
         if self._fd is None or self._failed:
             raise BenefitInputError("ledger unavailable after close/write failure")
-        return _decode(_json({"schema_version": SCHEMA, "manifest_sha256": manifest_digest(self._manifest),
+        return _decode(_json({"schema_version": self._schema, "manifest_sha256": manifest_digest(self._manifest),
                 "head_sha256": self.head_sha256,
                 "assignments": [{"assignment_id": key, **self._runs.get(key, {"status": "pending"})} for key in self._assignments],
                 "observations": {"manifest_sha256": manifest_digest(self._manifest),
-                                 "runs": [_decode(_json(row)) for row in self._runs.values() if row["status"] != "running"]},
+                                 "runs": [_decode(_json(row)) for row in self._runs.values() if row["status"] not in ("running", "unqualified")]},
                 "limitations": ["local accounting is not independent preregistration or source authentication",
                                 "pending/running assignments have no completed receipt and remain missing in analysis",
                                 "no automatic replay, reset, workload execution or runtime authority"]},
