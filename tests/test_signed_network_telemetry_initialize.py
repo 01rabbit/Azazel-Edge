@@ -38,6 +38,36 @@ def fixture(tmp_path, monkeypatch, fault=None):
     )
     monkeypatch.setattr(call.g, "guard", lambda: events.append("guard"))
     monkeypatch.setattr(call.g, "boot", lambda: BOOT)
+    snapshots = []
+
+    def public_binding():
+        snapshots.append(1)
+        if fault in ("badtrust", "badorigin"):
+            raise ValueError("synthetic public config parser refusal")
+        if (
+            fault == "missingbeforego"
+            and len(snapshots) == 2
+            or fault == "missingafterinit"
+            and len(snapshots) == 3
+        ):
+            raise FileNotFoundError("synthetic missing public config")
+        value = dict(
+            scope="public_root_config_continuity_only",
+            scope_ref="synthetic-auth-scope",
+            trust_file_sha256="d" * 64,
+            origin_file_sha256="e" * 64,
+        )
+        for field in ("scope_ref", "trust_file_sha256", "origin_file_sha256"):
+            if (
+                fault == "pregodrift:" + field
+                and len(snapshots) == 2
+                or fault == "postdrift:" + field
+                and len(snapshots) == 3
+            ):
+                value[field] = "changed"
+        return value
+
+    monkeypatch.setattr(call, "public_auth_binding", public_binding)
     monkeypatch.setattr(
         call.proof.p, "_output", lambda output: events.append("private")
     )
@@ -572,3 +602,75 @@ def test_prelaunch_guard_never_accepts_arbitrary_unit_or_mode(tmp_path, mode):
     with pytest.raises(ValueError):
         call.prelaunch_unit_material(mode, tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "badtrust",
+        "badorigin",
+        "missingbeforego",
+        "pregodrift:scope_ref",
+        "pregodrift:trust_file_sha256",
+        "pregodrift:origin_file_sha256",
+    ],
+)
+def test_public_auth_missing_invalid_or_drift_before_go_never_opens_api(
+    tmp_path, monkeypatch, fault
+):
+    args, events, sent = fixture(tmp_path, monkeypatch, fault)
+    with pytest.raises((ValueError, AssertionError, FileNotFoundError)):
+        call.initialize(tmp_path, **args)
+    assert sent == [] and not (tmp_path / "initializer-result.json").exists()
+    if "launch" in events:
+        assert "stop-proof" in events and "reap" in events
+    else:
+        assert fault in ("badtrust", "badorigin")
+    if fault.startswith("pregodrift"):
+        retained = json.loads(
+            (tmp_path / "initializer-public-auth-before-go.json").read_bytes()
+        )
+        assert retained[fault.split(":", 1)[1]] == "changed"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missingafterinit",
+        "postdrift:scope_ref",
+        "postdrift:trust_file_sha256",
+        "postdrift:origin_file_sha256",
+    ],
+)
+def test_public_auth_drift_after_init_retains_raws_and_refuses_success(
+    tmp_path, monkeypatch, fault
+):
+    args, events, sent = fixture(tmp_path, monkeypatch, fault)
+    with pytest.raises((AssertionError, FileNotFoundError)):
+        call.initialize(tmp_path, **args)
+    assert sent == [call.role.GO] and "stop-proof" in events and "reap" in events
+    assert (tmp_path / "initialization.stdout").exists()
+    assert not (tmp_path / "initializer-result.json").exists()
+    if fault.startswith("postdrift"):
+        retained = json.loads(
+            (tmp_path / "initializer-public-auth-after-init.json").read_bytes()
+        )
+        assert retained[fault.split(":", 1)[1]] == "changed"
+
+
+def test_full_verified_binding_retains_same_public_auth_snapshot_without_crypto_claim(
+    tmp_path, monkeypatch
+):
+    args, _, _ = fixture(tmp_path, monkeypatch)
+    result = call.initialize(tmp_path, **args)
+    initial = result["binding"]["public_auth"]
+    before_go = json.loads(
+        (tmp_path / "initializer-public-auth-before-go.json").read_bytes()
+    )
+    after_init = json.loads(
+        (tmp_path / "initializer-public-auth-after-init.json").read_bytes()
+    )
+    verified = json.loads((tmp_path / "initializer-verified-bundle.json").read_bytes())
+    assert initial == before_go == after_init == verified["binding"]["public_auth"]
+    assert initial["scope"] == "public_root_config_continuity_only"
+    assert result["authorizes_transition"] is False

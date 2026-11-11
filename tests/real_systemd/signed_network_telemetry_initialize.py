@@ -19,6 +19,7 @@ import signed_network_plan as plan
 import signed_network_observer as observer
 import signed_network_telemetry_contract as role
 import signed_network_telemetry_material as material
+from signed_network_telemetry_binding import public_auth_binding
 import signed_network_telemetry_proof as proof
 import signed_network_scope as scope
 from telemetry_isolation_controller import _reap_client
@@ -143,6 +144,28 @@ def prelaunch_unit_material(mode, output):
     return rows
 
 
+def _current_binding(*, current, namespace, source_sha256, kernel):
+    """Fixed shared lab metadata only; callers independently verify inputs.
+
+    No dynamic role/path selectors or cryptographic scope/label claim. Return
+    policy bytes too so callers can refuse a change before their literal GO.
+    """
+    policy_raw = material._read(plan.POLICY_PATH, 8192)
+    payload = plan.strict(policy_raw)
+    binding = dict(
+        role=role.ROLE,
+        kernel_boot_id=kernel,
+        namespace=namespace,
+        observer_source_sha256=source_sha256,
+        material=current,
+        public_auth=public_auth_binding(),
+        roles={mode: role.observer_spec(mode) for mode in ("initialize", "live")},
+        policy_file_sha256=hashlib.sha256(policy_raw).hexdigest(),
+        policy_sha256=plan.manifest_digest(payload),
+    )
+    return binding, policy_raw
+
+
 def initialize(
     output,
     *,
@@ -185,17 +208,8 @@ def initialize(
     )
     kernel = g.boot()
     lab.boot_reference(kernel)
-    policy_raw = material._read(plan.POLICY_PATH, 8192)
-    payload = plan.strict(policy_raw)
-    binding = dict(
-        role=role.ROLE,
-        kernel_boot_id=kernel,
-        namespace=namespace,
-        observer_source_sha256=source_sha256,
-        material=current,
-        roles={mode: role.observer_spec(mode) for mode in ("initialize", "live")},
-        policy_file_sha256=hashlib.sha256(policy_raw).hexdigest(),
-        policy_sha256=plan.manifest_digest(payload),
+    binding, policy_raw = _current_binding(
+        current=current, namespace=namespace, source_sha256=source_sha256, kernel=kernel
     )
     argv = observer.role_argv("initialize", telemetry_lab_v2=True)
     lab.save_json(output / "initializer-intent.json", dict(argv=argv, binding=binding))
@@ -238,6 +252,12 @@ def initialize(
             g.boot() == kernel and material._read(plan.POLICY_PATH, 8192) == policy_raw,
             "boot/policy changed before GO",
         )
+        auth_before_go = public_auth_binding()
+        lab.save_json(output / "initializer-public-auth-before-go.json", auth_before_go)
+        lab.need(
+            auth_before_go == binding["public_auth"],
+            "public auth context changed before GO",
+        )
         lab.save_json(
             output / "initializer-verified-bundle.json",
             dict(
@@ -278,6 +298,14 @@ def initialize(
             and value["policy_sha256"] == binding["policy_sha256"]
             and value["policy_file_sha256"] == binding["policy_file_sha256"],
             "genuine unchanged empty initialization result required",
+        )
+        auth_after_init = public_auth_binding()
+        lab.save_json(
+            output / "initializer-public-auth-after-init.json", auth_after_init
+        )
+        lab.need(
+            auth_after_init == binding["public_auth"],
+            "public auth context changed after initialization",
         )
         result = dict(
             initialization=value,

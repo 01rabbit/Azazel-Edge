@@ -292,3 +292,18 @@ def test_actual_initializer_caller_is_mandatory_source_pin(fault):
         sources[key] = "0" * 64
     with pytest.raises(plan.BenefitInputError):
         plan.validate_telemetry_manifest(value, "b" * 64)
+
+
+@pytest.mark.parametrize("fault", ["missing", "changed"])
+def test_current_public_auth_binding_implementation_is_mandatory_source_pin(fault):
+    path = material.SRC / "tests/real_systemd/signed_network_telemetry_binding.py"
+    key = str(path.relative_to(material.SRC))
+    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    sources = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
+    assert sources[key] == hashlib.sha256(path.read_bytes()).hexdigest()
+    if fault == "missing":
+        del sources[key]
+    else:
+        sources[key] = "0" * 64
+    with pytest.raises(plan.BenefitInputError):
+        plan.validate_telemetry_manifest(value, "b" * 64)

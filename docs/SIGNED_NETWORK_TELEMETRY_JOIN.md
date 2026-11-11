@@ -155,3 +155,29 @@ calling this helper. In particular, an operator umask077 may leave a new BASE
 0700 unless the outer fresh-creation path explicitly establishes its intended
 mode. This helper does not chmod, repair or reuse an existing/used directory.
 The precondition is separate from the private Root output's required 0700 mode.
+
+### Public authenticated-scope configuration continuity
+
+The initializer binding now includes `public_auth`, sampled by the reviewed
+fixed `public_auth_binding()` helper before launch. Only protected public
+`trust.json` and `origin.json` are read. Their original raw hashes, canonical trust
+digest, configured registration digest and selected scope/source/journal/UID
+metadata remain distinct. Source/journal/private-key files, sidecars and witness
+endpoints are not opened by this snapshot helper; metadata paths are not read
+selectors. Its actual implementation is mandatory in the source-pin map.
+
+The initializer retains another public snapshot before GO and after initialization,
+compares each with the initial binding, and refuses missing/invalid/drifting
+configuration. A changed returned snapshot is saved before comparison; raw init
+output survives an after-init refusal. Only an unchanged context can publish an
+initializer result. This is sampled Root public-configuration continuity, not an
+atomic pair snapshot, cryptographic observer-label/journal binding, source
+admission or a replacement for the observer's unchanged authentication after GO.
+
+Private `_current_binding(*, current, namespace, source_sha256, kernel)` returns
+`(binding, policy_raw)` for fixed init/live reuse. Callers must independently
+verify its inputs. Binding keys are `role`, `kernel_boot_id`, `namespace`,
+`observer_source_sha256`, `material`, `public_auth`, `roles` (both fixed specs),
+`policy_file_sha256` and `policy_sha256`. It adds no role/path selector. The
+future live caller must compare the full same-context binding and retain its
+own proof; it remains unwired and uncommissioned by this initializer-only change.
