@@ -241,6 +241,10 @@ class TelemetryAssignmentContext:
                 except BaseException as exc:
                     errors.append(("owned wait unknown", type(exc).__name__))
                 row["returncode"] = process.returncode
+                for name in ("stdin", "stdout", "stderr"):
+                    stream = getattr(process, name)
+                    if stream is not None:
+                        attempt("owned pipe close", stream.close)
                 processes.append(row)
             fixed = (
                 setup.role.INITIALIZER_UNIT,
