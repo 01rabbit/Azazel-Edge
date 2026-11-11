@@ -756,3 +756,53 @@ def test_complete_release_semantics_cannot_be_promoted_by_matching_marker(fault)
         r["release"]["failed_count"] = 1
     with pytest.raises(BenefitInputError):
         run._released([r], event)
+
+
+@pytest.mark.parametrize(
+    "failure", ["client_receive", "service_wait_nonzero", "client_wait_failure"]
+)
+def test_consumed_peer_audits_persist_before_later_receive_or_wait_failure(
+    tmp_path, monkeypatch, failure
+):
+    log, work, _, _, _, _ = run_fixture(tmp_path, monkeypatch, candidate=False)
+    original = run.n.receive
+
+    def receive(process):
+        if process.kind == "client" and failure == "client_receive":
+            # The service-only original audit must ALREADY be durable here.
+            assert (work / "service-audit.json").exists()
+            raise OSError("client audit unavailable")
+        audit = original(process)
+        if (
+            process.kind == "service"
+            and audit.get("kind") == "audit"
+            and failure == "service_wait_nonzero"
+        ):
+            process.wait = lambda timeout: 1
+        if process.kind == "client" and failure == "client_wait_failure":
+
+            def wait(timeout):
+                raise TimeoutError("peer reap unavailable")
+
+            process.wait = wait
+        return audit
+
+    monkeypatch.setattr(run.n, "receive", receive)
+    with pytest.raises((OSError, BenefitInputError, TimeoutError)):
+        run.run_assignment("a" * 64, "b" * 64)
+    assert "all-actors-stop-and-fenced-delete" in log
+    assert not (work / "run-facts.json").exists()
+    partial = json.loads((work / "run-failure.json").read_text())["partial_facts"]
+    names = ["service_audit"] + (
+        ["client_audit"] if failure != "client_receive" else []
+    )
+    for name in names:
+        path = work / (name.replace("_", "-") + ".json")
+        raw = path.read_bytes()
+        audit = json.loads(raw)
+        assert audit == partial[name]
+        assert partial[name + "_artifact"] == dict(
+            path=str(path),
+            sha256=hashlib.sha256(raw).hexdigest(),
+            audit_sha256=run.n.manifest_digest(audit),
+        )

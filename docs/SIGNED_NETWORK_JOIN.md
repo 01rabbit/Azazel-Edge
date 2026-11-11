@@ -387,3 +387,12 @@ Before any assignment freeze/VM work, Root must also resolve the existing-label
 procfs commissioning gate with its separate read-only confined precheck. A denied
 sample is a gap, never permission to broaden the profile or substitute an
 unconfined collector.
+
+Each successfully received peer audit is now persisted immediately and exclusively
+before the next receive, wait or validation. `service-audit.json` and
+`client-audit.json` preserve the unchanged decoded audit objects; their exact
+artifact byte hashes, object digests and paths enter partial facts immediately.
+These are canonical JSON artifacts, not claims about original stdout whitespace.
+A later client receive or either peer wait failure therefore keeps the already
+received independent service/client facts and still runs all cleanup. It does not
+turn an incomplete join into a successful measurement.

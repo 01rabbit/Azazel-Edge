@@ -308,6 +308,20 @@ def _closed_callback(rows, event):
     return matches[0] if len(matches) == 1 else None
 
 
+def _persist_peer_audit(record, name, audit):
+    # Retain the already-consumed unchanged object before any next receive/wait.
+    # This artifact is canonical JSON, not a claim to preserve original wire spacing.
+    record[name] = audit
+    path = phase.WORK / (name.replace("_", "-") + ".json")
+    n.write_new(path, audit)
+    raw = phase._read(path)
+    record[name + "_artifact"] = dict(
+        path=str(path),
+        sha256=hashlib.sha256(raw).hexdigest(),
+        audit_sha256=n.manifest_digest(audit),
+    )
+
+
 def run_assignment(manifest_sha, head):
     g.guard()
     inputs = phase.validated_inputs(manifest_sha, head)
@@ -513,12 +527,13 @@ def run_assignment(manifest_sha, head):
             time.sleep(0.01)
         record["controller_end_anchor"] = service.record_clock_anchor()
         service_audit = n.receive(peer)
+        _persist_peer_audit(record, "service_audit", service_audit)
         client_audit = n.receive(client)
+        _persist_peer_audit(record, "client_audit", client_audit)
         plan.need(
             peer.wait(timeout=2) == 0 and client.wait(timeout=2) == 0,
             "peer process failed after horizon",
         )
-        record.update(service_audit=service_audit, client_audit=client_audit)
         plan.need(
             event is not None
             and applied_receipt is not None
