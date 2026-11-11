@@ -33,6 +33,23 @@ def fixture(tmp_path, monkeypatch, fault=None):
     )
     monkeypatch.setattr(c.main.initializer.proof.p, "_output", lambda path: None)
     events = []
+    monkeypatch.setattr(
+        c.material.preflight.old, "private_output", lambda path: path.mkdir(mode=0o700)
+    )
+    monkeypatch.setattr(c.main.initializer, "_namespace", lambda fd, pair: [4, 5])
+    monkeypatch.setattr(
+        c.main.initializer, "public_auth_binding", lambda: {"synthetic_public": True}
+    )
+
+    def witness(auth, namespace, directory, phase, observed):
+        events.append("actual-passive-barrier-interface")
+        assert namespace == [4, 5] and phase == "initialize-initial"
+        assert directory == output / "pre-injection-witness"
+        if fault == "witness":
+            raise AssertionError("listener not ready")
+        return {"synthetic_root_witness_proof": True}
+
+    monkeypatch.setattr(c.main.initializer, "witness_binding", witness)
     original_guard = c.main.initializer.prelaunch_unit_material
 
     def query(argv, prefix, directory):
@@ -71,7 +88,10 @@ def fixture(tmp_path, monkeypatch, fault=None):
         events.append("owned-resources-ready")
         try:
             c.main.initializer.initialize(
-                path / "initialize", transport_context=object()
+                path / "initialize",
+                transport_context=object(),
+                namespace_fd=123,
+                namespace_identity=[4, 5],
             )
         finally:
             events.extend(("owned-actors-witness-last", "owned-namespace-close"))
@@ -149,6 +169,7 @@ def test_exact_guard_refusal_after_ready_then_cleanup_and_foreign_retention(
     )
     assert events == [
         "owned-resources-ready",
+        "actual-passive-barrier-interface",
         "unchanged-material-guard",
         "owned-actors-witness-last",
         "owned-namespace-close",
@@ -307,3 +328,46 @@ def test_independent_cleanup_attempts_all_fixed_actors_despite_failed_proof(
     assert bool(
         json.loads((output / "independent-cleanup-checks.json").read_bytes())["errors"]
     ) == bool(fault)
+
+
+def test_unknown_fresh_fixture_stat_never_invokes_owner(tmp_path, monkeypatch):
+    output, events, _ = fixture(tmp_path, monkeypatch)
+    real = os.lstat
+
+    def lstat(path, *a, **kw):
+        if Path(path) == c.DROPIN:
+            raise PermissionError("unknown preflight")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(c.os, "lstat", lstat)
+    with pytest.raises(PermissionError):
+        invoke(output)
+    assert events == [] and not output.exists()
+
+
+def test_unknown_post_refusal_marker_stat_never_completes(tmp_path, monkeypatch):
+    output, events, _ = fixture(tmp_path, monkeypatch)
+    real = os.lstat
+
+    def lstat(path, *a, **kw):
+        if Path(path) == c.MARKER and "independent-checks" in events:
+            raise PermissionError("unknown marker state")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(c.os, "lstat", lstat)
+    with pytest.raises(PermissionError):
+        invoke(output)
+    assert (output / "unit-refusal-failure.json").exists()
+    assert not (output / "unit-refusal-result.json").exists()
+    assert c.HOOK.exists()
+
+
+def test_witness_barrier_failure_prevents_injection_and_still_attempts_cleanup(
+    tmp_path, monkeypatch
+):
+    output, events, _ = fixture(tmp_path, monkeypatch, "witness")
+    with pytest.raises(AssertionError, match="listener not ready"):
+        invoke(output)
+    assert "independent-checks" in events and not c.HOOK.exists()
+    assert not (output / "unit-refusal-entered.json").exists()
+    assert not (output / "unit-refusal-result.json").exists()

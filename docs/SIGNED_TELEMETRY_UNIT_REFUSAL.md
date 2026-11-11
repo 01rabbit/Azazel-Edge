@@ -11,8 +11,11 @@ Revision text and recorded hashes do not authenticate themselves.
 The current manual owner provisions its normal fresh namespaces, marker, empty
 public scope and witness. Only at its actual initializer callback does this
 helper record entry, sample the owned transport context and running witness,
-and snapshot the empty Source, empty observer directory and original witness
-anchors. It exclusively creates the fixed initializer's `.service.d` directory
+and require the existing fixed passive witness barrier (canonical abstract
+listener, same PID/socket-FD identity, owned EDGE and measured cookie/boot). Its
+private evidence child is outside `initialize/`, with no endpoint connection or
+Source RPC. Only then snapshot the empty Source, empty observer directory and
+original witness anchors. It exclusively creates the fixed initializer's `.service.d` directory
 and `90-fixed-refusal-marker.conf` under `/etc/systemd/system`. The fixed hook
 would invoke `/usr/bin/touch /run/edge400-inherited-initialize-marker`. No daemon
 reload, permission/profile/capability change, arbitrary path or command selector
@@ -41,3 +44,9 @@ checks exclusive creation, exact permissions under umask 077, identity continuit
 and no retry. No VM case has been executed for this source. This proves neither
 arbitrary systemd-hook safety nor runtime isolation, admission or efficacy; it
 starts no workload, native Source producer, Switch or four-assignment experiment.
+
+Fresh fixture/marker and final marker absence use `lstat`: only
+`FileNotFoundError` means absent. Permission/I/O errors remain unknown and block
+completion. Independent cleanup attempts all three namespace names and retains
+each observation even if an earlier name is inaccessible; both original and
+canonical cgroup checks must return literal `True`.

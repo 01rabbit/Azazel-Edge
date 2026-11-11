@@ -21,6 +21,14 @@ WIRE = ("[Service]\nExecStartPre=/usr/bin/touch " + str(MARKER) + "\n").encode()
 REFUSAL = "preexisting inherited fixed-role unit material refused"
 
 
+def _absent(path):
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return True
+    return False
+
+
 def _identity(info):
     return dict(
         device=info.st_dev,
@@ -245,7 +253,7 @@ def refuse_inherited_initializer_material(
         "explicit fresh Root unit-refusal opt-in required",
     )
     lab.need(
-        not any(os.path.lexists(path) for path in (DROPIN, MARKER)),
+        all(_absent(path) for path in (DROPIN, MARKER)),
         "existing foreign fixture refused",
     )
     output = Path(output)
@@ -261,14 +269,26 @@ def refuse_inherited_initializer_material(
         )
         entered = True
         # The current owner's callback is after witness readiness and exclusive BASE.
-        main.initializer.namespace_observation(kwargs["transport_context"])
-        witness = lab.unit_snapshot(g.WITNESS)
-        lab.need(witness["MainPID"] != "0", "actual owned witness not running")
+        witness_output = output / "pre-injection-witness"
+        material.preflight.old.private_output(witness_output)
+        namespace = main.initializer._namespace(
+            kwargs["namespace_fd"], kwargs["namespace_identity"]
+        )
+        public = main.initializer.public_auth_binding()
+        witness = main.initializer.witness_binding(
+            public,
+            namespace,
+            witness_output,
+            "initialize-initial",
+            main.initializer.namespace_observation(kwargs["transport_context"]),
+        )
         lab.save_json(
             output / "unit-refusal-entered.json",
             dict(
                 kernel_boot_id=g.boot(),
                 witness=witness,
+                public_auth=public,
+                namespace=namespace,
                 helper_sha256=hashlib.sha256(
                     material._read(Path(__file__))
                 ).hexdigest(),
@@ -350,8 +370,8 @@ def refuse_inherited_initializer_material(
         )
         lab.need(
             not list((output / "live").iterdir())
-            and not os.path.lexists(MARKER)
-            and not os.path.lexists(output / "commission-result.json"),
+            and _absent(MARKER)
+            and _absent(output / "commission-result.json"),
             "unexpected live/marker/success artifact",
         )
         lab.need(
