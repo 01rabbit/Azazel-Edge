@@ -31,7 +31,9 @@ ABI and interpreter bytes must match the frozen pins. Public trust v4 and the
 abstract socket cookie/boot descriptor remain separate from Root-owned namespace
 device/inode metadata. Root role/listener/PID metadata is retained lab provenance,
 **not** a signature binding the observer label or a fresh live-kernel attestation.
-The reader opens no private key, store or endpoint and issues no query or command.
+The reader opens no private key, store or endpoint and performs no NFT query,
+actuation or lifecycle operation. The reused fixed VM guard only checks the
+current environment; it does not create or start anything.
 
 Before an active Root NFT query, the actual collector callback must already occur
 in the original observed sidecar prefix. Full observed bytes, including a partial
