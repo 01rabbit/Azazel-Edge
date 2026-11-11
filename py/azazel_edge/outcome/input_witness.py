@@ -7,6 +7,7 @@ No command, arbitrary request path, IP listener, repair, reset or rotation.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import errno
 import fcntl
 import hashlib
@@ -551,11 +552,6 @@ class WitnessClient:
 
     def call(self, op):
         p = self.policy.data
-        address = (
-            abstract_address(self.policy)
-            if p["schema_version"] == ABSTRACT_TRUST
-            else p["socket_path"]
-        )
         if p["schema_version"] != ABSTRACT_TRUST:
             parent, name = open_parent(p["socket_path"], trusted_owner=p["witness_uid"])
             try:
@@ -578,6 +574,11 @@ class WitnessClient:
         )
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(1.0)
+            address = (
+                abstract_address(self.policy, conn)
+                if p["schema_version"] == ABSTRACT_TRUST
+                else p["socket_path"]
+            )
             conn.connect(address)
             if peer_uid(conn) != p["witness_uid"]:
                 raise OutcomeJournalError("witness peer uid mismatch")
@@ -696,11 +697,6 @@ def serve(
     p = policy.data
     if os.geteuid() != p["witness_uid"] or not hasattr(socket, "SO_PEERCRED"):
         raise OutcomeJournalError("separate Linux witness uid required")
-    address = (
-        abstract_address(policy)
-        if p["schema_version"] == ABSTRACT_TRUST
-        else p["socket_path"]
-    )
     parent = None
     try:
         if p["schema_version"] != ABSTRACT_TRUST:
@@ -710,10 +706,23 @@ def serve(
                 raise OutcomeJournalError(
                     "private witness socket parent ownership required"
                 )
-        with (
-            WitnessStore(policy, key_path, initialize=initialize) as store,
-            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server,
-        ):
+        with ExitStack() as stack:
+            if p["schema_version"] == ABSTRACT_TRUST:
+                server = stack.enter_context(
+                    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                )
+                address = abstract_address(policy, server)
+                store = stack.enter_context(
+                    WitnessStore(policy, key_path, initialize=initialize)
+                )
+            else:
+                store = stack.enter_context(
+                    WitnessStore(policy, key_path, initialize=initialize)
+                )
+                server = stack.enter_context(
+                    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                )
+                address = p["socket_path"]
             if parent is not None:
                 retire_stale_endpoint(policy, parent, name)
             server.bind(address)

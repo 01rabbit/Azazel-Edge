@@ -1,8 +1,9 @@
 """Explicit Linux abstract witness address; no discovery, transition or fallback."""
 
 import hashlib
-import os
+import socket
 import sys
+import uuid
 
 from .journal import OutcomeJournalError
 
@@ -35,8 +36,10 @@ def transport(scope_ref, namespace):
         type(scope_ref) is not str
         or not scope_ref
         or type(namespace) not in (dict, _FrozenDict)
-        or set(namespace) != {"device", "inode"}
-        or any(type(v) is not int or not 0 < v < 2**64 for v in namespace.values())
+        or set(namespace) != {"cookie", "kernel_boot_id"}
+        or type(namespace["cookie"]) is not int
+        or not 0 < namespace["cookie"] < 2**64
+        or not _canonical_boot(namespace["kernel_boot_id"])
     ):
         raise OutcomeJournalError("invalid witness network namespace")
     return _FrozenDict(
@@ -59,19 +62,50 @@ def validate_transport(scope_ref, value):
     return expected
 
 
-def abstract_address(policy):
-    """Check this process's namespace BEFORE creating either endpoint socket."""
+def _canonical_boot(value):
+    if type(value) is not str:
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def socket_namespace(sock):
+    """Kernel socket namespace, not a procfs namespace inode or caller guess."""
+    if sys.platform != "linux":
+        raise OutcomeJournalError("Linux abstract witness transport required")
+    if (
+        sock.family != socket.AF_UNIX
+        or sock.type != socket.SOCK_STREAM
+        or sock.getsockname() not in ("", b"")
+    ):
+        raise OutcomeJournalError("unbound Unix stream witness socket required")
+    try:
+        raw = sock.getsockopt(
+            socket.SOL_SOCKET, getattr(socket, "SO_NETNS_COOKIE", 71), 8
+        )
+        if type(raw) is not bytes or len(raw) != 8:
+            raise OutcomeJournalError("invalid witness namespace cookie size")
+        cookie = int.from_bytes(raw, sys.byteorder)
+        with open("/proc/sys/kernel/random/boot_id", "rb") as stream:
+            boot_raw = stream.read(38)
+        if len(boot_raw) != 37 or not boot_raw.endswith(b"\n"):
+            raise OutcomeJournalError("invalid kernel boot identity")
+        namespace = dict(cookie=cookie, kernel_boot_id=boot_raw[:-1].decode("ascii"))
+        transport("namespace-validation", namespace)
+        return namespace
+    except (OSError, UnicodeError) as exc:
+        raise OutcomeJournalError("witness socket namespace unavailable") from exc
+
+
+def abstract_address(policy, sock):
+    """Check this unbound socket BEFORE bind/connect, private key or store use."""
     if policy.data["schema_version"] != SCHEMA:
         raise OutcomeJournalError("explicit v4 abstract witness policy required")
     value = validate_transport(
         policy.data["scope_ref"], policy.data["witness_transport"]
     )
-    if sys.platform != "linux":
-        raise OutcomeJournalError("Linux abstract witness transport required")
-    try:
-        info = os.stat("/proc/self/ns/net")
-    except OSError as exc:
-        raise OutcomeJournalError("witness network namespace unavailable") from exc
-    if {"device": info.st_dev, "inode": info.st_ino} != value["network_namespace"]:
+    if socket_namespace(sock) != value["network_namespace"]:
         raise OutcomeJournalError("witness network namespace mismatch")
     return b"\x00" + value["name"].encode("ascii")
