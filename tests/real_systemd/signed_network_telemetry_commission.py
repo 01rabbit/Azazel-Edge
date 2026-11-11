@@ -68,10 +68,15 @@ def _base_created(output):
 
 def _configure(callback, created, namespace_identity, *, owner, output):
     original = g.write
-    namespace = dict(
+    held = dict(
         zip(("device", "inode"), initializer.proof.legacy._pair(namespace_identity))
     )
-    lab.need(all(v > 0 for v in namespace.values()), "owned EDGE namespace required")
+    lab.need(
+        all(v > 0 for v in held.values()) and owner.edge()[1] == list(held.values()),
+        "owned EDGE namespace required",
+    )
+    proof_adapter = WitnessProof(owner, output)
+    namespace = proof_adapter.sample_namespace()
 
     def protected_write(path, data, mode=0o644):
         if path == g.BASE / "native/protected.yaml":
@@ -117,7 +122,6 @@ def _configure(callback, created, namespace_identity, *, owner, output):
 
     g.prepare = prepare_abstract
     witness = g.Systemd.witness
-    proof_adapter = WitnessProof(owner, output)
 
     def witness_in_edge(system, bundle, policy):
         return proof_adapter.run(witness, system, bundle, policy)
@@ -126,6 +130,7 @@ def _configure(callback, created, namespace_identity, *, owner, output):
     g.ENV.clear()
     g.ENV.update(plan.native_environment("c0"))
     g.observer = callback
+    return proof_adapter
 
 
 def _prefix(trust, output):
@@ -370,7 +375,9 @@ def commission_telemetry(
                 ),
             )
 
-        _configure(initialize, created, pair, owner=namespaces, output=output)
+        args["transport_context"] = _configure(
+            initialize, created, pair, owner=namespaces, output=output
+        )
         lab.need(not os.path.lexists(g.BASE), "new scope only")
         lab.save_json(
             output / "auth-scope-create-intent.json",

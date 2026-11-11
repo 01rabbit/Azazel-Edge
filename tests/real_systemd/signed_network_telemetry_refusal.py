@@ -94,7 +94,9 @@ def refuse_synthetic_input(
                 ),
             )
 
-        main._configure(initialize, created, pair, owner=namespaces, output=output)
+        args["transport_context"] = main._configure(
+            initialize, created, pair, owner=namespaces, output=output
+        )
         lab.need(not os.path.lexists(g.BASE), "new scope only")
         lab.save_json(
             output / "auth-scope-create-intent.json",

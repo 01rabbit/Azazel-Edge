@@ -9,13 +9,22 @@ import json
 import os
 import select
 import signal
+import socket
 import time
 
 import signed_network_telemetry_transport as context
-from azazel_edge.outcome.input_transport import SCHEMA, validate_transport
+from azazel_edge.outcome.input_transport import (
+    SCHEMA,
+    validate_transport,
+    transport,
+    socket_namespace,
+)
 
 lab, g = context.lab, context.g
-ACK = b"run-original-witness-proof\n"
+ACK = {
+    "namespace-metadata": b"sample-unbound-namespace\n",
+    "original-witness": b"run-original-witness-proof\n",
+}
 
 
 def _net():
@@ -82,8 +91,34 @@ def _members(pid):
 class WitnessProof:
     def __init__(self, owner, output):
         self.owner, self.output, self.count = owner, output, 0
+        self.namespace = None
+
+    def sample_namespace(self):
+        observed = self._execute("namespace-metadata")
+        if self.namespace is not None:
+            if observed != self.namespace:
+                self.owner.failed = True
+                raise RuntimeError("owned namespace cookie/boot changed")
+        self.namespace = observed
+        return dict(observed)
 
     def run(self, original, system, bundle, policy):
+        declared = validate_transport(
+            policy.data["scope_ref"], policy.data["witness_transport"]
+        )
+        lab.need(
+            policy.data["schema_version"] == SCHEMA
+            and self.namespace is not None
+            and declared["network_namespace"] == self.namespace,
+            "current sampled transport required",
+        )
+        self._execute("original-witness", original, system, bundle, policy)
+
+    def _execute(self, operation, original=None, system=None, bundle=None, policy=None):
+        lab.need(
+            type(operation) is str and operation in ACK,
+            "fixed child operation required",
+        )
         g.guard()
         context.p._output(self.output)
         lab.need(
@@ -91,26 +126,24 @@ class WitnessProof:
         )
         fd, pair = self.owner.edge()
         expected = dict(zip(("device", "inode"), pair))
-        transport = validate_transport(
-            policy.data["scope_ref"], policy.data["witness_transport"]
-        )
-        lab.need(
-            policy.data["schema_version"] == SCHEMA
-            and transport["network_namespace"] == expected,
-            "fixed owned transport required",
-        )
         parent = _net()
         lab.need(parent != expected, "Root parent must remain outside EDGE")
         self.count += 1
-        prefix = "switch-witness-" + str(self.count)
+        prefix = (
+            "namespace-cookie-"
+            if operation == "namespace-metadata"
+            else "switch-witness-"
+        ) + str(self.count)
         lab.save_json(
             self.output / (prefix + "-intent.json"),
-            dict(namespace=expected, parent=parent),
+            dict(namespace=expected, parent=parent, operation=operation),
         )
         reply_r = reply_w = go_r = go_w = None
         pid, status, group_owned, error = None, None, False, None
         ready_raw, result_raw = bytearray(), bytearray()
-        receipt = dict(scope="owned_Root_child_unchanged_Systemd_witness", errors=[])
+        receipt = dict(
+            scope="owned_Root_child_fixed_lab_operation", operation=operation, errors=[]
+        )
         deadline = time.monotonic() + 7
         try:
             reply_r, reply_w = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -138,6 +171,7 @@ class WitnessProof:
                         reply_w,
                         dict(
                             kind="ready",
+                            operation=operation,
                             pid=os.getpid(),
                             start_ticks=identity[1],
                             pgid=os.getpgrp(),
@@ -146,11 +180,25 @@ class WitnessProof:
                     )
                     control = bytearray()
                     _frame(go_r, deadline, control)
-                    lab.need(control == ACK, "exact child ACK required")
-                    # The unchanged implementation creates/waits its own UID61002
-                    # observer subprocess with extra_groups=[] and close_fds=True.
-                    original(system, bundle, policy)
-                    _send(reply_w, dict(kind="complete", pid=os.getpid()))
+                    lab.need(control == ACK[operation], "exact child ACK required")
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unbound:
+                        observed = socket_namespace(unbound)
+                    if operation == "original-witness":
+                        lab.need(
+                            observed == self.namespace,
+                            "sealed proof namespace cookie differs",
+                        )
+                        # The unchanged implementation owns its UID61002 subprocess.
+                        original(system, bundle, policy)
+                    _send(
+                        reply_w,
+                        dict(
+                            kind="complete",
+                            operation=operation,
+                            pid=os.getpid(),
+                            namespace=observed,
+                        ),
+                    )
                     os._exit(0)
                 except BaseException as exc:
                     try:
@@ -173,8 +221,10 @@ class WitnessProof:
             namespace = os.stat(f"/proc/{pid}/ns/net")
             lab.need(
                 type(ready) is dict
-                and set(ready) == {"kind", "pid", "start_ticks", "pgid", "sid"}
+                and set(ready)
+                == {"kind", "operation", "pid", "start_ticks", "pgid", "sid"}
                 and ready["kind"] == "ready"
+                and ready["operation"] == operation
                 and type(ready["pid"]) is int
                 and ready["pid"] == pid
                 and type(ready["pgid"]) is int
@@ -189,15 +239,29 @@ class WitnessProof:
             receipt["identity"] = ready
             self.owner.edge()
             lab.save_json(self.output / (prefix + "-authorized.json"), receipt)
-            lab.need(os.write(go_w, ACK) == len(ACK), "short owned child ACK")
+            lab.need(
+                os.write(go_w, ACK[operation]) == len(ACK[operation]),
+                "short owned child ACK",
+            )
             os.close(go_w)
             go_w = None
             _frame(reply_r, deadline, result_raw)
             value = strict(bytes(result_raw))
             lab.need(
-                value == {"kind": "complete", "pid": pid} and type(value["pid"]) is int,
-                "unchanged sealed witness proof failed",
+                type(value) is dict
+                and set(value) == {"kind", "operation", "pid", "namespace"}
+                and value["kind"] == "complete"
+                and value["operation"] == operation
+                and type(value["pid"]) is int
+                and value["pid"] == pid,
+                "fixed owned child operation failed",
             )
+            transport("namespace-validation", value["namespace"])
+            lab.need(
+                value["namespace"]["kernel_boot_id"] == g.boot(), "sample boot differs"
+            )
+            receipt["namespace_observation"] = value["namespace"]
+            self.owner.edge()  # Bind the sample to the still-held original handle.
             exited = _exited(pid, deadline)  # WNOWAIT: group PID remains reserved.
             lab.need(
                 exited.si_code == os.CLD_EXITED and exited.si_status == 0,
@@ -298,3 +362,4 @@ class WitnessProof:
                     error.add_note("owned child final proof:" + type(exc).__name__)
         if error is not None:
             raise error
+        return dict(receipt["namespace_observation"])

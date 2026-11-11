@@ -19,7 +19,7 @@ def witness_command():
     )
 
 
-def witness_binding(auth, namespace, output, phase):
+def witness_binding(auth, namespace, output, phase, observed_namespace):
     """Sample the actual fixed witness; never connect or read keys/endpoints."""
     g.guard()
     p._output(output)
@@ -39,10 +39,16 @@ def witness_binding(auth, namespace, output, phase):
     expected = dict(zip(("device", "inode"), p.contract._pair(namespace)))
     transport = validate_transport(auth["scope_ref"], auth["witness_transport"])
     lab.need(
-        auth["trust_schema"] == SCHEMA and transport["network_namespace"] == expected,
+        auth["trust_schema"] == SCHEMA
+        and transport["network_namespace"] == observed_namespace
+        and observed_namespace["kernel_boot_id"] == g.boot(),
         "current explicit transport/owned EDGE differs",
     )
-    evidence = dict(transport=transport)
+    evidence = dict(
+        transport=transport,
+        namespace_observation=observed_namespace,
+        owned_namespace=expected,
+    )
     try:
         before = lab.unit_snapshot(g.WITNESS)
         evidence["before"] = before
@@ -170,6 +176,7 @@ def witness_binding(auth, namespace, output, phase):
             unit_file_sha256=evidence["unit_file_sha256"],
             unit_file_identity=evidence["unit_file_identity"],
             witness_transport=transport,
+            namespace_observation=observed_namespace,
         )
     finally:
         lab.save_json(output / ("witness-" + phase + ".json"), evidence)

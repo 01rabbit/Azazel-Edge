@@ -20,6 +20,7 @@ import signed_network_observer as observer
 import signed_network_telemetry_contract as role
 import signed_network_telemetry_material as material
 from signed_network_telemetry_transport import witness_binding
+from signed_network_telemetry_switch_witness import WitnessProof
 from signed_network_telemetry_binding import public_auth_binding
 import signed_network_telemetry_proof as proof
 import signed_network_scope as scope
@@ -145,7 +146,14 @@ def prelaunch_unit_material(mode, output):
     return rows
 
 
-def _current_binding(*, current, namespace, source_sha256, kernel, output, phase):
+def namespace_observation(context):
+    lab.need(type(context) is WitnessProof, "owned Root transport context required")
+    return context.sample_namespace()
+
+
+def _current_binding(
+    *, current, namespace, source_sha256, kernel, output, phase, transport_context
+):
     """Fixed shared lab metadata only; callers independently verify inputs.
 
     No dynamic role/path selectors or cryptographic scope/label claim. Return
@@ -165,7 +173,11 @@ def _current_binding(*, current, namespace, source_sha256, kernel, output, phase
         policy_sha256=plan.manifest_digest(payload),
     )
     binding["witness_actor"] = witness_binding(
-        binding["public_auth"], namespace, output, phase
+        binding["public_auth"],
+        namespace,
+        output,
+        phase,
+        namespace_observation(transport_context),
     )
     return binding, policy_raw
 
@@ -179,6 +191,7 @@ def initialize(
     expected_sources,
     namespace_fd,
     namespace_identity,
+    transport_context,
 ):
     """Run one unused-scope initializer; all inputs are Root-pinned lab context.
 
@@ -219,6 +232,7 @@ def initialize(
         kernel=kernel,
         output=output,
         phase="initialize-initial",
+        transport_context=transport_context,
     )
     argv = observer.role_argv("initialize", telemetry_lab_v2=True)
     lab.save_json(output / "initializer-intent.json", dict(argv=argv, binding=binding))
@@ -268,7 +282,13 @@ def initialize(
             "public auth context changed before GO",
         )
         lab.need(
-            witness_binding(auth_before_go, namespace, output, "initialize-before-go")
+            witness_binding(
+                auth_before_go,
+                namespace,
+                output,
+                "initialize-before-go",
+                namespace_observation(transport_context),
+            )
             == binding["witness_actor"],
             "witness changed before initializer GO",
         )
@@ -328,7 +348,13 @@ def initialize(
             "public auth context changed after initialization",
         )
         lab.need(
-            witness_binding(auth_after_init, namespace, output, "initialize-after-init")
+            witness_binding(
+                auth_after_init,
+                namespace,
+                output,
+                "initialize-after-init",
+                namespace_observation(transport_context),
+            )
             == binding["witness_actor"],
             "witness changed after initialization",
         )

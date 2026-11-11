@@ -231,6 +231,7 @@ def live(
     expected_sources,
     namespace_fd,
     namespace_identity,
+    transport_context,
     initialization,
 ):
     """One current live role, no manifest/workload/Scope provisioning or retry.
@@ -272,6 +273,7 @@ def live(
         kernel=kernel,
         output=output,
         phase="live-initial",
+        transport_context=transport_context,
     )
     _initialized(initialization, binding)
     argv = init.observer.role_argv("live", telemetry_lab_v2=True)
@@ -315,6 +317,7 @@ def live(
                 kernel=g.boot(),
                 output=output,
                 phase="live-" + phase,
+                transport_context=transport_context,
             )
             lab.save_json(output / ("live-binding-" + phase + ".json"), sampled)
             lab.need(
