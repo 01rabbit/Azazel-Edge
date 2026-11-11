@@ -6,6 +6,7 @@ Only the unchanged actual reader results may enter the local four-run gate.
 """
 
 from pathlib import Path
+import stat
 from datetime import datetime, timezone
 
 import signed_network_read as old
@@ -130,6 +131,31 @@ def _role_bundle(snap, mode, binding):
     _same(handles, metadata["namespaces_after"])
     _same(handles[role.NSFS_TARGETS[0]], binding["namespace"])
     evidence = actor["evidence"]
+    need(
+        evidence["scope"] == "root_metadata_not_isolation_qualification",
+        "actual actor evidence scope differs",
+    )
+    _same(evidence["proc_owner"], [61002, 61002])
+    _same(
+        evidence["ready_identity"],
+        dict(pid=actor["identity"]["pid"], dumpable=actor["identity"]["dumpable"]),
+    )
+    _same(evidence["expected_namespace"], binding["namespace"])
+    _same(evidence["binfmt_before"], evidence["binfmt_after"])
+    need(
+        set(evidence["binfmt_before"]) == {"status", "register"},
+        "actual binfmt endpoint metadata required",
+    )
+    for endpoint in evidence["binfmt_before"].values():
+        need(
+            set(endpoint) == {"device", "inode", "mode", "uid", "gid"}
+            and all(type(value) is int for value in endpoint.values())
+            and endpoint["device"] >= 0
+            and endpoint["inode"] > 0
+            and stat.S_ISREG(endpoint["mode"])
+            and endpoint["uid"] == endpoint["gid"] == 0,
+            "actual root-owned regular binfmt endpoints required",
+        )
     _same(evidence["namespaces"], evidence["namespace_after"])
     _same(evidence["namespaces"]["net"], binding["namespace"])
     need(
@@ -186,6 +212,9 @@ def _role_bundle(snap, mode, binding):
         and evidence["raw"]["cgroup"]
         == "0::/system.slice/" + role.observer_spec(mode)["unit"] + "\n",
         "original kernel role/cgroup differs",
+    )
+    _same(
+        [int(value) for value in status["Groups"].split()], actor["identity"]["groups"]
     )
     for key in ("status", "label", "cgroup", "mountinfo"):
         _same(

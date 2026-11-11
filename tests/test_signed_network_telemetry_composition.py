@@ -178,6 +178,19 @@ class TelemetryFixture(Fixture):
                 for i in range(3)
             ],
         )
+        evidence.update(
+            scope="root_metadata_not_isolation_qualification",
+            proc_owner=[61002, 61002],
+            ready_identity=dict(pid=pid, dumpable=1),
+            expected_namespace=[1, 101],
+            binfmt_before={
+                name: dict(
+                    device=37, inode=500 + i, mode=stat.S_IFREG | 0o444, uid=0, gid=0
+                )
+                for i, name in enumerate(("status", "register"))
+            },
+        )
+        evidence["binfmt_after"] = deepcopy(evidence["binfmt_before"])
         metadata = dict(
             mode=mode,
             kernel_boot_id=binding["kernel_boot_id"],
@@ -759,5 +772,43 @@ def test_missing_prepared_mode_is_not_runtime_provenance(tmp_path, monkeypatch):
     prepared = json.loads(fixture.physical(path).read_bytes())
     del prepared["namespace_kind"]
     fixture.put(path, prepared)
+    result = reread(fixture)
+    assert result["status"] == "withheld" and result["measurement_record"] is None
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "procowner",
+        "ready",
+        "expectedns",
+        "binfmtmissing",
+        "binfmtdrift",
+        "endpointtype",
+    ],
+)
+def test_actual_actor_writer_metadata_cannot_be_missing_or_crossbound(
+    fault, tmp_path, monkeypatch
+):
+    fixture = TelemetryFixture(tmp_path, monkeypatch)
+    valid, _ = fixture.build(1)
+    assert valid["status"] == "calculation_available", valid["reasons"]
+    path = phase.WORK / "live/live-verified-bundle.json"
+    bundle = json.loads(fixture.physical(path).read_bytes())
+    evidence = bundle["proof"]["actor"]["evidence"]
+    if fault == "procowner":
+        evidence["proc_owner"] = [0, 0]
+    elif fault == "ready":
+        evidence["ready_identity"]["dumpable"] = 0
+    elif fault == "expectedns":
+        evidence["expected_namespace"] = [1, 999]
+    elif fault == "binfmtmissing":
+        del evidence["binfmt_before"]
+    elif fault == "binfmtdrift":
+        evidence["binfmt_after"]["register"]["inode"] += 1
+    else:
+        evidence["binfmt_before"]["status"]["mode"] = stat.S_IFDIR | 0o755
+        evidence["binfmt_after"] = deepcopy(evidence["binfmt_before"])
+    fixture.put(path, bundle)
     result = reread(fixture)
     assert result["status"] == "withheld" and result["measurement_record"] is None
