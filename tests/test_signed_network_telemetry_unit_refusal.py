@@ -231,7 +231,9 @@ def test_real_exclusive_foreign_fixture_permissions_identity_and_no_retry(
     assert c.HOOK.read_bytes() == c.WIRE
 
 
-@pytest.mark.parametrize("fault", [None, "receipt", "first-actor"])
+@pytest.mark.parametrize(
+    "fault", [None, "receipt", "first-actor", "namespace-permission", "truthy-group"]
+)
 def test_independent_cleanup_attempts_all_fixed_actors_despite_failed_proof(
     tmp_path, monkeypatch, fault
 ):
@@ -260,19 +262,47 @@ def test_independent_cleanup_attempts_all_fixed_actors_despite_failed_proof(
         )
 
     monkeypatch.setattr(c.main.setup.scope, "_state", state)
-    monkeypatch.setattr(c.lab.cg, "group_empty", lambda *a: True)
+    monkeypatch.setattr(
+        c.lab.cg, "group_empty", lambda *a: 1 if fault == "truthy-group" else True
+    )
     monkeypatch.setattr(
         c.g, "Systemd", lambda: type("System", (), {"cores": lambda self: []})()
     )
     monkeypatch.setattr(c.g, "boot", lambda: "synthetic")
     monkeypatch.setattr(c.main.setup.n, "root_snapshot", lambda: {})
-    monkeypatch.setattr(c.os.path, "lexists", lambda _: False)
+    namespace_calls = []
+    actual_lstat = os.lstat
+
+    def namespace_lstat(path, *args, **kwargs):
+        path = Path(path)
+        if path.parent == Path("/run/netns"):
+            namespace_calls.append(path.name)
+            if (
+                fault == "namespace-permission"
+                and path.name == c.role.NAMESPACE_NAMES[0]
+            ):
+                raise PermissionError("unknown namespace access")
+            raise FileNotFoundError(str(path))
+        return actual_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(c.os, "lstat", namespace_lstat)
     if fault:
         with pytest.raises(AssertionError, match="independent cleanup incomplete"):
             c._after(output)
     else:
         assert c._after(output)["all_fixed_groups_empty"] is True
     assert calls == list(c.main.setup.UNITS)
+    assert namespace_calls == list(c.role.NAMESPACE_NAMES)
+    observed = json.loads(
+        (output / "independent-namespace-observations.json").read_bytes()
+    )["observations"]
+    assert len(observed) == 3
+    assert observed[0]["state"] == (
+        "unknown" if fault == "namespace-permission" else "absent"
+    )
+    if fault == "namespace-permission":
+        assert observed[0]["error"] == "PermissionError"
+        assert [row["state"] for row in observed[1:]] == ["absent", "absent"]
     assert (output / "independent-parent-after.json").exists()
     assert bool(
         json.loads((output / "independent-cleanup-checks.json").read_bytes())["errors"]

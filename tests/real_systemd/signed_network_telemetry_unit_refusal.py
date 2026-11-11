@@ -172,21 +172,38 @@ def _after(output):
             lab.need(
                 state["ActiveState"] in ("inactive", "failed")
                 and state["MainPID"] == state["ControlPID"] == "0"
-                and original_empty
-                and canonical_empty,
+                and original_empty is True
+                and canonical_empty is True,
                 "actor cleanup not independently empty",
             )
 
         attempt(unit, actor)
     attempt("core", lambda: lab.need(not g.Systemd().cores(), "core remains"))
+    observations = []
+    for name in role.NAMESPACE_NAMES:
+
+        def namespace(name=name):
+            try:
+                info = os.lstat(Path("/run/netns") / name)
+            except FileNotFoundError:
+                observations.append(dict(name=name, state="absent"))
+                return
+            except BaseException as exc:
+                observations.append(
+                    dict(name=name, state="unknown", error=type(exc).__name__)
+                )
+                raise
+            observations.append(
+                dict(name=name, state="present", identity=_identity(info))
+            )
+            lab.need(False, "namespace remains")
+
+        attempt("namespace:" + name, namespace)
     attempt(
-        "namespaces",
-        lambda: lab.need(
-            all(
-                not os.path.lexists(Path("/run/netns") / name)
-                for name in role.NAMESPACE_NAMES
-            ),
-            "namespace remains",
+        "namespace observations",
+        lambda: lab.save_json(
+            output / "independent-namespace-observations.json",
+            dict(observations=observations),
         ),
     )
 
