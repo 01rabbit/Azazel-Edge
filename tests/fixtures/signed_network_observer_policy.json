@@ -1,0 +1,1 @@
+{"schema_version":"outcome-telemetry-policy/v1","policy_version":"signed-network-instrumentation-v1","actions":{"throttle":{"metric":"interface_rx_bytes_delta","direction":"observe","target_or_range":{},"observation_window":{"pre_seconds":1.0,"post_seconds":2.0},"guardrails":[]}}}
