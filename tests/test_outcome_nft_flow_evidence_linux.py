@@ -190,6 +190,34 @@ def _foreign(payload, token):
     return rules[0]
 
 
+def _require_zero_owner_rules(payload, owner_token):
+    # Full-chain schema validation is performed first by readback_matches.
+    # A tuple/rate mismatch is not absence when the owner's rule still exists.
+    remaining = [entry["rule"] for entry in payload["nftables"]
+                 if "rule" in entry and entry["rule"].get("comment") == owner_token]
+    network.require(not remaining, "owned rule still present; semantic mismatch is not verified absence")
+
+
+def test_release_absence_refuses_semantically_changed_owned_rule():
+    owner = "azazel-edge:release-owned-unit-test"
+    payload = {"nftables": [
+        {"chain": {"family": "inet", "table": "azazel_edge", "name": "throttle", "handle": 1,
+                   "type": "filter", "hook": "prerouting", "prio": -150, "policy": "accept"}},
+        {"rule": {"family": "inet", "table": "azazel_edge", "chain": "throttle", "handle": 2,
+                  "comment": owner, "expr": [
+                      {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}},
+                                 "right": "10.91.3.99"}},
+                      {"limit": {"rate": 1, "rate_unit": "kbytes", "burst": 1, "burst_unit": "kbytes",
+                                 "per": "second", "inv": True}}, {"drop": None}]}},
+    ]}
+    # This owned rule no longer matches the original tuple/rate, but its owner
+    # is still present. The added independent absence check must refuse it.
+    with pytest.raises(ValueError, match="owned rule still present"):
+        _require_zero_owner_rules(payload, owner)
+    payload["nftables"].pop()
+    _require_zero_owner_rules(payload, owner)
+
+
 @pytest.mark.skipif(os.environ.get(FLAG) != "1", reason="requires one reviewed fresh marked offline root VM kernel proof")
 def test_actual_native_nft_flow_mechanism_and_owned_release(tmp_path):
     pins = _guard()
@@ -255,7 +283,9 @@ def test_actual_native_nft_flow_mechanism_and_owned_release(tmp_path):
                           original_source_file="events.jsonl", parsed_event=released))
         after = _query(assets, "released", pins)
         remaining = flow.parse_readback(after["stdout"])
-        network.require(flow.readback_matches(remaining, scope) is False and _foreign(remaining, assets.foreign) == foreign,
+        no_semantic_match = flow.readback_matches(remaining, scope) is False  # validates the full chain first
+        _require_zero_owner_rules(remaining, scope["owner_token"])
+        network.require(no_semantic_match and _foreign(remaining, assets.foreign) == foreign,
                         "independent release readback failed or changed foreign canary")
     finally:
         try:

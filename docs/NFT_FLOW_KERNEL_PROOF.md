@@ -70,7 +70,10 @@ Exact tuple, protocol, owner, rate, burst and the foreign rule must match.
 
 After the actual minimum 30-second lease, the original core release fact must
 report verified absence. Another full independent root readback must show no
-owned flow and the unchanged foreign canary. Every exit runs the existing owned
+owned flow and the unchanged foreign canary. Absence requires **zero rules in
+the raw full chain with that exact owner comment**, in addition to full-chain
+validation and no semantic match. An owned rule with changed tuple/rate is not
+absence and must fail the proof. Every exit runs the existing owned
 process/namespace cleanup and compares root routes/rules; success is written
 only after verified cleanup. Intent, source/core/tool/API hashes, full receipts,
 original events, projection and before/after state are private proof artifacts.
