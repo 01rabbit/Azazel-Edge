@@ -127,6 +127,17 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
     Raw is Root-collected /proc/PID/mountinfo, not the Root reader's own view.
     This structural proof still requires actual same-profile read negatives.
     """
+    return _validate_proc_view(
+        raw,
+        own_mount_ns=own_mount_ns,
+        pid1_mount_ns=pid1_mount_ns,
+        proc_device=proc_device,
+        nsfs_targets={"/run/netns/" + ns for _, ns in ROLES.values()},
+    )
+
+
+def _validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device, nsfs_targets):
+    """Private common parser; public wrappers select only fixed contexts."""
     _need(
         _pair(own_mount_ns) != _pair(pid1_mount_ns),
         "actor mount namespace must differ from PID1",
@@ -148,9 +159,7 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
             # Linux nsfs_show_path emits a namespace type and inode, not a path.
             match = re.fullmatch(r"net:\[([1-9][0-9]{0,19})\]", root)
             _need(
-                match is not None
-                and int(match[1]) < 2**64
-                and target in {"/run/netns/" + ns for _, ns in ROLES.values()},
+                match is not None and int(match[1]) < 2**64 and target in nsfs_targets,
                 "unknown namespace mount root/target",
             )
         _need(

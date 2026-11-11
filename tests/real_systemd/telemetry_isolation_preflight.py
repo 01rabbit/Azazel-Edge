@@ -97,13 +97,18 @@ def worker_argv(mode):
 
 def validate_effective(value, mode):
     spec = contract.role_spec(mode)
+    return _validate_effective(value, spec, worker_argv(mode))
+
+
+def _validate_effective(value, spec, argv):
+    """Private common check; callers expose only fixed role wrappers."""
     lab.need(set(value) == set(EFFECTIVE), "complete actual effective unit required")
     expected = dict(spec["properties"])
-    expected.pop("RuntimeMaxSec")
-    expected.pop("TimeoutStopSec")
+    runtime = expected.pop("RuntimeMaxSec")
+    stop = expected.pop("TimeoutStopSec")
     expected.update(
-        RuntimeMaxUSec="15s",
-        TimeoutStopUSec="3s",
+        RuntimeMaxUSec=runtime + "s",
+        TimeoutStopUSec=stop + "s",
         Slice="system.slice",
         DropInPaths="",
         FragmentPath="/run/systemd/transient/" + spec["unit"],
@@ -145,8 +150,8 @@ def validate_effective(value, mode):
     )
     fields = {k: v for k, _, v in rows}
     lab.need(
-        fields.get("path") == contract.ALIAS
-        and fields.get("argv[]") == " ".join(worker_argv(mode))
+        fields.get("path") == spec["alias"]
+        and fields.get("argv[]") == " ".join(argv)
         and fields.get("ignore_errors") == "no",
         "actual worker command differs",
     )
@@ -155,12 +160,19 @@ def validate_effective(value, mode):
 def collect_effective(mode, output):
     _output(output)
     unit = contract.role_spec(mode)["unit"]
+    value = _collect_effective(unit, mode, output)
+    validate_effective(value, mode)
+    return value
+
+
+def _collect_effective(unit, prefix, output):
+    """Private raw collection; public wrappers supply literal unit/prefix."""
     bus = "/org/freedesktop/systemd1/unit/" + unit.replace("-", "_2d").replace(
         ".", "_2e"
     )
     code, text = old._retained_query(
         ["systemctl", "show", unit, "--property=" + ",".join(EFFECTIVE)],
-        mode + "-effective-systemctl",
+        prefix + "-effective-systemctl",
         output,
     )
     buscode, typed = old._retained_query(
@@ -174,7 +186,7 @@ def collect_effective(mode, output):
             "org.freedesktop.systemd1.Service",
             *old.HOOKS,
         ],
-        mode + "-effective-busctl",
+        prefix + "-effective-busctl",
         output,
     )
     lab.need(code == buscode == 0, "actual effective backend failed")
@@ -188,7 +200,6 @@ def collect_effective(mode, output):
     )
     base = "\n".join(row for row in rows if row.split("=", 1)[0] not in EXTRA).encode()
     value = {**old.merged_effective(base, typed), **extra}
-    validate_effective(value, mode)
     return value
 
 
@@ -226,6 +237,28 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
     """Original Root kernel metadata at ready fence; no probe or sample IPC."""
     _output(output)
     unit = contract.role_spec(mode)["unit"]
+    return _collect_actor(
+        unit,
+        mode,
+        ready_identity=ready_identity,
+        expected_namespace=expected_namespace,
+        expected_stdio=expected_stdio,
+        output=output,
+        proc_validator=contract.validate_proc_view,
+    )
+
+
+def _collect_actor(
+    unit,
+    prefix,
+    *,
+    ready_identity,
+    expected_namespace,
+    expected_stdio,
+    output,
+    proc_validator,
+):
+    """Private common metadata collection; no public arbitrary role/spec selector."""
     evidence = dict(
         scope="root_metadata_not_isolation_qualification",
         ready_identity=ready_identity,
@@ -251,7 +284,7 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
             ("mountinfo", root + "/mountinfo", 1024 * 1024),
         ):
             raw[name] = cg._kernel_text(path, limit)
-            lab.save(output / (mode + "-" + name + ".raw"), raw[name].encode())
+            lab.save(output / (prefix + "-" + name + ".raw"), raw[name].encode())
         evidence["raw"] = raw
         evidence["binfmt_before"] = {}
         binfmt_metadata(int(pid), evidence["binfmt_before"])
@@ -304,7 +337,7 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
             info = os.stat(path)
             evidence["namespace_after"][name] = [info.st_dev, info.st_ino]
     finally:
-        lab.save_json(output / (mode + "-actor-proof.json"), evidence)
+        lab.save_json(output / (prefix + "-actor-proof.json"), evidence)
     after = evidence["after"]
     lab.need(
         evidence["binfmt_before"] == evidence["binfmt_after"], "binfmt endpoint drift"
@@ -373,7 +406,7 @@ def collect_actor(mode, *, ready_identity, expected_namespace, expected_stdio, o
         ),
         "actual namespace/cgroup drift",
     )
-    contract.validate_proc_view(
+    proc_validator(
         raw["mountinfo"],
         own_mount_ns=namespaces["mnt"],
         pid1_mount_ns=namespaces["pid1_mnt"],
