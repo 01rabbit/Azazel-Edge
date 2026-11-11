@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import select
 import socket
 import subprocess
 import sys
@@ -23,6 +24,61 @@ MAX_TRANSACTIONS = 32
 
 class LocalCaptureError(ValueError):
     """Run cannot supply a complete independent-service receipt."""
+
+
+def _remaining(deadline_ns):
+    remaining = (deadline_ns - time.monotonic_ns()) / 1e9
+    if remaining <= 0:
+        raise LocalCaptureError('absolute local protocol deadline exceeded')
+    return remaining
+
+
+class _Wire:
+    """A shared absolute deadline cannot be renewed by partial peer progress."""
+    def __init__(self, channel, deadline_ns):
+        self.channel = channel
+        self.deadline_ns = deadline_ns
+
+    def write(self, data):
+        self.channel.settimeout(_remaining(self.deadline_ns))
+        written = self.channel.send(data)
+        _remaining(self.deadline_ns)
+        return written
+
+    def flush(self):
+        _remaining(self.deadline_ns)
+
+    def readline(self, limit):
+        raw = bytearray()
+        while len(raw) < limit:
+            self.channel.settimeout(_remaining(self.deadline_ns))
+            fragment = self.channel.recv(1)
+            _remaining(self.deadline_ns)
+            if not fragment:
+                break
+            raw.extend(fragment)
+            if fragment == b'\n':
+                break
+        return bytes(raw)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+
+def _read_audit(pipe, deadline_ns):
+    raw = bytearray()
+    while len(raw) <= MAX_MESSAGE:
+        if not select.select([pipe], [], [], _remaining(deadline_ns))[0]:
+            raise LocalCaptureError('absolute service audit deadline exceeded')
+        fragment = os.read(pipe.fileno(), min(4096, MAX_MESSAGE + 1 - len(raw)))
+        _remaining(deadline_ns)
+        if not fragment:
+            return bytes(raw)
+        raw.extend(fragment)
+    raise LocalCaptureError('oversized service audit')
 
 
 def _send(stream, value):
@@ -54,8 +110,7 @@ def _receive(stream):
 def _service(fd, nonce, profile):
     """Fixed child: no Edge import, file access, address or command input."""
     with socket.socket(fileno=fd) as channel:
-        channel.settimeout(7)
-        with channel.makefile('rwb', buffering=0) as wire:
+        with _Wire(channel, time.monotonic_ns() + 7_000_000_000) as wire:
             started = time.monotonic_ns()
             _send(wire, dict(protocol=PROTOCOL, nonce=nonce, kind='ready', pid=os.getpid()))
             goal = None
@@ -133,23 +188,23 @@ def capture_local_service(manifest, assignment_id, *, run_id, safety_observation
     process = None
     client_rows = []
     try:
+        setup_deadline = time.monotonic_ns() + 1_000_000_000
         process = subprocess.Popen([sys.executable, '-I', '-u', str(Path(__file__).resolve()),
             '--fixed-service', str(child.fileno()), nonce, profile], pass_fds=(child.fileno(),),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         child.close()
-        parent.settimeout(1)
-        with parent.makefile('rwb', buffering=0) as wire:
+        with _Wire(parent, setup_deadline) as wire:
             ready = _receive(wire)
             if ready != dict(protocol=PROTOCOL, nonce=nonce, kind='ready', pid=process.pid):
                 raise LocalCaptureError('child readiness/challenge mismatch')
             origin = time.monotonic_ns()
             deadline = origin + round(horizon * 1e9)
+            wire.deadline_ns = deadline
             expected = []
             for sequence, operation in enumerate(['goal'] + ['legitimate'] * transactions):
                 start = time.monotonic_ns()
                 if start >= deadline:
                     raise LocalCaptureError('request budget exceeded actual horizon')
-                parent.settimeout(min(1, (deadline - start) / 1e9))
                 _send(wire, dict(protocol=PROTOCOL, nonce=nonce, operation=operation, sequence=sequence))
                 answer = _receive(wire)
                 end = time.monotonic_ns()
@@ -166,12 +221,13 @@ def capture_local_service(manifest, assignment_id, *, run_id, safety_observation
                 if process.poll() is not None:
                     raise LocalCaptureError('service exited before actual horizon')
                 time.sleep(min(.01, max(0, (deadline-time.monotonic_ns())/1e9)))
-            parent.settimeout(1)
+            teardown_deadline = time.monotonic_ns() + 1_000_000_000
+            wire.deadline_ns = teardown_deadline
             _send(wire, dict(protocol=PROTOCOL, nonce=nonce, operation='close'))
-        process.wait(timeout=1)
+        process.wait(timeout=_remaining(teardown_deadline))
         if process.returncode != 0:
             raise LocalCaptureError('service exited without a clean audit')
-        raw = process.stdout.read(MAX_MESSAGE + 1)
+        raw = _read_audit(process.stdout, teardown_deadline)
         if len(raw) > MAX_MESSAGE or not raw.endswith(b'\n'):
             raise LocalCaptureError('missing or oversized service audit')
         audit = json.loads(raw)

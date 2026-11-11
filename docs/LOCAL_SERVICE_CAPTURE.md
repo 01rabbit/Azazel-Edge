@@ -35,8 +35,15 @@ response beyond H, early exit, timeout, wrong challenge, missing audit or other
 protocol failure raises `LocalCaptureError`, produces no receipt and reaps the
 child. No truncated timeout is turned into a successful full-horizon receipt;
 there is no retry, fixture substitution, missing-record backfill or automatic
-repair. Setup and teardown each have a one-second bound; the child also has a
-seven-second channel timeout. Messages are bounded to 16 KiB.
+repair. Readiness has one absolute one-second deadline beginning before process spawn.
+Every request send/receive fragment shares the run's absolute H deadline; a
+partial message cannot renew the budget. Close, child exit and audit reading
+share one absolute one-second teardown deadline. The child has a single
+seven-second absolute channel deadline for its entire lifetime, including
+fragments, rather than a timeout renewed per byte/request. Messages are bounded
+to 16 KiB. On failure, kill/reap has a separate one-second wait. These are bounds
+on protocol/process waiting, not real-time guarantees for OS process creation,
+kernel scheduling or Python execution.
 
 ## Freeze the local plan before running
 
@@ -110,7 +117,8 @@ PYTHONPATH=.:py python -m pytest -q tests/test_local_service_capture.py \
 
 Tests use real separate children and actual channel traffic, including denied
 objectives, client ACK without objective commit, service errors, omitted audit,
-forged ACK/challenge, actual response overrun, changed frozen configuration,
+forged ACK/challenge, actual response overrun, drip-byte readiness/response/
+teardown and shared absolute receive deadlines, changed frozen configuration,
 explicit safety failures and child cleanup. Four fresh process runs also feed
 the existing paired analyzer, with process launch forbidden during analysis.
 No replay fixture substitutes for these requests or measured timings.
