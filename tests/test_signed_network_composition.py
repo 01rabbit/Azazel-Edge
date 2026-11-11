@@ -4,6 +4,9 @@ Only fixed-path/role-ownership IO and telemetry/clock SOURCES are adapted.
 Signatures, public registration, source/journal/witness verification, collector,
 replay, clock qualification, service joins and measurement all execute unchanged.
 Root launch/netns/stop receipts below are deliberately synthetic fixture facts.
+The collector has persistence=None. Journal bytes use the existing fixture wire
+writer and real ephemeral witness signatures; no ObservationJournal/WitnessStore
+runtime, durable witness service, UID or native process is exercised.
 """
 
 from datetime import datetime, timezone
@@ -91,6 +94,33 @@ class Fixture:
     def __init__(self, root, monkeypatch):
         self.root, self.active = root, None
         self.original_read = input_auth.read_regular
+        # Root registration validates these physical paths directly, rather than
+        # through the synthetic role/path reader below. Materialize them first.
+        old_base = phase.g.BASE
+        native = root / "registered-native-inputs"
+        monkeypatch.setattr(phase.g, "BASE", native)
+        monkeypatch.setattr(
+            phase.plan,
+            "BASE_ENV",
+            {
+                key: str(native / Path(value).relative_to(old_base))
+                if value.startswith(str(old_base) + "/")
+                else value
+                for key, value in phase.plan.BASE_ENV.items()
+            },
+        )
+        environment = phase.plan.native_environment("c0")
+        for key in (
+            "EVE_PATH",
+            "NORMALIZED_EVENT_LOG",
+            "DEFENSE_RELEASE_LEDGER",
+            "REDIRECT_POLICY_PATH",
+            "PROTECTED_FLOWS_PATH",
+        ):
+            path = Path(environment["AZAZEL_" + key])
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_text(phase.plan.PROTECTED if key == "PROTECTED_FLOWS_PATH" else "")
+            path.chmod(0o600)
         self.image = b"\x7fELF\x02\x01synthetic-unexecuted-core"
         self.core_sha = hashlib.sha256(self.image).hexdigest()
         self.manifest, self.safety = phase.plan.planned("a" * 40, self.core_sha)
@@ -256,7 +286,7 @@ class Fixture:
             ("header", header),
             ("session_open", dict(boot_id=phase.n.boot_reference(boot))),
             ("input_ready", dict(offset=0, sha256=reader.sha(b""))),
-            ("session_close", {}),
+            ("session_close", dict(boot_id=phase.n.boot_reference(boot))),
             ("session_open", dict(boot_id=phase.n.boot_reference(boot))),
         ]
         for number, pos in enumerate(positions):
@@ -270,7 +300,9 @@ class Fixture:
                     meta = {k: getattr(outcome, k) for k in ("decision_id", "execution_id", "objective_id")}
                     meta["boot_id"] = phase.n.boot_reference(boot)
                     rows.extend([("begin", meta), ("commit", dict(meta, outcome=outcome.to_dict()))])
-        rows.append(("session_close", {}))
+        rows.append(("session_close", dict(boot_id=phase.n.boot_reference(boot))))
+        if fault == "close":
+            rows[3] = ("session_close", {})  # Rehashed and genuinely re-signed malformed lifecycle.
         journal_raw, frames = journal(rows)
         journal_file = self.put(bundle / "observer/observations.journal", journal_raw)
         state = self.anchors(trust, wk, raw, journal_raw, frames, journal_file.stat())
@@ -577,7 +609,19 @@ def test_all_four_synthetic_assignments_compose_through_unchanged_measurement(tm
 
 
 @pytest.mark.parametrize(
-    "fault", ["release", "end", "late_probe", "coverage", "samples", "window", "clock", "client", "canonical"]
+    "fault",
+    [
+        "release",
+        "end",
+        "close",
+        "late_probe",
+        "coverage",
+        "samples",
+        "window",
+        "clock",
+        "client",
+        "canonical",
+    ],
 )
 def test_independent_composition_gap_preserves_original_facts_and_withholds(tmp_path, monkeypatch, fault):
     fixture = Fixture(tmp_path, monkeypatch)
@@ -588,6 +632,7 @@ def test_independent_composition_gap_preserves_original_facts_and_withholds(tmp_
         assert result["status"] == "withheld" and result["reasons"]
         expected = {
             "end": "terminal original wire",
+            "close": "journal",
             "late_probe": "root probe precedes actual callback",
             "coverage": "sample coverage incomplete",
             "clock": "actual clock/horizon qualification withheld",
