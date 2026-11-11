@@ -106,7 +106,7 @@ def _live_lifecycle_allowed(journal):
     authentication = journal.input_source.authentication
     return (
         authentication is not None
-        and authentication.policy.data["schema_version"] == "outcome-input-trust/v3"
+        and authentication.policy.data["schema_version"] in ("outcome-input-trust/v3", "outcome-input-trust/v4")
     )
 
 

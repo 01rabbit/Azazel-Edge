@@ -19,6 +19,8 @@ import stat
 import struct
 import threading
 
+from .input_transport import SCHEMA as ABSTRACT_TRUST, abstract_address
+
 from .input_auth import (
     TrustPolicy,
     SourceVerifier,
@@ -549,19 +551,25 @@ class WitnessClient:
 
     def call(self, op):
         p = self.policy.data
-        parent, name = open_parent(p["socket_path"], trusted_owner=p["witness_uid"])
-        try:
-            parent_info = os.fstat(parent)
-            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if (
-                parent_info.st_uid != p["witness_uid"]
-                or parent_info.st_mode & 0o022
-                or not stat.S_ISSOCK(info.st_mode)
-                or info.st_uid != p["witness_uid"]
-            ):
-                raise OutcomeJournalError("witness endpoint ownership unsafe")
-        finally:
-            os.close(parent)
+        address = (
+            abstract_address(self.policy)
+            if p["schema_version"] == ABSTRACT_TRUST
+            else p["socket_path"]
+        )
+        if p["schema_version"] != ABSTRACT_TRUST:
+            parent, name = open_parent(p["socket_path"], trusted_owner=p["witness_uid"])
+            try:
+                parent_info = os.fstat(parent)
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if (
+                    parent_info.st_uid != p["witness_uid"]
+                    or parent_info.st_mode & 0o022
+                    or not stat.S_ISSOCK(info.st_mode)
+                    or info.st_uid != p["witness_uid"]
+                ):
+                    raise OutcomeJournalError("witness endpoint ownership unsafe")
+            finally:
+                os.close(parent)
         req = dict(
             op=op,
             nonce=secrets.token_hex(32),
@@ -570,7 +578,7 @@ class WitnessClient:
         )
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(1.0)
-            conn.connect(p["socket_path"])
+            conn.connect(address)
             if peer_uid(conn) != p["witness_uid"]:
                 raise OutcomeJournalError("witness peer uid mismatch")
             send_message(conn, req)
@@ -688,21 +696,30 @@ def serve(
     p = policy.data
     if os.geteuid() != p["witness_uid"] or not hasattr(socket, "SO_PEERCRED"):
         raise OutcomeJournalError("separate Linux witness uid required")
-    parent, name = open_parent(p["socket_path"], trusted_owner=p["witness_uid"])
+    address = (
+        abstract_address(policy)
+        if p["schema_version"] == ABSTRACT_TRUST
+        else p["socket_path"]
+    )
+    parent = None
     try:
-        info = os.fstat(parent)
-        if info.st_uid != p["witness_uid"] or info.st_mode & 0o022:
-            raise OutcomeJournalError(
-                "private witness socket parent ownership required"
-            )
+        if p["schema_version"] != ABSTRACT_TRUST:
+            parent, name = open_parent(p["socket_path"], trusted_owner=p["witness_uid"])
+            info = os.fstat(parent)
+            if info.st_uid != p["witness_uid"] or info.st_mode & 0o022:
+                raise OutcomeJournalError(
+                    "private witness socket parent ownership required"
+                )
         with (
             WitnessStore(policy, key_path, initialize=initialize) as store,
             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server,
         ):
-            retire_stale_endpoint(policy, parent, name)
-            server.bind(p["socket_path"])
-            os.chmod(p["socket_path"], 0o666)
-            inode = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if parent is not None:
+                retire_stale_endpoint(policy, parent, name)
+            server.bind(address)
+            if parent is not None:
+                os.chmod(p["socket_path"], 0o666)
+                inode = os.stat(name, dir_fd=parent, follow_symlinks=False)
             server.listen(4)
             server.settimeout(0.2)
             try:
@@ -738,11 +755,13 @@ def serve(
                             except OSError:
                                 pass
             finally:
-                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                if (current.st_dev, current.st_ino) == (inode.st_dev, inode.st_ino):
-                    os.unlink(name, dir_fd=parent)
+                if parent is not None:
+                    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) == (inode.st_dev, inode.st_ino):
+                        os.unlink(name, dir_fd=parent)
     finally:
-        os.close(parent)
+        if parent is not None:
+            os.close(parent)
 
 
 def main(argv=None):
