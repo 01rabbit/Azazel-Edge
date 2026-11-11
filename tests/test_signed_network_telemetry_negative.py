@@ -29,7 +29,11 @@ def policy(tmp_path, *, abstract=False):
             **(
                 {
                     "witness_transport": transport(
-                        value.data["scope_ref"], dict(device=5, inode=20)
+                        value.data["scope_ref"],
+                        dict(
+                            cookie=71,
+                            kernel_boot_id="095d28ff-ca7d-4b08-9e4b-e36a62db4810",
+                        ),
                     )
                 }
                 if abstract

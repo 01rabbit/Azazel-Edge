@@ -79,6 +79,13 @@ def worker_result(binding, actor):
 
 def fixture(tmp_path, monkeypatch, fault=None):
     events = []
+    # Synthetic namespace sampler only; no actual setns/cookie/role proof.
+    monkeypatch.setattr(
+        live.init.WitnessProof,
+        "sample_namespace",
+        lambda self: dict(cookie=71, kernel_boot_id=BOOT),
+    )
+    transport_context = live.init.WitnessProof(None, tmp_path)
     children = []
     init = live.init
     monkeypatch.setattr(live.material, "SRC", Path("/opt/edge400-src"))
@@ -126,6 +133,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
         kernel=BOOT,
         output=tmp_path,
         phase="live-initial",
+        transport_context=transport_context,
     )
     previous = identity()
     previous.update(pid=111, tgid=111)
@@ -247,6 +255,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
         expected_sources=current["source_sha256"],
         namespace_fd=99,
         namespace_identity=[5, 20],
+        transport_context=transport_context,
         initialization=initialized,
     )
     return args, events, children, public

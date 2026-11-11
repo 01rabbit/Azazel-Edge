@@ -153,7 +153,10 @@ def test_explicit_v4_transport_is_retained_as_public_metadata_only(
 ):
     _, _, files, calls = fixture(tmp_path, monkeypatch)
     value = json.loads(files["trust.json"])
-    selected = transport(value["scope_ref"], dict(device=5, inode=20))
+    selected = transport(
+        value["scope_ref"],
+        dict(cookie=71, kernel_boot_id="095d28ff-ca7d-4b08-9e4b-e36a62db4810"),
+    )
     value.update(schema_version="outcome-input-trust/v4", witness_transport=selected)
     files["trust.json"] = json.dumps(value).encode()
     observed = b.public_auth_binding()

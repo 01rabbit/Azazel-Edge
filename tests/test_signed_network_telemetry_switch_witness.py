@@ -26,6 +26,9 @@ pytestmark = pytest.mark.skipif(
 def fixture(tmp_path, monkeypatch):
     parent = os.getpid()
     edge = dict(device=5, inode=20)
+    sampled = dict(cookie=71, kernel_boot_id="095d28ff-ca7d-4b08-9e4b-e36a62db4810")
+    monkeypatch.setattr(s.g, "boot", lambda: sampled["kernel_boot_id"])
+    monkeypatch.setattr(s, "socket_namespace", lambda sock: dict(sampled))
     monkeypatch.setattr(s.g, "guard", lambda: None)
     monkeypatch.setattr(s.context.p, "_output", lambda output: None)
     monkeypatch.setenv(s.context.material.FLAG, "1")
@@ -55,10 +58,12 @@ def fixture(tmp_path, monkeypatch):
         data=dict(
             schema_version="outcome-input-trust/v4",
             scope_ref="synthetic-scope",
-            witness_transport=transport("synthetic-scope", edge),
+            witness_transport=transport("synthetic-scope", sampled),
         )
     )
-    return s.WitnessProof(owner, tmp_path), owner, policy, fd
+    adapter = s.WitnessProof(owner, tmp_path)
+    adapter.namespace = dict(sampled)
+    return adapter, owner, policy, fd
 
 
 def test_owned_child_calls_original_then_reaps_before_return(tmp_path, monkeypatch):
@@ -203,4 +208,87 @@ def test_inventory_failure_still_kills_reserved_owned_group(tmp_path, monkeypatc
             if not receipt["reaped"]:
                 assert real_members(receipt["pid"]) == {}
                 os.waitpid(receipt["pid"], 0)
+        os.close(fd)
+
+
+def test_metadata_operation_samples_before_original_without_parent_setns(
+    tmp_path, monkeypatch
+):
+    adapter, owner, policy, fd = fixture(tmp_path, monkeypatch)
+    adapter.namespace = None
+    marker = tmp_path / "original-only-after-sample"
+    try:
+        sampled = adapter.sample_namespace()
+        assert sampled == policy.data["witness_transport"]["network_namespace"]
+        receipt = json.loads(
+            (tmp_path / "namespace-cookie-1-receipt.json").read_bytes()
+        )
+        assert receipt["operation"] == "namespace-metadata"
+        assert receipt["namespace_observation"] == sampled
+        assert receipt["reaped"] and receipt["group_empty_before_reap"]
+        assert not marker.exists() and not owner.failed
+        assert (
+            adapter.run(
+                lambda *args: marker.write_text("original"), None, tmp_path, policy
+            )
+            is None
+        )
+        assert marker.read_text() == "original"
+        assert s._net() == dict(device=1, inode=1)
+    finally:
+        os.close(fd)
+
+
+def test_unsampled_context_cannot_authorize_original(tmp_path, monkeypatch):
+    adapter, owner, policy, fd = fixture(tmp_path, monkeypatch)
+    adapter.namespace = None
+    try:
+        with pytest.raises(AssertionError, match="current sampled transport"):
+            adapter.run(
+                lambda *args: pytest.fail("original must not run"),
+                None,
+                tmp_path,
+                policy,
+            )
+        assert list(tmp_path.iterdir()) == [] and not owner.failed
+    finally:
+        os.close(fd)
+
+
+def test_changed_cookie_is_retained_and_poisons_owned_scope(tmp_path, monkeypatch):
+    adapter, owner, policy, fd = fixture(tmp_path, monkeypatch)
+    changed = dict(adapter.namespace, cookie=72)
+    monkeypatch.setattr(s, "socket_namespace", lambda sock: changed)
+    try:
+        with pytest.raises(RuntimeError, match="cookie/boot changed"):
+            adapter.sample_namespace()
+        receipt = json.loads(
+            (tmp_path / "namespace-cookie-1-receipt.json").read_bytes()
+        )
+        assert receipt["namespace_observation"] == changed and receipt["reaped"]
+        assert owner.failed and adapter.namespace["cookie"] == 71
+    finally:
+        os.close(fd)
+
+
+def test_observed_other_boot_fails_with_child_reaped(tmp_path, monkeypatch):
+    adapter, owner, policy, fd = fixture(tmp_path, monkeypatch)
+    changed = dict(
+        adapter.namespace, kernel_boot_id="195d28ff-ca7d-4b08-9e4b-e36a62db4810"
+    )
+    monkeypatch.setattr(s, "socket_namespace", lambda sock: changed)
+    try:
+        with pytest.raises(AssertionError, match="sample boot differs"):
+            adapter.sample_namespace()
+        receipt = json.loads(
+            (tmp_path / "namespace-cookie-1-receipt.json").read_bytes()
+        )
+        assert receipt["reaped"] and owner.failed
+        assert (
+            json.loads((tmp_path / "namespace-cookie-1-result.raw").read_bytes())[
+                "namespace"
+            ]
+            == changed
+        )
+    finally:
         os.close(fd)

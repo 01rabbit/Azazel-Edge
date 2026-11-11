@@ -19,6 +19,13 @@ SHA = "a" * 64
 
 def fixture(tmp_path, monkeypatch, fault=None):
     events, sent = [], []
+    # Synthetic namespace sampler only; no actual setns/cookie/role proof.
+    monkeypatch.setattr(
+        call.WitnessProof,
+        "sample_namespace",
+        lambda self: dict(cookie=71, kernel_boot_id=BOOT),
+    )
+    transport_context = call.WitnessProof(None, tmp_path)
     monkeypatch.setattr(call.material, "SRC", Path("/opt/edge400-src"))
     source_key = str(Path(call.role.SOURCE).relative_to(call.material.SRC))
     material = dict(
@@ -245,6 +252,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
         expected_sources=material["source_sha256"],
         namespace_fd=99,
         namespace_identity=[5, 100],
+        transport_context=transport_context,
     )
     if fault == "externalpins":
         args["expected_sources"] = {source_key: "d" * 64}
@@ -760,3 +768,9 @@ def test_directory_fsync_failure_no_go_and_original_error_survives_cleanup(
     assert (tmp_path / "initializer-verified-bundle.json").exists()
     assert (tmp_path / "initializer-cleanup.json").exists()
     assert (tmp_path / "initializer-client-reap.json").exists()
+
+
+@pytest.mark.parametrize("context", [None, {}, {"cookie": 71}, object()])
+def test_imported_metadata_is_not_owned_sampler_authority(context):
+    with pytest.raises(AssertionError, match="owned Root transport context"):
+        call.namespace_observation(context)

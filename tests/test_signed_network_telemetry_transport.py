@@ -14,7 +14,12 @@ sys.path.insert(0, str(Path(__file__).parent / "real_systemd"))
 import signed_network_telemetry_transport as t
 
 
+BOOT = "095d28ff-ca7d-4b08-9e4b-e36a62db4810"
+COOKIE = dict(cookie=71, kernel_boot_id=BOOT)
+
+
 def fixture(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr(t.g, "boot", lambda: BOOT)
     monkeypatch.setattr(t.g, "UNITS", tmp_path)
     monkeypatch.setattr(t.g, "guard", lambda: None)
     monkeypatch.setattr(t.p, "_output", lambda path: None)
@@ -119,7 +124,7 @@ def fixture(tmp_path, monkeypatch, fault):
     return dict(
         scope_ref="synthetic-scope",
         trust_schema="outcome-input-trust/v4",
-        witness_transport=transport("synthetic-scope", dict(device=5, inode=20)),
+        witness_transport=transport("synthetic-scope", COOKIE),
     )
 
 
@@ -127,8 +132,8 @@ def test_stable_witness_context_excludes_mutable_protocol_counters(
     tmp_path, monkeypatch
 ):
     auth = fixture(tmp_path, monkeypatch, None)
-    first = t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial")
-    second = t.witness_binding(auth, [5, 20], tmp_path, "live-initial")
+    first = t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    second = t.witness_binding(auth, [5, 20], tmp_path, "live-initial", COOKIE)
     assert first == second and first["pid"] == 4321 and first["start_ticks"] == "123"
     assert first["witness_transport"] == auth["witness_transport"]
     assert not {"counter", "source_seq", "journal_seq"} & set(first)
@@ -156,7 +161,7 @@ def test_actual_context_gap_refuses_with_retained_root_facts(
 ):
     auth = fixture(tmp_path, monkeypatch, fault)
     with pytest.raises(AssertionError):
-        t.witness_binding(auth, [5, 20], tmp_path, "initialize-before-go")
+        t.witness_binding(auth, [5, 20], tmp_path, "initialize-before-go", COOKIE)
     assert (tmp_path / "witness-initialize-before-go.json").exists()
 
 
@@ -171,4 +176,5 @@ def test_no_legacy_or_namespace_or_path_selector_fallback(tmp_path, monkeypatch,
             [5, 21] if fault == "different-edge" else [5, 20],
             tmp_path,
             "../other" if fault == "unknown-phase" else "initialize-initial",
+            COOKIE,
         )

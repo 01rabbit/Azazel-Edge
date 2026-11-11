@@ -55,6 +55,11 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
     calls = []
     monkeypatch.setattr(main.g, "prepare", lambda *args, **kwargs: calls.append(kwargs))
     monkeypatch.setattr(main.g.Systemd, "witness", main.g.Systemd.witness)
+    monkeypatch.setattr(
+        main.WitnessProof,
+        "sample_namespace",
+        lambda self: dict(cookie=71, kernel_boot_id=BOOT),
+    )
     captured = []
 
     def write(path, data, mode):
@@ -67,11 +72,13 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
         lambda: None,
         lambda path, data: captured.append((path, data)),
         [5, 100],
-        owner=object(),
+        owner=SimpleNamespace(edge=lambda: (99, [5, 100])),
         output=tmp_path,
     )
     main.g.prepare()
-    assert calls == [{"witness_network_namespace": {"device": 5, "inode": 100}}]
+    assert calls == [
+        {"witness_network_namespace": {"cookie": 71, "kernel_boot_id": BOOT}}
+    ]
     assert prepared is not main.g.prepare
     original = witness_unit()
     payload = original
@@ -152,6 +159,11 @@ class Case:
             return self.baseline
 
         monkeypatch.setattr(main.setup, "preflight", preflight)
+        monkeypatch.setattr(
+            main.WitnessProof,
+            "sample_namespace",
+            lambda self: dict(cookie=71, kernel_boot_id=BOOT),
+        )
         case = self
 
         class Namespaces:
@@ -441,7 +453,7 @@ class Case:
                 base.data,
                 schema_version="outcome-input-trust/v4",
                 witness_transport=transport(
-                    base.data["scope_ref"], dict(device=5, inode=100)
+                    base.data["scope_ref"], dict(cookie=71, kernel_boot_id=BOOT)
                 ),
                 source_path=str(bundle / "input"),
                 journal_directory=str(bundle / "observer"),
@@ -673,3 +685,44 @@ def test_every_auth_or_cleanup_gap_withholds_result_and_attempts_outer_cleanup(
             assert (
                 fixture.output / "source-final.raw"
             ).read_bytes() == fixture.source_file.read_bytes()
+
+
+def test_failed_root_namespace_sample_precedes_all_configuration(tmp_path, monkeypatch):
+    before = (
+        main.g.write,
+        main.g.prepare,
+        main.g.Systemd.witness,
+        main.g.observer,
+        dict(main.g.ENV),
+    )
+    calls = []
+
+    def sample(self):
+        calls.append("metadata-only")
+        self.owner.failed = True
+        raise RuntimeError("synthetic unavailable namespace cookie")
+
+    monkeypatch.setattr(main.WitnessProof, "sample_namespace", sample)
+    monkeypatch.setattr(
+        main.plan.p,
+        "configure",
+        lambda: pytest.fail("no provider configuration before sampling"),
+    )
+    owner = SimpleNamespace(failed=False, edge=lambda: (99, [5, 100]))
+    with pytest.raises(RuntimeError, match="unavailable namespace cookie"):
+        main._configure(
+            lambda: pytest.fail("no observer"),
+            lambda *args: pytest.fail("no units"),
+            [5, 100],
+            owner=owner,
+            output=tmp_path,
+        )
+    assert calls == ["metadata-only"] and owner.failed
+    assert (
+        main.g.write,
+        main.g.prepare,
+        main.g.Systemd.witness,
+        main.g.observer,
+        dict(main.g.ENV),
+    ) == before
+    assert list(tmp_path.iterdir()) == []

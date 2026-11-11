@@ -15,7 +15,7 @@ from azazel_edge.outcome.journal import OutcomeJournalError
 
 sys.path.insert(0, str(Path(__file__).parent / "real_systemd"))
 import signed_network_telemetry_refusal as controller
-from test_signed_network_telemetry_fault import fixture as fault_fixture, retained_live
+from test_signed_network_telemetry_fault import fixture as fault_fixture, retained_live, BOOT
 
 
 @pytest.fixture
@@ -34,6 +34,11 @@ def fixture(tmp_path, monkeypatch, fault=None):
     live_output.rmdir()
     events = []
     main = controller.main
+    monkeypatch.setattr(
+        main.WitnessProof,
+        "sample_namespace",
+        lambda self: dict(cookie=71, kernel_boot_id=BOOT),
+    )
 
     class SyntheticSystemd:
         def cores(self):
