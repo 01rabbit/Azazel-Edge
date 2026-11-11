@@ -62,6 +62,8 @@ def _validate(manifest, safety_by_assignment, scope_acknowledgment):
             any(type(v) is not int or not 0 <= v <= 10**9 for v in safety.values())
             for safety in safety_by_assignment.values())):
         raise BenefitInputError('explicit reviewed safety for every local assignment required')
+    if any(any(safety.values()) for safety in safety_by_assignment.values()):
+        raise BenefitInputError('observed safety failure contradicts closed local pilot scope; do not run')
     # Pair identifiers determine only execution order, never filesystem paths.
     return [a for pair in sorted(pairs) for a in sorted(pairs[pair], key=lambda a: a['order'])]
 
@@ -197,8 +199,13 @@ def main(argv=None):
     parser.add_argument('new_output_directory')
     parser.add_argument('--acknowledge-local-synthetic-scope', action='store_true', required=True)
     args = parser.parse_args(argv)
-    summary = run_local_pilot(_read_json(args.manifest), args.new_output_directory,
-        safety_by_assignment=_read_json(args.safety_by_assignment), scope_acknowledgment=SCOPE)
+    try:
+        summary = run_local_pilot(_read_json(args.manifest), args.new_output_directory,
+            safety_by_assignment=_read_json(args.safety_by_assignment), scope_acknowledgment=SCOPE)
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        # Do not echo source values, paths or chained capture/parser exceptions.
+        parser.exit(1, f'Local synthetic pilot failed ({type(exc).__name__}); '
+                    'preserve any used output directory. No automatic retry.\n')
     print(json.dumps(dict(status=summary['status'], evidence_scope=summary['evidence_scope'],
                           claim_status=summary['comparison']['claim_status']), sort_keys=True))
 

@@ -26,7 +26,9 @@ output directory before invoking the runner. Registration must satisfy:
   running; the runner never changes it based on results.
 - An explicit safety JSON mapping keyed by **every** assignment ID, each with all
   `SAFETY_FIELDS` and reviewed nonnegative integer observations. No omitted,
-  null, boolean or inferred safety values are accepted.
+  null, boolean or inferred safety values are accepted. Any nonzero safety
+  observation contradicts this closed scope and stops the pilot before directory
+  creation or workload; safety-failure calculator controls remain offline.
 
 Execution order is deterministic: lexically sorted pair IDs, then the declared
 numeric order within each pair. Arm/profile/count changes are refused before
@@ -94,6 +96,10 @@ contains the ledger snapshot and existing offline comparison. The analyzer
 executes no additional child and cannot upgrade causal/defense authority.
 
 ## Failures and review
+
+CLI operational errors return nonzero with only fixed text and exception type;
+source values, paths and chained tracebacks are not printed. Private API callers
+can inspect exception causes for review.
 
 A capture, evidence-write, ledger-write or checkpoint failure stops the pilot;
 no next child is started. A run started without an admitted receipt remains

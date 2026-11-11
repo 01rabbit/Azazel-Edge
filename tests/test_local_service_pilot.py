@@ -90,10 +90,11 @@ def test_actual_pilot_starts_before_child_and_persists_full_result_before_finish
 def test_unknown_safety_or_changed_controls_refused_before_directory_or_work(tmp_path):
     from azazel_edge.benchmark import local_service_pilot as pilot
     with patch.object(pilot, 'capture_local_service', side_effect=AssertionError('no workload')):
-        for fault in ('unknown', 'missing', 'role', 'plan', 'hardware', 'budget'):
+        for fault in ('unknown', 'missing', 'unsafe', 'role', 'plan', 'hardware', 'budget'):
             value, safety = registration()
             if fault == 'unknown': safety[next(iter(safety))] = None
             elif fault == 'missing': safety.pop(next(iter(safety)))
+            elif fault == 'unsafe': safety[next(iter(safety))]['protected_escape'] = 1
             elif fault == 'role': value['arms'][0]['role'] = 'bounded_block'
             elif fault == 'plan': value['arms'][0]['config_sha256'] = 'f'*64
             elif fault == 'hardware': value['evidence_kind'] = 'hardware'
@@ -169,3 +170,19 @@ def test_report_analysis_does_not_launch_any_additional_service(tmp_path):
     with patch.object(pilot, 'analyze', side_effect=offline):
         report = execute(value, safety, tmp_path/'offline-analysis')
     assert report['status'] == 'complete' and analyzed == [True]
+
+
+def test_cli_failure_is_sanitized_and_preserves_nonzero_exit(tmp_path, capsys):
+    from azazel_edge.benchmark import local_service_pilot as pilot
+    bad = tmp_path/'malformed.json'
+    bad.write_text('{"private_source_marker": invalid}')
+    with pytest.raises(SystemExit) as exit_info:
+        pilot.main([str(bad), str(tmp_path/'safety.json'), str(tmp_path/'unused'),
+                    '--acknowledge-local-synthetic-scope'])
+    assert exit_info.value.code == 1
+    output = capsys.readouterr()
+    assert not output.out
+    assert 'JSONDecodeError' in output.err
+    assert 'private_source_marker' not in output.err
+    assert str(bad) not in output.err and 'Traceback' not in output.err
+    assert not (tmp_path/'unused').exists()
