@@ -2,6 +2,7 @@
 
 import json
 import math
+import re
 from signed_network_recording import canonical, manifest_digest, need
 
 
@@ -124,6 +125,24 @@ def recorded_root_probe(
     from azazel_edge.outcome.nft_flow_evidence import QUERY
 
     need(
+        type(source_identity) is dict
+        and set(source_identity)
+        == {"source_revision", "helper_sha256", "network_driver_sha256"},
+        "full source pin shape required",
+    )
+    for key, length in (
+        ("source_revision", 40),
+        ("helper_sha256", 64),
+        ("network_driver_sha256", 64),
+    ):
+        need(
+            type(source_identity[key]) is str
+            and re.fullmatch("[0-9a-f]{" + str(length) + "}", source_identity[key])
+            is not None,
+            "exact source pin hex required",
+        )
+
+    need(
         type(receipt) is dict
         and receipt.get("argv") == list(QUERY)
         and type(receipt.get("returncode")) is int
@@ -131,7 +150,8 @@ def recorded_root_probe(
         "exact successful root readonly query required",
     )
     need(
-        receipt.get("root_uid") == 0
+        type(receipt.get("root_uid")) is int
+        and receipt["root_uid"] == 0
         and type(receipt.get("root_pid")) is int
         and receipt["root_pid"] > 0
         and receipt.get("kernel_boot_id") == kernel_boot_id

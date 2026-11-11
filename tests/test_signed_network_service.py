@@ -97,13 +97,17 @@ def root_receipt(event):
         root_pid=123,
         kernel_boot_id=KERNEL,
         netns_inode=456,
-        source_identity={"source_revision": "a" * 40},
+        source_identity=dict(SOURCE),
         query_started_at="1970-01-01T00:01:40.100000+00:00",
         query_ended_at="1970-01-01T00:01:40.110000+00:00",
         capture_boundary="actual_root_SubprocessReadOnlyRunner_inside_owned_netns",
         source="live_root_query_recorded_once_for_pure_projection",
     )
 
+
+SOURCE = dict(
+    source_revision="a" * 40, helper_sha256="b" * 64, network_driver_sha256="c" * 64
+)
 
 KERNEL = "7be45004-1731-4b7c-8e62-59a5ddf129a4"
 
@@ -121,7 +125,7 @@ def test_original_live_outcome_and_augmented_root_projection_stay_separate(tmp_p
         event=event,
         kernel_boot_id=KERNEL,
         namespace_inode=456,
-        source_identity={"source_revision": "a" * 40},
+        source_identity=dict(SOURCE),
     )
     projection = r.replay_calls(
         r.read_calls(path),
@@ -141,7 +145,21 @@ def test_original_live_outcome_and_augmented_root_projection_stay_separate(tmp_p
 
 
 @pytest.mark.parametrize(
-    "fault", ["argv", "owner_uid", "namespace", "boot", "source", "raw", "time", "exit"]
+    "fault",
+    [
+        "argv",
+        "owner_uid",
+        "bool_uid",
+        "short_source",
+        "uppercase_source",
+        "extra_source",
+        "namespace",
+        "boot",
+        "source",
+        "raw",
+        "time",
+        "exit",
+    ],
 )
 def test_root_receipt_wrong_bindings_refuse(fault):
     from test_outcome_nft_flow_evidence import event
@@ -152,6 +170,14 @@ def test_root_receipt_wrong_bindings_refuse(fault):
         receipt["argv"][-1] = "other"
     elif fault == "owner_uid":
         receipt["root_uid"] = 61002
+    elif fault == "bool_uid":
+        receipt["root_uid"] = False
+    elif fault == "short_source":
+        receipt["source_identity"]["helper_sha256"] = "b" * 63
+    elif fault == "uppercase_source":
+        receipt["source_identity"]["helper_sha256"] = "B" * 64
+    elif fault == "extra_source":
+        receipt["source_identity"]["other"] = "unknown"
     elif fault == "namespace":
         receipt["netns_inode"] = 999
     elif fault == "boot":
@@ -170,7 +196,7 @@ def test_root_receipt_wrong_bindings_refuse(fault):
             event=e,
             kernel_boot_id=KERNEL,
             namespace_inode=456,
-            source_identity={"source_revision": "a" * 40},
+            source_identity=dict(SOURCE),
         )
 
 
@@ -211,7 +237,7 @@ def test_existing_measurement_keeps_missing_release_withheld(tmp_path):
         event=event,
         kernel_boot_id=KERNEL,
         namespace_inode=456,
-        source_identity={"source_revision": "a" * 40},
+        source_identity=dict(SOURCE),
     )
     projection = r.replay_calls(
         r.read_calls(tmp_path / "calls"),
@@ -277,5 +303,32 @@ def test_baseline_uses_recording_none_but_never_changes_native_dryrun_facts():
         ),
         confounders=[],
     )
-    assert record["edge_recording"] is None and record["linkage"]["recording_sha256"] is None
+    assert (
+        record["edge_recording"] is None
+        and record["linkage"]["recording_sha256"] is None
+    )
     assert native == {"enforcement": {"mode": "disabled", "result": "dry_run"}}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"source_revision": "a" * 40},
+        dict(SOURCE, helper_sha256="B" * 64),
+        dict(SOURCE, network_driver_sha256=False),
+    ],
+)
+def test_expected_root_source_pins_must_be_full_exact_shape(source):
+    from test_outcome_nft_flow_evidence import event
+
+    e = event()
+    receipt = root_receipt(e)
+    receipt["source_identity"] = source
+    with pytest.raises(BenefitInputError, match="source pin"):
+        service_bridge.recorded_root_probe(
+            receipt,
+            event=e,
+            kernel_boot_id=KERNEL,
+            namespace_inode=456,
+            source_identity=source,
+        )
