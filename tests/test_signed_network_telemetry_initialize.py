@@ -1,0 +1,422 @@
+"""Synthetic Root/proof/unit fixtures and private client IO, no VM/role proof."""
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent / "real_systemd"))
+import signed_network_telemetry_initialize as call
+
+BOOT = "095d28ff-ca7d-4b08-9e4b-e36a62db4810"
+SHA = "a" * 64
+
+
+def fixture(tmp_path, monkeypatch, fault=None):
+    events, sent = [], []
+    monkeypatch.setattr(call.material, "SRC", Path("/opt/edge400-src"))
+    source_key = str(Path(call.role.SOURCE).relative_to(call.material.SRC))
+    material = dict(
+        source_sha256={source_key: SHA},
+        abi_sha256="b" * 64,
+        interpreter_sha256="c" * 64,
+        role=call.role.ROLE,
+    )
+    identity = dict(
+        pid=123, tgid=123, uid=61002, apparmor=call.role.PROFILE + " (enforce)"
+    )
+    verified = dict(
+        ready=dict(identity=identity),
+        effective=dict(unit="fixed"),
+        actor=dict(evidence=dict(before=dict(MainPID="123"))),
+        metadata=dict(observed="actual-fixture"),
+    )
+    monkeypatch.setattr(call.g, "guard", lambda: events.append("guard"))
+    monkeypatch.setattr(call.g, "boot", lambda: BOOT)
+    monkeypatch.setattr(
+        call.proof.p, "_output", lambda output: events.append("private")
+    )
+    checks = []
+
+    def current(**pins):
+        assert pins == dict(abi_sha256="b" * 64, interpreter_sha256="c" * 64)
+        checks.append("read")
+        if fault == "material" or fault == "materialdrift" and len(checks) > 1:
+            raise AssertionError("synthetic material drift")
+        return deepcopy(material)
+
+    monkeypatch.setattr(call.material, "verify_current", current)
+    policy_reads = []
+
+    def policy(*args):
+        policy_reads.append(1)
+        return (
+            b'{"public":"changed"}'
+            if fault == "policydrift" and len(policy_reads) > 1
+            else b'{"public":"policy"}'
+        )
+
+    monkeypatch.setattr(call.material, "_read", policy)
+
+    def namespace(fd, expected):
+        events.append("namespace")
+        assert fd == 99 and expected == [5, 100]
+        if fault == "namespace":
+            raise AssertionError("synthetic replaced namespace")
+        return expected
+
+    monkeypatch.setattr(call, "_namespace", namespace)
+    monkeypatch.setattr(call.scope, "_state", lambda unit: {"synthetic": "absent"})
+    monkeypatch.setattr(
+        call.scope, "_known_collected", lambda value: fault != "existing"
+    )
+    monkeypatch.setattr(
+        call.lab.cg,
+        "group_empty",
+        lambda group, units: group == "/system.slice/" + call.role.INITIALIZER_UNIT
+        and units == (call.role.INITIALIZER_UNIT,),
+    )
+
+    class Stream:
+        closed = False
+
+        def fileno(self):
+            return 12
+
+        def close(self):
+            if self.closed:
+                return
+            self.closed = True
+            events.append("pipeclose")
+            if fault == "pipeclose":
+                raise OSError("synthetic pipeclose failure")
+
+    process = SimpleNamespace(
+        stdin=Stream(), stdout=Stream(), stderr=Stream(), returncode=0
+    )
+
+    def launch(argv, **kw):
+        assert argv == call.observer.role_argv("initialize", telemetry_lab_v2=True)
+        assert kw["stdin"] == kw["stdout"] == kw["stderr"] == subprocess.PIPE
+        assert kw["close_fds"] is True
+        assert kw["env"] == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
+        events.append("launch")
+        if fault == "launch":
+            raise OSError("synthetic launch failure")
+        return process
+
+    monkeypatch.setattr(call.subprocess, "Popen", launch)
+
+    def collect(mode, child, **kw):
+        assert mode == "initialize" and child is process
+        assert kw == dict(
+            expected_namespace=[5, 100],
+            kernel_boot_id=BOOT,
+            source_sha256=SHA,
+            output=tmp_path,
+        )
+        events.append("fullproof")
+        if fault in ("ready", "effective", "source", "rootproof"):
+            raise AssertionError("synthetic actual " + fault + " refusal")
+        return {} if fault == "missingbundle" else verified
+
+    monkeypatch.setattr(call.proof, "collect_pre_api", collect)
+    monkeypatch.setattr(call.select, "select", lambda *args: ([], args[1], []))
+
+    def write(fd, value):
+        assert fd == 12 and value == call.role.GO
+        saved = json.loads((tmp_path / "initializer-verified-bundle.json").read_bytes())
+        assert saved["proof"] == verified and saved["binding"]["roles"][
+            "initialize"
+        ] == call.role.observer_spec("initialize")
+        assert saved["binding_sha256"] == call.plan.manifest_digest(saved["binding"])
+        events.append("GO")
+        sent.append(value)
+        return len(value) - (fault == "shortwrite")
+
+    monkeypatch.setattr(call.os, "write", write)
+
+    def drain(child, output, deadline, prefix="initialization"):
+        assert child is process and 0 < deadline - time.monotonic() <= 20
+        events.append("drain:" + prefix)
+        if prefix == "initialization" and fault == "timeout":
+            raise TimeoutError("synthetic deadline")
+        value = dict(
+            initialized_empty=True,
+            identity=identity,
+            kernel_boot_id=BOOT,
+            boot_ref=call.plan.n.boot_reference(BOOT),
+            policy_sha256=call.plan.manifest_digest({"public": "policy"}),
+            policy_file_sha256=__import__("hashlib")
+            .sha256(b'{"public":"policy"}')
+            .hexdigest(),
+        )
+        if fault == "resultidentity":
+            value["identity"] = dict(identity, uid=0)
+        if fault == "emptyfalse":
+            value["initialized_empty"] = False
+        if fault == "boot":
+            value["kernel_boot_id"] = "wrong"
+        raw = (
+            b'{"partial"' if fault == "partial" else json.dumps(value).encode() + b"\n"
+        )
+        if fault == "exit":
+            process.returncode = 1
+        call.lab.save(output / (prefix + ".stdout"), raw)
+        call.lab.save(
+            output / (prefix + ".stderr"), b"error" if fault == "stderr" else b""
+        )
+        call.lab.save_json(
+            output / (prefix + "-client.json"), dict(returncode=process.returncode)
+        )
+        return dict(stdout=raw, stderr=b"error" if fault == "stderr" else b"")
+
+    monkeypatch.setattr(call, "_drain", drain)
+
+    def cleanup(units, tracked):
+        events.append("stop-proof")
+        assert units == (call.role.INITIALIZER_UNIT,) and set(tracked) == set(units)
+        return dict(errors=["synthetic unknown CG"] if fault == "cleanup" else [])
+
+    monkeypatch.setattr(call.lab, "cleanup", cleanup)
+
+    def reap(child):
+        events.append("reap")
+        return dict(reaped=True, forced=fault == "force", errors=[])
+
+    monkeypatch.setattr(call, "_reap_client", reap)
+    save = call.lab.save_json
+
+    def saving(path, value):
+        if path.name == "initializer-verified-bundle.json" and fault == "persist":
+            raise OSError("synthetic full-bundle persistence failure")
+        if path.name == "initializer-cleanup.json" and fault == "cleanuppersist":
+            raise OSError("synthetic cleanup persistence failure")
+        return save(path, value)
+
+    monkeypatch.setattr(call.lab, "save_json", saving)
+    args = dict(
+        abi_sha256="b" * 64,
+        interpreter_sha256="c" * 64,
+        source_sha256=SHA,
+        expected_sources=material["source_sha256"],
+        namespace_fd=99,
+        namespace_identity=[5, 100],
+    )
+    if fault == "externalpins":
+        args["expected_sources"] = {source_key: "d" * 64}
+    return args, events, sent
+
+
+def test_fixed_initializer_needs_no_four_manifest_and_persists_full_bundle_before_go(
+    tmp_path, monkeypatch
+):
+    args, events, sent = fixture(tmp_path, monkeypatch)
+    result = call.initialize(tmp_path, **args)
+    assert sent == [call.role.GO]
+    assert (
+        events.index("fullproof")
+        < events.index("GO")
+        < events.index("drain:initialization")
+        < events.index("stop-proof")
+        < events.index("reap")
+    )
+    assert result["initialization"]["initialized_empty"] is True
+    assert (
+        result["authorizes_transition"]
+        is result["experiment"]
+        is result["production_admission"]
+        is False
+    )
+    assert (tmp_path / "initializer-result.json").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "material",
+        "namespace",
+        "existing",
+        "externalpins",
+        "launch",
+        "ready",
+        "effective",
+        "source",
+        "rootproof",
+        "missingbundle",
+        "materialdrift",
+        "policydrift",
+        "persist",
+    ],
+)
+def test_pre_go_gap_never_authorizes_api_and_cleans_owned_client_independently(
+    tmp_path, monkeypatch, fault
+):
+    args, events, sent = fixture(tmp_path, monkeypatch, fault)
+    with pytest.raises((AssertionError, OSError, KeyError)):
+        call.initialize(tmp_path, **args)
+    assert sent == [] and not (tmp_path / "initializer-result.json").exists()
+    if "launch" in events:
+        assert "stop-proof" in events
+        if fault != "launch":
+            assert "reap" in events and events.count("pipeclose") == 3
+    else:
+        assert "stop-proof" not in events
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "shortwrite",
+        "timeout",
+        "partial",
+        "emptyfalse",
+        "resultidentity",
+        "boot",
+        "exit",
+        "stderr",
+        "cleanup",
+        "cleanuppersist",
+        "force",
+        "pipeclose",
+    ],
+)
+def test_post_go_or_cleanup_failure_never_publishes_success_and_still_reaps_closes(
+    tmp_path, monkeypatch, fault
+):
+    args, events, _ = fixture(tmp_path, monkeypatch, fault)
+    with pytest.raises((AssertionError, OSError, ValueError, TimeoutError)):
+        call.initialize(tmp_path, **args)
+    assert (
+        "stop-proof" in events and "reap" in events and events.count("pipeclose") == 3
+    )
+    assert not (tmp_path / "initializer-result.json").exists()
+    if fault not in ("shortwrite", "timeout", "pipeclose"):
+        assert (tmp_path / "initialization.stdout").exists() and (
+            tmp_path / "initialization.stderr"
+        ).exists()
+
+
+def test_real_private_stream_drain_is_bounded_retains_original_bytes_before_any_parser(
+    tmp_path,
+):
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys;sys.stdout.buffer.write(b'x'*70000);sys.stderr.write('private')",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with pytest.raises(AssertionError, match="reply bound"):
+            call._drain(child, tmp_path, time.monotonic() + 2)
+        assert len((tmp_path / "initialization.stdout").read_bytes()) == 65537
+        assert (tmp_path / "initialization.stderr").exists()
+        assert (tmp_path / "initialization-client.json").exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+        child.stdout.close()
+        child.stderr.close()
+
+
+@pytest.mark.parametrize("fault", [None, "inheritable", "replaced", "mode", "owner"])
+def test_namespace_handle_is_parent_only_named_fixed_root_identity(monkeypatch, fault):
+    import stat
+
+    values = dict(st_dev=5, st_ino=100, st_mode=stat.S_IFREG | 0o444, st_uid=0)
+    named = dict(values)
+    if fault == "replaced":
+        named["st_ino"] = 101
+    if fault == "mode":
+        named["st_mode"] = stat.S_IFDIR | 0o755
+    if fault == "owner":
+        named["st_uid"] = 61002
+
+    def lookup(path, **kw):
+        assert path == call.role.NSFS_TARGETS[0] and kw == dict(follow_symlinks=False)
+        return SimpleNamespace(**named)
+
+    monkeypatch.setattr(
+        call,
+        "os",
+        SimpleNamespace(
+            fstat=lambda fd: SimpleNamespace(**values),
+            stat=lookup,
+            get_inheritable=lambda fd: fault == "inheritable",
+        ),
+    )
+    if fault is None:
+        assert call._namespace(99, [5, 100]) == [5, 100]
+    else:
+        with pytest.raises(AssertionError):
+            call._namespace(99, [5, 100])
+
+
+def test_controller_itself_forcibly_reaps_a_real_owned_stuck_private_client(
+    tmp_path, monkeypatch
+):
+    spawn, draining, reaping, selecting = (
+        subprocess.Popen,
+        call._drain,
+        call._reap_client,
+        call.select.select,
+    )
+    args, events, _ = fixture(tmp_path, monkeypatch, "rootproof")
+    children = []
+
+    def launch(argv, **kw):
+        child = spawn(
+            [
+                sys.executable,
+                "-c",
+                "import signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('private-ready',flush=True);time.sleep(30)",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        marker = child.stdout.readline()
+        call.lab.save(tmp_path / "synthetic-owned-client-ready.raw", marker)
+        assert marker == b"private-ready\n"
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(call.subprocess, "Popen", launch)
+    monkeypatch.setattr(call, "_drain", draining)
+    monkeypatch.setattr(call, "_reap_client", reaping)
+
+    def refuse(*args, **kw):
+        raise AssertionError("synthetic rootproof refusal")
+
+    monkeypatch.setattr(call.proof, "collect_pre_api", refuse)
+    monkeypatch.setattr(call.select, "select", selecting)
+    try:
+        with pytest.raises(AssertionError, match="rootproof"):
+            call.initialize(tmp_path, **args)
+        child = children[0]
+        assert child.poll() is not None and child.returncode == -9
+        saved = json.loads((tmp_path / "initializer-client-reap.json").read_bytes())
+        assert saved["forced"] is True and saved["reaped"] is True and saved["errors"]
+        assert all(
+            stream.closed for stream in (child.stdin, child.stdout, child.stderr)
+        )
+        assert (
+            "stop-proof" in events
+            and not (tmp_path / "initializer-result.json").exists()
+        )
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            for stream in (child.stdin, child.stdout, child.stderr):
+                stream.close()

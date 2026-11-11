@@ -87,3 +87,51 @@ release callbacks, sampled clock/window/coverage/freshness gates and all cleanup
 First commission one current-source authenticated init/live case without a
 four-trial manifest. Only afterward may Root decide whether to review and freeze
 all four fresh boots/scopes/keys. Nothing in this interface performs that decision.
+
+## Fixed initializer caller component (not a complete commissioning runner)
+
+`signed_network_telemetry_initialize.initialize(output, *, abi_sha256,
+interpreter_sha256, source_sha256, expected_sources, namespace_fd,
+namespace_identity)` is a manual Root helper independent of a four-run manifest.
+The source pin is the externally frozen observer SHA; `expected_sources` must
+match the complete current material map, now including this caller's actual
+implementation. Root must still authenticate the full source archive externally.
+No imported success receipt, JSON flag or raw-file existence authorizes GO.
+
+The outer fresh-scope controller must perform current compilation before keys,
+provision genuine unused v4 material, start the witness first and retain ownership
+of the exact fixed EDGE descriptor. This helper verifies current protected
+material, private Root output, unused fixed initializer unit/full-PID1 cgroup and
+FD/named namespace identity. The caller's namespace FD stays parent-only/CLOEXEC;
+Popen closes non-stdio descriptors and never transfers a namespace FD to the role.
+No file, alias, profile, key, witness, core or namespace is created by this helper.
+
+Its owned three-pipe client starts the fixed new initializer. It calls the reviewed
+Root collector, then exclusively persists the **full returned verified bundle**
+`{ready,effective,actor,metadata}` plus binding and canonical binding SHA before
+sending literal GO. The binding retains actual boot/namespace, source/material,
+both fixed role specs and exact policy hashes. Current material, boot, policy and
+namespace identity are checked again before GO. Raw collector files on failure
+are preserved, but never interpreted as a successfully returned proof.
+
+Remaining stdout/stderr/return code are bounded and retained before parsing the
+unchanged genuine-empty initialization result. READY is a separate consumed and
+retained frame, not concatenated with the final JSON. The client bound is twenty
+seconds from launch; the role remains forty seconds and its GO deadline two
+seconds. These bounds are not retuned on failure. The result only describes this
+initializer and keeps transition/experiment/admission false.
+
+Every post-intent failure and normal completion independently attempts the fixed
+initializer stop/full-PID1 cgroup proof, bounded residual-stream retention, owned
+client reap and all pipe closes. Forced reap, unknown cleanup or evidence failure
+stays sticky and prevents publication of a successful initializer receipt. Raw
+initial and cleanup-residual streams remain separate unchanged artifacts. No
+arbitrary unit is stopped, no caller namespace descriptor is closed and no failed
+scope is retried. **Outer witness/core and namespace cleanup remain the outer
+controller's responsibility on every path**; initializer-only cleanup is not proof
+of whole-scope quiescence or admission.
+
+Tests use synthetic Root/unit/proof observations and real private client IO,
+including a stuck owned client killed/reaped by the helper itself. They do not
+execute a hardened initializer, policy loader, authenticated scope or VM. Live
+caller/phase dispatch and single-current-source commissioning remain unwired.
