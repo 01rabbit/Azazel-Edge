@@ -396,6 +396,21 @@ def _root_probes(snap, record, inputs, event, candidate):
     return probes["active"]
 
 
+def _require_ordered_callbacks(calls, events):
+    # Compare ALL original signed activities, including intermediate release
+    # attempts. Python numeric equality would admit bool/int/float substitutions.
+    actual = [row["data"]["event"] for row in calls["calls"] if row["kind"] == "event"]
+    signed = [
+        event
+        for event in events
+        if event.get("pipeline") in ("rust_event_engine_v1", "rust_release_engine_v1")
+    ]
+    need(
+        recording.canonical(actual) == recording.canonical(signed),
+        "exact ordered signed callback coverage",
+    )
+
+
 def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
     """Read only the protected original guest layout; never run a four-run analysis.
 
@@ -589,16 +604,7 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
                     and callback["epoch"] == record[key + "_callback_receipt_epoch"],
                     "actual signed callback/epoch missing",
                 )
-        need(
-            [r["data"]["event"] for r in calls["calls"] if r["kind"] == "event"]
-            == [
-                e
-                for e in events
-                if e.get("pipeline")
-                in ("rust_event_engine_v1", "rust_release_engine_v1")
-            ],
-            "exact ordered signed callback coverage",
-        )
+        _require_ordered_callbacks(calls, events)
         clock = qualify_clock(
             kernel_boot_id=record["kernel_boot_id"],
             observer_boot_id=context["kernel_boot_id"],

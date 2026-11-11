@@ -336,3 +336,49 @@ def test_import_snapshot_refuses_unsafe_file(tmp_path, fault):
     with pytest.raises(Exception):
         reader._Snapshot(dict(raw_sha256={})).raw(path, os.geteuid())
     assert actual.read_bytes() == b"unchanged"
+
+
+@pytest.mark.parametrize(
+    "original,substitute", [(1, True), (0, False), (1, 1.0), (1.0, 1)]
+)
+def test_intermediate_release_type_substitution_withholds_unchanged_calls(
+    original, substitute
+):
+    from copy import deepcopy
+    from azazel_edge.benchmark.benefit import BenefitInputError
+
+    native = decision()
+    intermediate = release(native)
+    intermediate["release"]["failed_count"] = original
+    final = release(native)
+    events = [native, intermediate, final]
+    calls = dict(
+        calls=[dict(kind="event", data=dict(event=deepcopy(e))) for e in events]
+    )
+    reader._require_ordered_callbacks(calls, events)  # Complete exact chain qualifies.
+    calls["calls"][1]["data"]["event"]["release"]["failed_count"] = substitute
+    # Python equality is the precise regression; decision and final release are unchanged.
+    assert [row["data"]["event"] for row in calls["calls"]] == events
+    before_calls, before_events = deepcopy(calls), deepcopy(events)
+    with pytest.raises(
+        BenefitInputError, match="exact ordered signed callback coverage"
+    ):
+        reader._require_ordered_callbacks(calls, events)
+    assert reader.recording.canonical(calls) == reader.recording.canonical(before_calls)
+    assert reader.recording.canonical(events) == reader.recording.canonical(
+        before_events
+    )
+
+
+def test_complete_callback_order_and_multiplicity_remain_exact():
+    from azazel_edge.benchmark.benefit import BenefitInputError
+
+    native = decision()
+    final = release(native)
+    events = [native, final]
+    for rows in ([final, native], [native, final, final], [native]):
+        calls = dict(calls=[dict(kind="event", data=dict(event=e)) for e in rows])
+        with pytest.raises(
+            BenefitInputError, match="exact ordered signed callback coverage"
+        ):
+            reader._require_ordered_callbacks(calls, events)
