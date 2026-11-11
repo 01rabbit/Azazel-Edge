@@ -228,3 +228,70 @@ The eventual first slice must require the actual signed release in an original
 recorded collector callback with its unchanged real receipt epoch. Missing or
 missed callbacks withhold the join while preserving service/provider facts; the
 first slice will not invent or supplement an observer receipt.
+
+## Manual preparation segment (no assignment run yet)
+
+`signed_network_phase.prepare_assignment(expected_manifest_sha256,
+expected_start_head)` now implements only fresh preparation. Both expected pins
+are supplied out of band by the root controller. Its only script entrypoint is
+`--namespace <manifest-sha256> <start-head>` for the fixed existing-capability root
+namespace-preparation unit; it is not a general preparation/run CLI. The old
+untracked `signed_network_measure.py` remains unused and must not be imported.
+
+Mandatory operator sequence **before any assignment preparation**:
+
+1. Review and freeze the complete source revision and all four assignments. The
+   root controller constructs the manifest using existing `signed_network_plan`,
+   freezes it through existing `RunLedger`, and starts exactly one assignment in
+   the frozen order. Record the returned start head and unique run ID; use no new
+   private accounting implementation.
+2. Root verifies the frozen `git archive` SHA on the host **and guest**, extracts
+   root-owned source without group/other writes, and stages protected
+   `SOURCE_REVISION` with exactly that commit (optional final newline). Archive
+   checks and the staging receipt are an external operator trust boundary for
+   **all consumed source**, not an internal cryptographic source-tree assertion.
+   The phase helper records protected direct-file hashes but does not substitute
+   those self-observed hashes or the revision text for external archive checks.
+   Use only the unused dependency template and independent cold boots/scopes.
+3. Stage protected single-link root-owned files at
+   `/var/lib/edge400-signed-network-manifest.json` and
+   `/var/lib/edge400-signed-network-ticket.json`. The manifest is unchanged from
+   the existing plan/ledger contract. The ticket has exactly
+   `manifest_sha256`, `assignment_id`, `run_id`, `start_head`. The expected manifest
+   digest is existing `manifest_digest(manifest)` (canonical JSON content), while
+   raw file hashes are retained separately. Root passes the exact out-of-band
+   manifest digest and start head to `prepare_assignment`.
+4. The function verifies those pins, assignment, core bytes/config, exact source
+   revision and protected direct files before mutation. It then checks the marked
+   root/offline VM, unused material/unit/profile/namespace slots, full PID1
+   cgroup2 view and empty fixed cgroups, no unmanaged core, and the actual isolated
+   runtime API preflight. No `PYTHONPATH` fallback is supplied. The runtime's
+   root-protected single-path `.pth` prerequisite must already be staged.
+5. Existing account/profile preparation and `configure_assignment` install the
+   exact protected-policy writer before provider configuration. The fixed root
+   preparation unit retains only the existing SYS_ADMIN/NET_ADMIN bound and runs
+   unchanged `Assets.setup` with the three fixed names. Original creation intents,
+   confirmed device/inode identities, actual boot, foreign canary and parent-state
+   snapshot are saved before provisioning any registered scope. No existing name
+   is removed. The limited-capability namespace child does not need a new PID1
+   inspection grant: the root controller already checked the full cgroup view.
+6. Existing `guest.prepare_lab` provisions a genuinely new scope and starts the
+   witness first. Its callback normalizes traversal only on the owned lab base
+   just created by this invocation, then invokes the real confined initializer.
+   The callback never supports recovery/reset and retains raw initialization
+   output even on a timeout. The exact materialized v4 environment and protected
+   policy hash are checked before ordinary-core start. The existing empty-EVE
+   ordinary-core → reviewed `Switch.plan/apply` → actual provider identity sequence
+   follows; an inactive Switch is never used to newly enable enforcement.
+
+`prepared.json` retains input/ticket/file hashes, actual boot, public trust and
+registration, isolated preflight and native PID. It labels preparation only;
+there is no service measurement, quiescence, efficacy or production-admission
+claim. Any failure after mutation attempts all fixed actor stops before reopening
+or deleting namespaces. Only verified stopped actors permit the existing
+identity-fenced cleanup; unknown identities/state retain evidence and annotate the
+original failure. Never repair or retry a used/failed assignment.
+
+The timed assignment runner and authenticated read-only join are still pending.
+Nothing in this segment authorizes starting workload or freezing an actual
+experiment before independent review of the complete frozen source.
