@@ -23,6 +23,8 @@ def test_verified_runner_mirror_list_rewrites_only_known_ubuntu_uris():
     )
     expected = original.replace("http://azure.archive.ubuntu.com/ubuntu/", mirror.TARGET + "/").replace(
         "https://archive.ubuntu.com/ubuntu/", mirror.TARGET + "/"
+    ).replace(
+        "https://security.ubuntu.com/ubuntu/", mirror.TARGET + "/"
     )
     assert mirror.normalize(original, "apt-mirrors.txt") == expected
     assert mirror.normalize(expected, "apt-mirrors.txt") == expected

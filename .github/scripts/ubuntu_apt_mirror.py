@@ -7,7 +7,7 @@ import stat
 import sys
 
 FILES = ("/etc/apt/apt-mirrors.txt", "/etc/apt/sources.list", "/etc/apt/sources.list.d/ubuntu.sources")
-TARGET = "https://security.ubuntu.com/ubuntu"
+TARGET = "https://mirrors.edge.kernel.org/ubuntu"
 URI = re.compile(r"(?<!\S)https?://(?:azure\.archive|archive|security)\.ubuntu\.com/ubuntu(/?)(?=\s|$)")
 
 
