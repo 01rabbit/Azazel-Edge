@@ -44,9 +44,10 @@ SOURCE_FILES = (
     "signed_network_telemetry_refusal.py",
     "signed_network_telemetry_live.py",
     "signed_network_telemetry_run.py",
-    "signed_network_run.py",
-    "signed_network_recording.py",
-    "signed_network_service.py",
+    "signed_network_scope.py",
+    "provider.py",
+    "armor.py",
+    "guest.py",
     "signed_network_observer.py",
     "telemetry_isolation_contract.py",
     "telemetry_isolation_preflight.py",
@@ -65,6 +66,11 @@ def pin(value):
 def source_paths():
     return [SRC / "tests/real_systemd" / name for name in SOURCE_FILES] + [
         SOURCE_POLICY,
+        SRC / "tests/network_measure_driver.py",
+        SRC / "tests/network_measure_peer.py",
+        SRC / "tests/fixtures/signed_network_observer_policy.json",
+        SRC / "tests/real_systemd/edge400.apparmor",
+        SRC / "tests/real_systemd/edge400-provider.apparmor",
         *(
             SRC / "py/azazel_edge/outcome" / (name + ".py")
             for name in (
