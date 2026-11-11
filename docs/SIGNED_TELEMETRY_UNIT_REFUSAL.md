@@ -1,4 +1,4 @@
-# Fixed inherited initializer-material negative (unexecuted)
+# Fixed inherited initializer-material negative
 
 `refuse_inherited_initializer_material(output, **five_external_pins)` is an
 explicit manual test helper. It requires a fresh protected offline VM,
@@ -41,9 +41,44 @@ is made. All transition, experiment, measurement and admission flags remain fals
 Focused tests use synthetic actor/Root ownership facts and actual private files
 and the unchanged material guard. A separate Root-only physical-file regression
 checks exclusive creation, exact permissions under umask 077, identity continuity
-and no retry. No VM case has been executed for this source. This proves neither
-arbitrary systemd-hook safety nor runtime isolation, admission or efficacy; it
+and no retry. The reviewed integration passed 179 focused checks in offline Linux
+as explicit UID0 with all capabilities dropped, including that physical-file case.
+This proves neither arbitrary systemd-hook safety nor admission or efficacy; it
 starts no workload, native Source producer, Switch or four-assignment experiment.
+
+## Scoped virtual result — 2026-11-12 JST
+
+One fresh offline Ubuntu 24.04 aarch64 QEMU VM with real systemd and enforcing
+AppArmor executed the case once at source
+`6a2ad58767753ae15b1e51c227cc891f58582fc3`. The externally verified source archive
+SHA256 was `e45173b1fde222d0a0f1db44b72db246d724a66c948c7b091148604ca4126084`;
+boot was `a7a19a92-bf27-432c-90dd-7625680890c2`. It returned
+`inherited_initializer_material_refusal_complete` and the separate Root operator
+returned `fixed_fixture_refusal_and_cleanup_verified`.
+
+The existing passive witness-listener barrier completed before injection, with a
+stable owned PID/start/namespace binding. It connected to no endpoint and made
+no Source RPC; its Root metadata is not cryptographic observer-label binding.
+The initializer raised exactly the expected inherited-material refusal. Only the
+four original successful unit-path query files existed under `initialize/`;
+there was no initializer intent, launch/PREAPI/GO result, live result or execution
+marker. The public Source stayed zero bytes, the observer directory stayed empty,
+and original witness-anchor bytes and identities were unchanged.
+
+The injected foreign directory/file retained their original identities, modes,
+hash and bytes. Final owner receipts and separate independent observations agreed:
+all seven actor groups empty, all three owned namespaces absent, no core process,
+and unchanged parent networking. Both owned Root children were reaped with empty
+groups and no forced cleanup. The intermediate pre-delete namespace receipt is
+explicitly incomplete; only the distinct final receipt records completion.
+
+Original diagnostic/public artifacts are retained privately without signing keys.
+Evidence archive SHA256:
+`88d6d7c760aa8a48cff17d70167aac8f4d13d850021eef980213b9ea957a999b`
+(614,400 bytes). The used VM was stopped; no retry or scope repair occurred.
+This accepts only this fixed refusal and owned-cleanup case. The foreign fixture
+is an intentional retained delta. Production activation, arbitrary hook resistance,
+physical durability and the withheld comparative-benefit gates remain open.
 
 Fresh fixture/marker and final marker absence use `lstat`: only
 `FileNotFoundError` means absent. Permission/I/O errors remain unknown and block
