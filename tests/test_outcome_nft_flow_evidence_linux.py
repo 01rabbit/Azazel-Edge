@@ -33,6 +33,45 @@ QUERY = ("nft", "-j", "list", "chain", "inet", "azazel_edge", "throttle")
 SCOPE = "root_local_kernel_mechanism_only_not_production_observer_or_effect"
 
 
+def _source_identity():
+    expected = os.environ.get("EDGE_NFT_FLOW_PROOF_SOURCE_COMMIT", "")
+    network.require(re.fullmatch(r"[0-9a-f]{40}", expected), "reviewed source revision required")
+    source_root = Path(__file__).resolve().parents[1]
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    directory = os.open("/", flags | os.O_DIRECTORY)
+    try:
+        for name in source_root.parts[1:]:
+            info = os.fstat(directory)
+            network.require(info.st_uid == 0 and not info.st_mode & 0o022,
+                            "source revision requires protected root-owned ancestors")
+            child = os.open(name, flags | os.O_DIRECTORY, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        info = os.fstat(directory)
+        network.require(info.st_uid == 0 and not info.st_mode & 0o022, "source root is not protected")
+        fd = os.open("SOURCE_REVISION", flags | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            before = os.fstat(fd)
+            network.require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+                            and not before.st_mode & 0o022 and before.st_size <= 41,
+                            "protected plain SOURCE_REVISION required")
+            raw = os.read(fd, 42)
+            after = os.fstat(fd)
+            named = os.stat("SOURCE_REVISION", dir_fd=directory, follow_symlinks=False)
+            fingerprint = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_mode,
+                                          value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            network.require(fingerprint(before) == fingerprint(after) == fingerprint(named)
+                            and raw in (expected.encode(), (expected + "\n").encode()),
+                            "SOURCE_REVISION mismatch or identity changed")
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory)
+    return dict(source_revision=expected,
+                helper_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                network_driver_sha256=hashlib.sha256(Path(network.__file__).read_bytes()).hexdigest())
+
+
 def _guard():
     network.require(os.environ.get(FLAG) == "1" and sys.platform.startswith("linux") and os.geteuid() == 0,
                     "explicit root Linux kernel-proof opt-in required")
@@ -49,6 +88,7 @@ def _guard():
     expected = os.environ.get("EDGE_NETWORK_MEASURE_CORE_SHA256", "")
     network.require(re.fullmatch(r"[0-9a-f]{40}", source) and re.fullmatch(r"[0-9a-f]{64}", expected),
                     "reviewed source/core pins required")
+    identity = _source_identity()
     tools = network.prerequisites(True, expected)
     image = network.CORE.read_bytes()
     machine = {"aarch64": 183, "arm64": 183, "x86_64": 62, "amd64": 62}.get(platform.machine().lower())
@@ -56,7 +96,8 @@ def _guard():
                     and int.from_bytes(image[18:20], "little") == machine,
                     "reviewed core must be native ELF64 for this VM")
     return dict(reviewed_source_commit=source, core_sha256=expected, tool_sha256=tools,
-                native_machine=platform.machine(), kernel=platform.release())
+                native_machine=platform.machine(), kernel=platform.release(),
+                kernel_boot_id=network.read_boot_id(), **identity)
 
 
 def _probe_child():
@@ -64,6 +105,8 @@ def _probe_child():
     from azazel_edge.outcome.postcondition import SubprocessReadOnlyRunner
     network.require(sys.argv[1:] == ["--root-readonly-nft"] and os.geteuid() == 0 and tuple(flow.QUERY) == QUERY,
                     "fixed root read-only nft child only")
+    identity = _source_identity()
+    kernel_boot = network.read_boot_id()
     binary = shutil.which("nft", path="/usr/sbin:/usr/bin:/sbin:/bin")
     network.require(binary is not None, "trusted nft binary unavailable")
     started = datetime.now(timezone.utc).isoformat()
@@ -72,13 +115,14 @@ def _probe_child():
     print(json.dumps(dict(argv=list(result.argv), returncode=result.returncode,
                           stdout=result.stdout, stderr=result.stderr,
                           query_started_at=started, query_ended_at=ended,
-                          root_pid=os.getpid(), root_uid=os.geteuid(),
+                          root_pid=os.getpid(), root_uid=os.geteuid(), kernel_boot_id=kernel_boot,
+                          source_identity=identity,
                           netns_inode=os.stat("/proc/self/ns/net").st_ino,
                           nft_binary_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
                           capture_boundary="actual_root_SubprocessReadOnlyRunner_inside_owned_netns")), flush=True)
 
 
-def _query(assets, label):
+def _query(assets, label, pins):
     child = assets.spawn("edge", [sys.executable, "-I", str(Path(__file__).resolve()), "--root-readonly-nft"])
     network.write_new(assets.work / (label + "-probe-launch.json"), dict(
         actual_child_argv=list(map(str, child.args)), child_pid=child.pid,
@@ -111,7 +155,10 @@ def _query(assets, label):
     network.require(child.returncode == 0 and receipt.get("argv") == list(QUERY)
                     and receipt.get("returncode") == 0 and receipt.get("root_uid") == 0
                     and receipt.get("root_pid") == child.pid
-                    and receipt.get("netns_inode") == assets.created[assets.names["edge"]][2],
+                    and receipt.get("netns_inode") == assets.created[assets.names["edge"]][2]
+                    and receipt.get("kernel_boot_id") == pins["kernel_boot_id"] == network.read_boot_id()
+                    and receipt.get("source_identity") == {key: pins[key] for key in
+                         ("source_revision", "helper_sha256", "network_driver_sha256")},
                     "independent root query identity/result mismatch")
     start, end = (datetime.fromisoformat(receipt[key]) for key in ("query_started_at", "query_ended_at"))
     network.require(start.utcoffset() is not None and end.utcoffset() is not None and start <= end,
@@ -153,13 +200,14 @@ def test_actual_native_nft_flow_mechanism_and_owned_release(tmp_path):
     for name in ("nft_flow_evidence.py", "adapter.py", "ownership.py", "postcondition.py"):
         api_hashes[name] = hashlib.sha256((Path(flow.__file__).parent / name).read_bytes()).hexdigest()
     network.write_new(work / "intent.json", dict(scope=SCOPE, pins=pins, api_sha256=api_hashes,
+                      kernel_boot_id=pins["kernel_boot_id"],
                       traffic_started=False, production_observer_used=False, production_origin_admitted=False))
     before = network.root_snapshot()
     network.write_new(work / "root-before.json", before)
     assets = network.Assets(work)
     try:
         assets.setup()
-        baseline = _query(assets, "before-apply")
+        baseline = _query(assets, "before-apply", pins)
         foreign = _foreign(flow.parse_readback(baseline["stdout"]), assets.foreign)
         assets.start_core(True)
         with assets.eve.open("a") as stream:
@@ -170,7 +218,7 @@ def test_actual_native_nft_flow_mechanism_and_owned_release(tmp_path):
                                           and row.get("enforcement", {}).get("result") == "applied", 10)
         network.write_new(work / "original-apply-event.json", dict(original_core_event_line=original_line,
                           original_source_file="events.jsonl", parsed_event=event))
-        applied = _query(assets, "applied")
+        applied = _query(assets, "applied", pins)
         payload = flow.parse_readback(applied["stdout"])
         bundle = from_rust_event(event)
         execution_before = asdict(bundle.execution)
@@ -202,7 +250,7 @@ def test_actual_native_nft_flow_mechanism_and_owned_release(tmp_path):
                         "core did not report verified owned release")
         network.write_new(work / "original-release-event.json", dict(original_core_event_line=released_line,
                           original_source_file="events.jsonl", parsed_event=released))
-        after = _query(assets, "released")
+        after = _query(assets, "released", pins)
         remaining = flow.parse_readback(after["stdout"])
         network.require(flow.readback_matches(remaining, scope) is False and _foreign(remaining, assets.foreign) == foreign,
                         "independent release readback failed or changed foreign canary")

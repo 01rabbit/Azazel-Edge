@@ -12,7 +12,14 @@ Root must review and freeze the combined source containing the native
 `nft_flow_evidence` adapter/postcondition/ownership implementation. Stage that
 source, its reviewed native core binary and tools in a **fresh clone of an unused
 disposable offline VM template**. Do not reuse another proof's active state,
-output, namespaces or receipts. The driver never installs a provider/unit/policy,
+output, namespaces or receipts. Root must stage a plain root-owned, single-link,
+non-group/world-writable `SOURCE_REVISION` file at the protected physical source
+root, containing the exact reviewed combined commit (optional final newline).
+It must match `EDGE_NFT_FLOW_PROOF_SOURCE_COMMIT`; mismatches, symlinks, writable
+ancestors or changed file identity refuse. No `.git` directory is needed. Root
+also retains/verifies the frozen source archive SHA-256 independently outside
+the VM. The helper and reused network driver's actual file SHA-256 values are
+recorded and matched across controller/query receipts. The driver never installs a provider/unit/policy,
 adds observer capabilities, repairs a failure or fetches dependencies.
 
 Provision `/etc/edge-nft-flow-proof-vm` as a root-owned regular single-link file,
@@ -49,7 +56,9 @@ nft -j list chain inet azazel_edge throttle
 
 The probe retains full raw stdout/stderr/return code, logical query, actual
 namespace-exec child arguments, PID/UID/namespace inode, nft binary hash and
-actual query start/end UTC times. Chain headers, duplicate rules and original
+actual query start/end UTC times. The actual validated kernel boot UUID is
+retained in intent and every query receipt and must agree, together with the
+protected source revision and helper/network-driver hashes. Chain headers, duplicate rules and original
 JSON are not filtered or reconstructed. The pure `RecordedProbeRunner` then
 projects this explicitly recorded live receipt through `from_rust_event` and
 the existing ownership-aware `verify_mechanism_postcondition`, using the actual
