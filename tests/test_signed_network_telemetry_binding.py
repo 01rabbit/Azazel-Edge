@@ -7,6 +7,7 @@ import sys
 
 import pytest
 from azazel_edge.outcome.input_auth import TrustPolicy
+from azazel_edge.outcome.input_transport import transport
 from auth_input_helpers import make_policy
 
 sys.path.insert(0, str(Path(__file__).parent / "real_systemd"))
@@ -145,3 +146,17 @@ def test_public_paths_are_only_metadata_never_additional_read_selectors(
     assert result["source_path"] == value["source_path"]
     assert result["journal_directory"] == value["journal_directory"]
     assert len(calls) == 3
+
+
+def test_explicit_v4_transport_is_retained_as_public_metadata_only(
+    tmp_path, monkeypatch
+):
+    _, _, files, calls = fixture(tmp_path, monkeypatch)
+    value = json.loads(files["trust.json"])
+    selected = transport(value["scope_ref"], dict(device=5, inode=20))
+    value.update(schema_version="outcome-input-trust/v4", witness_transport=selected)
+    files["trust.json"] = json.dumps(value).encode()
+    observed = b.public_auth_binding()
+    assert observed["trust_schema"] == "outcome-input-trust/v4"
+    assert observed["witness_transport"] == selected
+    assert observed["trust_sha256"] == TrustPolicy(value).digest and len(calls) == 3

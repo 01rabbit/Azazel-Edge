@@ -8,6 +8,9 @@ external pins, no CLI or automatic launcher. No authenticated commissioning case
 has run for this changed source. The completed v6 stateless precheck remains
 compatibility evidence at its own source, not admission for this connection.
 
+Current explicit abstract transport and Root witness/namespace adapter boundaries
+are described in [the lab transport guide](SIGNED_TELEMETRY_ABSTRACT_LAB.md).
+
 Read-only evidence validation now requires **at least one recorded telemetry
 sample with all four coverage flags true**, preserving the original call epoch.
 Initialization, PRE-API READY or a terminal receipt cannot substitute for that

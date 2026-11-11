@@ -8,7 +8,9 @@ are bounded. No key, signed source contents, journal, sidecar or endpoint is rea
 or opened; configured paths are returned as metadata only.
 
 The existing pure `TrustPolicy` parser checks its exact public schema, path and
-role types. This lab requires the fixed v3 trust roles 61001/61002/0. Origin JSON
+role types. The snapshot accepts v3/v4 with fixed roles 61001/61002/0; v4 also
+retains explicit witness-transport metadata. Current abstract lab callers require
+v4 and separately verify the actual owned witness namespace/identity. Origin JSON
 is strictly decoded (duplicates/nonfinite values refuse); its declared v4
 live-core mode and selected public scope/key context must agree with trust. This
 is deliberately not the full origin-registration/environment/native-image

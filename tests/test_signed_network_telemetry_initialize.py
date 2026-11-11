@@ -69,6 +69,9 @@ def fixture(tmp_path, monkeypatch, fault=None):
 
     monkeypatch.setattr(call, "public_auth_binding", public_binding)
     monkeypatch.setattr(
+        call, "witness_binding", lambda *args: {"synthetic_stable_witness": True}
+    )
+    monkeypatch.setattr(
         call.proof.p, "_output", lambda output: events.append("private")
     )
     checks = []

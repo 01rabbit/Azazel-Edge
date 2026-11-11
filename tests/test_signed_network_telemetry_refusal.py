@@ -34,6 +34,15 @@ def fixture(tmp_path, monkeypatch, fault=None):
     live_output.rmdir()
     events = []
     main = controller.main
+
+    class SyntheticSystemd:
+        def cores(self):
+            return []
+
+        def witness(self, *args):
+            raise AssertionError("negative fixture must never invoke sealed Switch")
+
+    monkeypatch.setattr(controller.g, "Systemd", SyntheticSystemd)
     monkeypatch.setattr(controller.g, "BASE", tmp_path / "scope")
     monkeypatch.setattr(controller.g, "UNITS", tmp_path / "units")
     controller.g.UNITS.mkdir()

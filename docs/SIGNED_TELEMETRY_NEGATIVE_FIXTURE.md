@@ -2,7 +2,7 @@
 
 `synthetic_prepare_frame(policy, *, kernel_boot_id, session_ref)` reads no files,
 keys, source data or endpoints and launches nothing. It takes only the current
-public v3 `TrustPolicy`, canonical raw kernel UUID and fresh lowercase native
+public v3/v4 `TrustPolicy`, canonical raw kernel UUID and fresh lowercase native
 session reference. It returns an immutable `SyntheticPrepare` wrapper explicitly
 marked `SYNTHETIC_INVALID_SIGNATURE_PREPARE`, containing one canonical newline-
 terminated source envelope with matching public scope/stream/registration and

@@ -26,6 +26,7 @@ from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier
 from azazel_edge.outcome.input_terminal import TerminalControlStop
 from azazel_edge.outcome.journal import _json
 from azazel_edge.outcome import input_live
+from azazel_edge.outcome.input_transport import transport
 
 sys.path.insert(0, str(Path(__file__).parent / "real_systemd"))
 import signed_network_telemetry_commission as main
@@ -51,6 +52,9 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
     monkeypatch.setattr(main.g, "observer", None)
     monkeypatch.setattr(main.plan.p, "configure", lambda: None)
     prepared = main.g.prepare
+    calls = []
+    monkeypatch.setattr(main.g, "prepare", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(main.g.Systemd, "witness", main.g.Systemd.witness)
     captured = []
 
     def write(path, data, mode):
@@ -59,8 +63,16 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
         path.chmod(mode)
 
     monkeypatch.setattr(main.g, "write", write)
-    main._configure(lambda: None, lambda path, data: captured.append((path, data)))
-    assert main.g.prepare is prepared
+    main._configure(
+        lambda: None,
+        lambda path, data: captured.append((path, data)),
+        [5, 100],
+        owner=object(),
+        output=tmp_path,
+    )
+    main.g.prepare()
+    assert calls == [{"witness_network_namespace": {"device": 5, "inode": 100}}]
+    assert prepared is not main.g.prepare
     original = witness_unit()
     payload = original
     if fault == "wrong":
@@ -76,13 +88,16 @@ def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
         assert not target.exists() and captured == []
         return
     main.g.write(target, payload)
-    expected = original.replace(" -I -m ", " -I -B -m ")
+    expected = original.replace(" -I -m ", " -I -B -m ") + (
+        "\n[Service]\nNetworkNamespacePath=" + main.setup.role.NSFS_TARGETS[0] + "\n"
+    )
     assert target.read_bytes() == expected.encode() == captured[0][1].encode()
     assert target.stat().st_mode & 0o7777 == 0o644
     core = tmp_path / main.g.UNIT
     main.g.write(core, original)
     assert core.read_bytes() == original.encode() == captured[1][1].encode()
-    assert main.g.prepare is prepared
+    with pytest.raises(AssertionError, match="fixed owned namespace"):
+        main.g.prepare(witness_network_namespace={"device": 5, "inode": 101})
 
 
 class Case:
@@ -231,9 +246,17 @@ class Case:
         monkeypatch.setattr(main.g, "boot", lambda: BOOT)
         monkeypatch.setattr(main.g, "prepare_lab", self.provision)
         monkeypatch.setattr(main.initializer, "initialize", self.initialize)
-        monkeypatch.setattr(
-            main.g, "Systemd", lambda: SimpleNamespace(cores=lambda: [{"pid": 111}])
-        )
+
+        class SyntheticSystemd:
+            def cores(self):
+                return [{"pid": 111}]
+
+            def witness(self, *args):
+                raise AssertionError(
+                    "synthetic Switch must not claim actual witness execution"
+                )
+
+        monkeypatch.setattr(main.g, "Systemd", SyntheticSystemd)
         monkeypatch.setattr(
             main.g, "systemctl", lambda *a: self.events.append("manager:" + ":".join(a))
         )
@@ -416,7 +439,10 @@ class Case:
         self.trust = TrustPolicy(
             dict(
                 base.data,
-                schema_version="outcome-input-trust/v3",
+                schema_version="outcome-input-trust/v4",
+                witness_transport=transport(
+                    base.data["scope_ref"], dict(device=5, inode=100)
+                ),
                 source_path=str(bundle / "input"),
                 journal_directory=str(bundle / "observer"),
                 anchor_directory=str(bundle / "witness/anchors"),

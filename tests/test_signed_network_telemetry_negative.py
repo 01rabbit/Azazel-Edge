@@ -7,6 +7,7 @@ import sys
 
 import pytest
 from azazel_edge.outcome.input_auth import TrustPolicy, SourceVerifier
+from azazel_edge.outcome.input_transport import transport
 from azazel_edge.outcome.journal import OutcomeJournalError, ZERO_HASH, _json
 from auth_input_helpers import make_policy
 
@@ -16,23 +17,35 @@ import signed_network_telemetry_negative as negative
 BOOT = "095d28ff-ca7d-4b08-9e4b-e36a62db4810"
 
 
-def policy(tmp_path):
+def policy(tmp_path, *, abstract=False):
     value, *_ = make_policy(tmp_path, producer=61001, observer=61002, witness=0)
     return TrustPolicy(
         dict(
             value.data,
-            schema_version="outcome-input-trust/v3",
+            schema_version="outcome-input-trust/v4"
+            if abstract
+            else "outcome-input-trust/v3",
             origin_registration_sha256="e" * 64,
+            **(
+                {
+                    "witness_transport": transport(
+                        value.data["scope_ref"], dict(device=5, inode=20)
+                    )
+                }
+                if abstract
+                else {}
+            ),
         )
     )
 
 
 @pytest.mark.parametrize("session", ["1" * 32, "a" * 32])
 @pytest.mark.parametrize("boot", [BOOT, "a95d28ff-ca7d-4b08-9e4b-e36a62db4810"])
+@pytest.mark.parametrize("abstract", [False, True], ids=["pathname", "abstract"])
 def test_real_source_verifier_reaches_exact_crypto_refusal_without_acceptance(
-    tmp_path, session, boot
+    tmp_path, session, boot, abstract
 ):
-    public = policy(tmp_path)
+    public = policy(tmp_path, abstract=abstract)
     fixture = negative.synthetic_prepare_frame(
         public, kernel_boot_id=boot, session_ref=session
     )

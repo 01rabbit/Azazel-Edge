@@ -105,6 +105,9 @@ def fixture(tmp_path, monkeypatch, fault=None):
         origin_file_sha256="e" * 64,
     )
     monkeypatch.setattr(init, "public_auth_binding", lambda: deepcopy(public))
+    monkeypatch.setattr(
+        init, "witness_binding", lambda *args: {"synthetic_stable_witness": True}
+    )
     monkeypatch.setattr(init, "_namespace", lambda fd, expected: list(expected))
     monkeypatch.setattr(
         init,
@@ -117,7 +120,12 @@ def fixture(tmp_path, monkeypatch, fault=None):
     )
     monkeypatch.setattr(live.lab.cg, "group_empty", lambda *args: True)
     binding, _ = init._current_binding(
-        current=current, namespace=[5, 20], source_sha256=SHA, kernel=BOOT
+        current=current,
+        namespace=[5, 20],
+        source_sha256=SHA,
+        kernel=BOOT,
+        output=tmp_path,
+        phase="live-initial",
     )
     previous = identity()
     previous.update(pid=111, tgid=111)
