@@ -248,7 +248,7 @@ window/coverage/release/attribution/5 ms gates and withhold behavior remain unch
 assignments in the frozen two-pair order, with distinct ephemeral producer and
 witness keys, boots, scopes, sessions and registrations. It uses real Ed25519
 verification, public registration checks (including physical native-input paths
-when run as root), journal-prefix signatures, collector calls and their durable
+when run as root), journal-prefix signatures, collector calls and their
 sidecar recorder, then the full reader, freshness gate and unchanged existing
 `measure_experiment`. Signature, replay, clock, service and measurement validators
 are not replaced with success stubs. Native-session inputs include both digit and
@@ -267,7 +267,7 @@ returns the same measurement objects from the freshness gate, and reaches the
 existing controlled pilot calculation with no integrity rejections and two
 complete pairs. Negative cases retain original service/live facts while refusing
 malformed signed closes, missing terminal records in either arm, wrong callback
-bytes/order, early probes, incomplete or out-of-horizon coverage, excessive timing
+bytes, early probes, incomplete or out-of-horizon coverage, excessive timing
 uncertainty and missing client audits. Missing release remains a downstream
 measurement withholding condition even if import can produce calculation inputs.
 One complete pair cannot replace the four registered assignments.
