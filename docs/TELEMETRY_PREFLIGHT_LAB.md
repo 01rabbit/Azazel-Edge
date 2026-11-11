@@ -38,7 +38,13 @@ releasing that sample fence, Root also validates the effective fixed executable
 and arguments, UID/group, AppArmor, zero capabilities, AF_UNIX, NNP, Restart=no,
 DefaultDependencies=no, runtime/stop limits, slice, namespace path, transient
 fragment, absent drop-ins, empty ExecCondition/StartPre/Post/Stop/Post and
-restricted activation dependencies. Requested launch flags alone do not pass. No new
+restricted activation dependencies. Requested launch flags alone do not pass.
+Some systemctl backends omit empty ExecCondition/StartPre/Post/Stop/Post fields.
+For only those five fields, a separate fixed-unit typed D-Bus query must return
+exact `a(sasbttttuii)` empty arrays; missing/unsupported/nonempty values refuse.
+Original systemctl and busctl argv, stdout, stderr and return status are retained
+before validation, including partial timeout output. Omission itself never proves
+an empty hook. Every other effective property and exact command remains strict. No new
 observer proc-stat or namespace permissions are needed. The real
 LinuxProcTelemetrySource samples es once. Original sample coverage and separate
 actual per-path read errno/size/hash are retained for /proc/net/dev, loadavg,

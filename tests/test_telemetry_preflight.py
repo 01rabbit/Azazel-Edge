@@ -147,3 +147,68 @@ def test_writable_output_ancestor_refuses_creation(tmp_path):
     with pytest.raises(OSError,match="ancestor"):
         t.private_output(parent/"private")
     assert not (parent/"private").exists()
+
+
+def backend_text():
+    return "\n".join(key+"="+value for key,value in effective().items() if key not in t.HOOKS).encode()+b"\n"
+
+
+def typed_hooks():
+    import json
+    return b"\n".join(json.dumps(dict(type="a(sasbttttuii)",data=[])).encode() for _ in t.HOOKS)+b"\n"
+
+
+def test_actual_backend_omitted_empty_text_hooks_require_typed_empty_arrays():
+    value=t.merged_effective(backend_text(),typed_hooks())
+    t.validate_effective(value,"fresh")
+    assert all(value[key]=="" for key in t.HOOKS)
+    with pytest.raises(AssertionError):
+        t.merged_effective(backend_text(),b"")
+
+
+@pytest.mark.parametrize("bad",[b'{"type":"a(sasbttttuii)","data":[["/bin/hook"]]}',
+                                b'{"data":[]}',b'{"type":"as","data":[]}',b'{"type":"a(sasbttttuii)","data":{}}',
+                                b'{"type":"a(sasbttttuii)","type":"as","data":[]}',b'overflow'*10000])
+def test_typed_hook_nonempty_missing_type_malformed_or_overflow_refuses(bad):
+    first,*rest=typed_hooks().splitlines()
+    with pytest.raises((AssertionError,OSError,ValueError)):
+        t.merged_effective(backend_text(),b"\n".join([bad,*rest])+b"\n")
+
+
+def test_typed_empty_cannot_hide_nonempty_text_hook():
+    with pytest.raises(AssertionError,match="mismatch"):
+        t.merged_effective(backend_text()+b"ExecStop=/bin/hook\n",typed_hooks())
+
+
+def test_both_original_backends_retained_before_failure_validation(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    original_text=backend_text()
+    original_bus=b"unsupported original bus output\n"
+    results=iter([SimpleNamespace(returncode=0,stdout=original_text,stderr=b"text diagnostic"),
+                  SimpleNamespace(returncode=1,stdout=original_bus,stderr=b"bus diagnostic")])
+    monkeypatch.setattr(t.subprocess,"run",lambda *a,**k:next(results))
+    with pytest.raises(AssertionError,match="backend unavailable"):
+        t.effective_worker("fresh",tmp_path)
+    assert (tmp_path/"effective-systemctl.stdout").read_bytes()==original_text
+    assert (tmp_path/"effective-systemctl.stderr").read_bytes()==b"text diagnostic"
+    assert (tmp_path/"effective-busctl.stdout").read_bytes()==original_bus
+    assert (tmp_path/"effective-busctl.stderr").read_bytes()==b"bus diagnostic"
+    assert t.BUS_PATH in (tmp_path/"effective-busctl.argv.json").read_text()
+
+
+def test_timeout_retains_partial_original_bytes_and_still_reads_other_backend(monkeypatch,tmp_path):
+    import subprocess
+    from types import SimpleNamespace
+    calls=[]
+    def query(argv,**kwargs):
+        calls.append(argv)
+        if len(calls)==1:
+            raise subprocess.TimeoutExpired(argv,2,output=b"partial original text",stderr=b"partial error")
+        return SimpleNamespace(returncode=0,stdout=typed_hooks(),stderr=b"")
+    monkeypatch.setattr(t.subprocess,"run",query)
+    with pytest.raises(AssertionError,match="backend unavailable"):
+        t.effective_worker("fresh",tmp_path)
+    assert len(calls)==2
+    assert (tmp_path/"effective-systemctl.stdout").read_bytes()==b"partial original text"
+    assert (tmp_path/"effective-systemctl.stderr").read_bytes()==b"partial error"
+    assert (tmp_path/"effective-busctl.stdout").read_bytes()==typed_hooks()

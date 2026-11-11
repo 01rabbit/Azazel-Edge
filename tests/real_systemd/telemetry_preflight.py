@@ -124,13 +124,52 @@ def validate_effective(value, namespace):
     lab.need(fields.get("path") == executable and fields.get("argv[]") == argv and fields.get("ignore_errors") == "no", "effective preflight command differs")
 
 
-def effective_worker(namespace):
-    result = subprocess.run(["systemctl", "show", UNIT, "--property=" + ",".join(EFFECTIVE)], capture_output=True, text=True, check=True, timeout=2)
-    lab.need(len(result.stdout) <= 32768, "effective preflight state oversized")
-    rows = result.stdout.splitlines()
+HOOKS = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")
+BUS_PATH = "/org/freedesktop/systemd1/unit/edge400_2dtelemetry_2dpreflight_2eservice"
+
+
+def _retained_query(argv, prefix, output):
+    lab.save_json(output / (prefix + ".argv.json"), argv)
+    code, error, stdout, stderr = None, None, b"", b""
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=2)
+        code, stdout, stderr = result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired as exc:
+        error, stdout, stderr = "TimeoutExpired", exc.stdout or b"", exc.stderr or b""
+    except OSError as exc:
+        error = type(exc).__name__
+    lab.save(output / (prefix + ".stdout"), stdout)
+    lab.save(output / (prefix + ".stderr"), stderr)
+    lab.save_json(output / (prefix + ".result.json"), dict(returncode=code, error=error))
+    return code, stdout
+
+
+def merged_effective(systemctl_raw, busctl_raw):
+    from azazel_edge.outcome.journal import _parse
+    lab.need(len(systemctl_raw) <= 32768 and len(busctl_raw) <= 65536, "effective preflight evidence oversized")
+    rows = systemctl_raw.decode("utf-8").splitlines()
     lab.need(all("=" in row for row in rows), "effective preflight state malformed")
     value = dict(row.split("=", 1) for row in rows)
-    lab.need(len(value) == len(rows), "effective preflight properties duplicate")
+    lab.need(len(value) == len(rows) and set(value) - set(HOOKS) == set(EFFECTIVE) - set(HOOKS), "effective preflight properties missing/duplicate")
+    lines = busctl_raw.splitlines()
+    lab.need(len(lines) == len(HOOKS), "typed effective hooks unavailable")
+    for key, line in zip(HOOKS, lines):
+        typed = _parse(line)
+        lab.need(type(typed) is dict and set(typed) == {"type", "data"}
+                 and typed["type"] == "a(sasbttttuii)" and type(typed["data"]) is list
+                 and typed["data"] == [], "typed effective hook not proven empty")
+        lab.need(value.get(key, "") == "", "text/typed effective hook mismatch")
+        value[key] = ""  # Supplied ONLY by an actual typed empty-array proof.
+    return value
+
+
+def effective_worker(namespace, output):
+    # Retain BOTH actual backends before parsing or validating even a failed read.
+    text_code, text = _retained_query(["systemctl", "show", UNIT, "--property=" + ",".join(EFFECTIVE)], "effective-systemctl", output)
+    bus_code, bus = _retained_query(["/usr/bin/busctl", "--system", "--json=short", "get-property", "org.freedesktop.systemd1", BUS_PATH,
+                                    "org.freedesktop.systemd1.Service", *HOOKS], "effective-busctl", output)
+    lab.need(text_code == bus_code == 0, "effective preflight backend unavailable")
+    value = merged_effective(text, bus)
     validate_effective(value, namespace)
     return value
 
@@ -226,7 +265,7 @@ def run(output):
         namespace = dict(device=actual_ns.st_dev, inode=actual_ns.st_ino)
         tracked[UNIT].append(state)
         lab.save_json(output / "root-observed-worker.json", dict(state=state, namespace=namespace))
-        lab.save_json(output / "effective-worker.json", effective_worker(assets.names["edge"]))
+        lab.save_json(output / "effective-worker.json", effective_worker(assets.names["edge"], output))
         stdout, stderr = process.communicate(input=b"sample\n", timeout=12)
         lab.save(output / "worker.stdout", stdout)
         lab.save(output / "worker.stderr", stderr)
