@@ -212,3 +212,76 @@ def test_timeout_retains_partial_original_bytes_and_still_reads_other_backend(mo
     assert (tmp_path/"effective-systemctl.stdout").read_bytes()==b"partial original text"
     assert (tmp_path/"effective-systemctl.stderr").read_bytes()==b"partial error"
     assert (tmp_path/"effective-busctl.stdout").read_bytes()==typed_hooks()
+
+
+def metadata_state(pid="123", start="10"):
+    return dict(LoadState="loaded", ActiveState="active", MainPID=pid, ControlPID="0",
+                ControlGroup="/system.slice/" + t.UNIT,
+                pid_stat=str(pid) + " (worker) " + " ".join(["S"] + ["0"] * 18 + [start]))
+
+
+def metadata_fixture(monkeypatch, states):
+    from types import SimpleNamespace
+    import stat
+    pending = iter(states)
+    monkeypatch.setattr(t.lab, "unit_snapshot", lambda unit: next(pending))
+    monkeypatch.setattr(t.Path, "resolve", lambda path, **kwargs: path)
+    lookups = []
+    def lookup(path):
+        lookups.append(path)
+        if path.endswith("/ns/net"):
+            return SimpleNamespace(st_dev=1, st_ino=2)
+        assert path == "/proc/123/net/dev"
+        return SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o444, st_dev=3, st_ino=4)
+    monkeypatch.setattr(t.os, "stat", lookup)
+    return lookups, lookup
+
+
+def test_root_metadata_retains_uid_zero_without_claiming_role_permission(tmp_path, monkeypatch):
+    import json
+    before = metadata_state()
+    lookups, _ = metadata_fixture(monkeypatch, [before, before])
+    receipt = t.retain_netdev_metadata(before, dict(device=1, inode=2), tmp_path)
+    assert receipt["metadata"]["uid"] == 0
+    assert receipt["root_lookup_path"] == receipt["resolved_lookup_path"] == "/proc/123/net/dev"
+    assert receipt["requested_worker_path"] == "/proc/net/dev"
+    assert receipt["role_access_proven"] is receipt["owner_rule_works_proven"] is receipt["self_only_mediation_proven"] is False
+    assert json.loads((tmp_path / "root-netdev-metadata.json").read_bytes()) == receipt
+    assert lookups == ["/proc/123/ns/net", "/proc/123/net/dev", "/proc/123/ns/net"]
+
+
+@pytest.mark.parametrize("fault", ["pidreuse", "pidchange", "wrongns", "nsdrift", "missing", "notregular"])
+def test_root_metadata_gap_retains_original_receipt_and_refuses(tmp_path, monkeypatch, fault):
+    import json
+    from types import SimpleNamespace
+    before, after = metadata_state(), metadata_state()
+    if fault == "pidreuse":
+        after = metadata_state(start="11")
+    elif fault == "pidchange":
+        after = metadata_state(pid="124")
+    lookups, lookup = metadata_fixture(monkeypatch, [before, after])
+    def broken(path):
+        if (fault == "wrongns" or fault == "nsdrift" and lookups.count("/proc/123/ns/net") == 1) and path.endswith("/ns/net"):
+            return SimpleNamespace(st_dev=1, st_ino=999)
+        if path.endswith("/net/dev"):
+            if fault == "missing":
+                raise FileNotFoundError("gone")
+            if fault == "notregular":
+                return SimpleNamespace(st_uid=0, st_gid=0, st_mode=0o040755, st_dev=3, st_ino=4)
+        return lookup(path)
+    monkeypatch.setattr(t.os, "stat", broken)
+    with pytest.raises((AssertionError, FileNotFoundError)):
+        t.retain_netdev_metadata(before, dict(device=1, inode=2), tmp_path)
+    retained = json.loads((tmp_path / "root-netdev-metadata.json").read_bytes())
+    assert retained["before"] == before and retained["role_access_proven"] is False
+    if fault in ("pidreuse", "pidchange"):
+        assert retained["after"] == after and retained["metadata"]["uid"] == 0
+
+
+@pytest.mark.parametrize("pid", [True, 123, "1", "0123", "../123", "123/net/dev", "１２３", "2147483648"])
+def test_root_metadata_pid_injection_refuses_before_any_stat(tmp_path, monkeypatch, pid):
+    state = metadata_state(pid=pid)
+    lookups, _ = metadata_fixture(monkeypatch, [state])
+    with pytest.raises(AssertionError, match="canonical actual worker PID"):
+        t.retain_netdev_metadata(state, dict(device=1, inode=2), tmp_path)
+    assert lookups == []

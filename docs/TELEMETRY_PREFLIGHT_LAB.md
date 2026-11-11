@@ -96,3 +96,17 @@ Its 37 pure tests passed and its actual case failed. Original failure evidence
 was retained and that VM stopped without a retry. The correction uses the actual
 fixed service's typed D-Bus empty-array proofs; missing fields are never assumed
 empty. The successful harness run above used a different source and fresh VM.
+
+## Pending Root-only procfs metadata receipt
+
+A new source adds a Root **stat-only** diagnostic while the actual worker is
+blocked at its ready fence, before sample IPC. The path is derived only from the
+validated fixed unit's canonical MainPID. Unit state, stable PID/starttime and
+owned network-namespace identity must agree before and after lookup; a gap
+retains `root-netdev-metadata.json` and refuses sampling. The protected receipt
+records requested `/proc/net/dev`, derived/resolved `/proc/<PID>/net/dev` lookup,
+UID/GID/mode/device/inode and original identity observations. No file contents,
+worker permission, profile, alias, capability or coverage classification changes.
+This metadata has **not yet been measured in a VM**. Even a UID match would not
+prove an AppArmor owner rule works or self-only mediation; UID 0 must remain an
+explicit unresolved owner-rule constraint. Old blocked results remain unchanged.
