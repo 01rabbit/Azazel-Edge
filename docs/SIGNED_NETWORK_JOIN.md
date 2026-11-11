@@ -118,3 +118,47 @@ PYTHONPATH=.:py python -m pytest -q tests/test_signed_network_recording.py tests
 
 The fixtures in these checks are synthetic, including root query envelopes; they
 are not substitutes for an actual signed/sealed VM experiment.
+
+## Frozen plan and scope components
+
+`signed_network_plan.py` now supplies the source-bound four-assignment plan,
+canonical telemetry-policy digest, exact per-arm native environment/config hash,
+and the narrowly tested provider preparation callback. Its protected-policy writer
+is installed **before** the existing provider captures its raw writer; the actual
+legitimate `10.91.2.2/32` protection therefore exists before registration. It has
+no CLI and does not provision or launch a VM. The existing network setup can be
+reused unchanged with fixed namespace names: edge `edge400-provider-edge`, client
+`edge400-provider-client`, service `edge400-provider-service`. The edge interfaces
+are `ec` (`10.91.1.1/24`) and `es` (`10.91.3.1/24`), with client attacker
+`10.91.1.2/24`, extra legitimate address `10.91.2.2/32`, and service
+`10.91.3.2/24`. Its explicit lab routes and edge-only forwarding introduce no
+parent or default route. The peer constants, profile paths, existing provider
+permissions and fixed edge namespace path are unchanged.
+
+`signed_network_scope.py` reopens only all three complete saved creation-intent
+and confirmed device/inode records in the same actual kernel boot. It validates
+protected files, exact names, foreign-canary identity, parent-state snapshot and
+all current named handles. Refusal closes only descriptors it opened; it never
+predeletes or signals an unknown handle. The returned `FencedAssets` rechecks the
+selected namespace identity before every namespace command or process spawn,
+while the existing `Assets.close` retains its own cleanup identity checks.
+
+`stop_systemd_actors` attempts every fixed observer, core/capture, witness and
+namespace-preparation unit, with explicit 2/3-second command bounds. It retains
+failed steps even after best-effort force stop. A stop receipt requires inactive
+or failed units with zero main/control PIDs, empty original/final cgroups and
+`cgroup.events populated=0` (including descendants). `close_namespaces_after_actors`
+first writes that receipt and refuses namespace cleanup on any actor gap. Only
+then does existing Assets cleanup reap its own peers and delete identity-matching
+handles, checking the original parent snapshot and final handle absence. Evidence
+files, failed units and original history are not cleared.
+
+The remaining necessary operational functions are small but still unimplemented:
+(1) marked-VM fresh preparation binding this exact plan/policy to the actual new
+v4 registration, (2) one bounded assignment measurement connecting real observer
+sidecar/readiness/clock anchors to unchanged service peers and a separate operator
+root query, and (3) a read-only strict evidence export/import that verifies signed
+source, durable journal and all four unique scopes, then calls the existing
+RunLedger/measurement APIs. A new VM orchestration or accounting engine is not
+required. The untracked draft is not an operational entrypoint; do not freeze an
+experiment or invoke preparation until the complete reviewed source is pinned.
