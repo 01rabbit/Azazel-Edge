@@ -303,3 +303,10 @@ exits. At that point no namespace workload children or registered actors exist;
 unknown/unconfirmed names and original partial intents remain for review. This is
 not a new partial-cleanup engine. Once provisioning begins, every failure still
 requires verified stop of all fixed actors before namespace deletion.
+
+The observer terminal result also retains an actual `end_clock_anchor` sampled
+immediately after the natural live API return and durable recorder close, before
+result materialization. It is not reconstructed from the last sample or scheduled
+horizon. Together with the original start anchor, per-call anchors and separately
+recorded controller start/end brackets, it supports only the fixed-budget sampled
+clock-consistency qualifier; it cannot prove continuous unsampled stability.

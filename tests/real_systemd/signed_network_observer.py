@@ -215,6 +215,9 @@ def worker(mode):
             type(receipt) is TerminalControlStop,
             "actual verified terminal CONTROL result required",
         )
+    end_clock_anchor = (
+        record_clock_anchor()
+    )  # Actual post-recorder endpoint, never reconstructed.
     final_raw, _ = read_regular(
         Path(d["source_path"]), owner=d["producer_uid"], max_bytes=d["input_max_bytes"]
     )
@@ -256,6 +259,7 @@ def worker(mode):
     lab.save(directory / "terminal.decoded", receipt.decoded_record)
     result = dict(
         context=context,
+        end_clock_anchor=end_clock_anchor,
         terminal=receipt.to_dict(),
         witness_state=client.state,
         scope="real_observer_calls_and_terminal_control_not_measurement_success",

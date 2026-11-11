@@ -392,3 +392,75 @@ def test_wrong_signed_boot_is_not_relabelled_or_observed(tmp_path, monkeypatch):
         observer.worker("live")
     assert not (directory / "observer-start-context.json").exists()
     assert not (directory / "actual-collector-calls.jsonl").exists()
+
+
+def test_actual_end_anchor_follows_natural_api_and_durable_recorder_close(
+    tmp_path, monkeypatch
+):
+    p, key, directory, _ = role_fixture(tmp_path, monkeypatch)
+    prefix = signed_prefix(p, key)
+    source = signed_prefix(p, key, ("session_prepare", "session_start", "session_end"))
+    wire = source[len(prefix) :]
+    event = json.loads(wire)["event"]
+    origin = event["capture_origin"]
+    receipt = observer.TerminalControlStop(
+        p.data["origin_registration_sha256"],
+        origin["session_ref"],
+        origin["seq"],
+        dict(offset=len(prefix), sha256=hashlib.sha256(prefix).hexdigest()),
+        dict(offset=len(source), sha256=hashlib.sha256(source).hexdigest()),
+        wire,
+        SourceVerifier.unwrap(wire),
+        0,
+    )
+    calls = []
+
+    def read(path, **kwargs):
+        if Path(path).name == "input":
+            calls.append("source-read")
+            return (prefix if calls.count("source-read") == 1 else source), None
+        return b"raw closed journal", None
+
+    monkeypatch.setattr(observer, "read_regular", read)
+    monkeypatch.setattr(
+        observer,
+        "run_live_resumable",
+        lambda **k: (calls.append("natural-api-return") or receipt),
+    )
+    monkeypatch.setattr(
+        observer.lab,
+        "journal_frames",
+        lambda raw: [dict(kind="session_close", seq=7, sha256="a" * 64)],
+    )
+
+    class Witness:
+        def __init__(self, *a):
+            self.state = dict(source_sha256=hashlib.sha256(source).hexdigest())
+
+        def preflight(self, *a):
+            calls.append("read-only-witness")
+
+    monkeypatch.setattr(observer, "WitnessClient", Witness)
+    real_anchor = observer.record_clock_anchor
+    anchors = []
+
+    def anchor():
+        if anchors:
+            assert "natural-api-return" in calls
+            assert (
+                recording.read_calls(directory / "actual-collector-calls.jsonl")[
+                    "calls"
+                ]
+                == []
+            )
+            assert not (directory / "observer-terminal-result.json").exists()
+        value = real_anchor()
+        anchors.append(value)
+        return value
+
+    monkeypatch.setattr(observer, "record_clock_anchor", anchor)
+    result = observer.worker("live")
+    assert len(anchors) == 2 and result["context"]["clock_anchor"] == anchors[0]
+    assert result["end_clock_anchor"] == anchors[1]
+    assert anchors[1]["monotonic_before_ns"] >= anchors[0]["monotonic_after_ns"]
+    assert (directory / "terminal.wire").read_bytes() == wire
