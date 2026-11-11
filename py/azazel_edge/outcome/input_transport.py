@@ -13,6 +13,14 @@ KIND = "unix-abstract/v1"
 class _FrozenDict(dict):
     """JSON-compatible immutable public policy values, including nested namespace."""
 
+    def __new__(cls, *args, **kwargs):
+        value = super().__new__(cls)
+        dict.__init__(value, *args, **kwargs)
+        return value
+
+    def __init__(self, *args, **kwargs):
+        pass  # Populate only the fresh object; reinitialization cannot mutate it.
+
     def _immutable(self, *args, **kwargs):
         raise TypeError("immutable witness transport")
 
