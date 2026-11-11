@@ -47,12 +47,31 @@ separate bound; it cannot extend the service measurement horizon. The core's
 actual execution/release facts and independent nft readback remain separate
 from service/client observations and read-only receipt calculations.
 
-The experiment ID is `network-c0-flow-throttle-v2-<reviewed source prefix>`;
+The experiment ID is `network-c0-flow-throttle-v3-<reviewed source prefix>`;
 validation refuses earlier generic IDs or a different reviewed source prefix.
 A corrected source revision must use a newly registered manifest, new source
 staging/output directory and its new experiment identity. Retain any earlier
 failed assignment/ledger as failed or missing in that original experiment;
 do not delete, resume, rerun or backfill it.
+
+`instrumentation_registration(source_commit, core_sha256)` builds this v3
+manifest without importing the historical 60-second benchmark fixture. Its
+explicit **instrumentation regression/calibration** plan uses a 1-second gain,
++2 ms legitimate p95, +0.01 error-rate increase and two pairs (500 bootstrap
+repeats, analysis seed 17). These are software calibration examples, not field
+thresholds or independently reviewed operational/efficacy acceptance criteria.
+`plan_purpose` records that boundary; final reports repeat it. Network validation
+refuses any minimum gain greater than or equal to H **before** directory,
+prerequisite or process work, since the analyzer requires a strict lower bound
+above that gain and a gain of H is unreachable.
+
+The earlier v2 run/report/manifest hashes must remain unchanged, including its
+inherited unreachable threshold and resulting practical-time-gain status. V3 is
+a separate newly frozen experiment after that instrumentation finding, not an
+independent efficacy preregistration, corrected old result or claim of benefit.
+Do not tune assertions to require candidate wins: harm is recorded as observed,
+and missing audit/horizon remains a missing run in its original denominator.
+Analysis stays `mechanical_only` regardless of the calibration gate result.
 
 Every assignment is frozen and `start` is fsynced before namespace/process work.
 Full capture/audits are exclusive-created and file+directory fsynced before

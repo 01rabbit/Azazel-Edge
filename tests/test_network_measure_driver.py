@@ -9,22 +9,10 @@ import pytest
 
 import network_measure_driver as driver
 from azazel_edge.benchmark.benefit import BenefitInputError, SAFETY_FIELDS, manifest_digest
-from test_benefit_comparison import manifest as base_manifest
 
 
 def registration(source_commit="a" * 40, core_sha256="b" * 64):
-    value = base_manifest()
-    value.update(experiment_id=driver.experiment_identifier(source_commit), phase="pilot", evidence_kind="recorded_lab",
-                 horizon_seconds=5, baseline="c0", candidate="flow_throttle")
-    value["provenance"]["repo_commits"] = {"01rabbit/Azazel-Edge": source_commit}
-    value["arms"] = [dict(id=arm, role="local_core_observe_only" if arm == "c0" else "existing_flow_scoped_throttle",
-                          source_commit=source_commit, config_sha256=manifest_digest(driver.plan(arm, core_sha256)),
-                          environment_id="fresh_disposable_linux_netns") for arm in driver.ARMS]
-    value["assignments"] = [dict(id=f"{pair}-{arm}", pair_id=str(pair), arm=arm,
-        scenario="fixed_service_upload_and_legitimate_tcp", seed=pair, order=(index + pair) % 2)
-        for pair in range(2) for index, arm in enumerate(driver.ARMS)]
-    safety = {a["id"]: dict.fromkeys(SAFETY_FIELDS, 0) for a in value["assignments"]}
-    return value, safety
+    return driver.instrumentation_registration(source_commit, core_sha256)
 
 
 def test_frozen_plan_budget_safety_and_c0_first_refuse_before_work():
@@ -323,10 +311,49 @@ def test_kernel_boot_source_format_is_validated_and_raw_id_retained(tmp_path, mo
 def test_new_reviewed_source_uses_new_scoped_versioned_experiment_identifier():
     first, safety = registration("a" * 40)
     corrected, _ = registration("b" * 40)
-    assert first["experiment_id"] == "network-c0-flow-throttle-v2-" + "a" * 12
+    assert first["experiment_id"] == "network-c0-flow-throttle-v3-" + "a" * 12
     assert corrected["experiment_id"] != first["experiment_id"]
     for old in ("mechanical-pilot", "isolated-network-local-pilot", first["experiment_id"]):
         old_manifest = copy.deepcopy(corrected)
         old_manifest["experiment_id"] = old
         with pytest.raises(BenefitInputError, match="experiment identity"):
             driver.validate(old_manifest, safety, driver.SCOPE, "b" * 64)
+
+
+@pytest.mark.parametrize("gain", [5, 5.001, 60])
+def test_unreachable_gain_refuses_before_files_prerequisites_or_work(tmp_path, monkeypatch, gain):
+    manifest, safety = registration()
+    manifest["plan"]["minimum_gain_seconds"] = gain
+    def forbidden(*args, **kwargs):
+        pytest.fail("unreachable calibration threshold must refuse before prerequisites/work")
+    monkeypatch.setattr(driver, "prerequisites", forbidden)
+    monkeypatch.setattr(driver, "one_run", forbidden)
+    output = tmp_path / "unreachable"
+    with pytest.raises(BenefitInputError, match="threshold unreachable"):
+        driver.run_trial(manifest, output, safety_by_assignment=safety,
+                         scope_acknowledgment=driver.SCOPE, expected_core_sha256="b" * 64, allow_netns=True)
+    assert not output.exists()
+
+
+def test_standalone_v3_plan_is_explicit_calibration_and_does_not_change_old_fixture():
+    from test_benefit_comparison import manifest as historical_manifest
+    old = historical_manifest()
+    before = copy.deepcopy(old)
+    manifest, safety = registration()
+    assert manifest["experiment_id"].startswith("network-c0-flow-throttle-v3-")
+    assert manifest["plan_purpose"] == driver.PLAN_PURPOSE
+    assert manifest["plan"] == dict(minimum_pairs=2, minimum_gain_seconds=1, max_latency_increase_ms=2,
+                                     max_error_rate_increase=.01, bootstrap_repeats=500, analysis_seed=17)
+    assert manifest["horizon_seconds"] == 5 and old == before and old["horizon_seconds"] == 60
+    assert old["plan"]["minimum_gain_seconds"] == 5
+    assert len(driver.validate(manifest, safety, driver.SCOPE, "b" * 64)) == 4
+    manifest.pop("plan_purpose")
+    with pytest.raises(BenefitInputError, match="calibration purpose"):
+        driver.validate(manifest, safety, driver.SCOPE, "b" * 64)
+
+
+def test_v3_manifest_does_not_admit_v2_experiment_identity():
+    manifest, safety = registration()
+    manifest["experiment_id"] = "network-c0-flow-throttle-v2-" + "a" * 12
+    with pytest.raises(BenefitInputError, match="experiment identity"):
+        driver.validate(manifest, safety, driver.SCOPE, "b" * 64)

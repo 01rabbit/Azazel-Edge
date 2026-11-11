@@ -29,7 +29,8 @@ from network_measure_peer import ATK, LEGIT, SERVER, PORT, GOAL_BYTES, MAX_MESSA
 PEER = Path(__file__).with_name("network_measure_peer.py")
 SCOPE = "trusted_local_netns_mechanism_service_instrumentation_only"
 ARMS = ("c0", "flow_throttle")
-EXPERIMENT_VERSION = "network-c0-flow-throttle-v2"
+EXPERIMENT_VERSION = "network-c0-flow-throttle-v3"
+PLAN_PURPOSE = "pilot_instrumentation_mechanics_calibration_not_operational_acceptance"
 TOOLS = ("ip", "nft", "tc", "conntrack")
 
 
@@ -59,12 +60,46 @@ def experiment_identifier(source_commit):
     return EXPERIMENT_VERSION + "-" + source_commit[:12]
 
 
+def instrumentation_registration(source_commit, core_sha256):
+    """Standalone preregistration for instrumentation regression, never efficacy.
+
+    Thresholds below are software calibration examples, not inherited field or
+    independently reviewed operational acceptance criteria. Freeze before work.
+    """
+    experiment_id = experiment_identifier(source_commit)
+    require(isinstance(core_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", core_sha256),
+            "exact core SHA256 required")
+    value = dict(
+        schema_version="azazel-benefit-experiment/v1", experiment_id=experiment_id,
+        phase="pilot", evidence_kind="recorded_lab", horizon_seconds=5,
+        plan_purpose=PLAN_PURPOSE,
+        provenance=dict(repo_commits={"01rabbit/Azazel-Edge": source_commit},
+                        corpus_sha256=hashlib.sha256(PEER.read_bytes()).hexdigest(),
+                        policy_sha256=manifest_digest(dict(scope=SCOPE, plans=[plan(arm, core_sha256) for arm in ARMS]))),
+        arms=[dict(id=arm, role="local_core_observe_only" if arm == "c0" else "existing_flow_scoped_throttle",
+                   source_commit=source_commit, config_sha256=manifest_digest(plan(arm, core_sha256)),
+                   environment_id="fresh_disposable_linux_netns") for arm in ARMS],
+        baseline="c0", candidate="flow_throttle",
+        plan=dict(minimum_pairs=2, minimum_gain_seconds=1, max_latency_increase_ms=2,
+                  max_error_rate_increase=.01, bootstrap_repeats=500, analysis_seed=17),
+        assignments=[dict(id=f"{pair}-{arm}", pair_id=str(pair), arm=arm,
+                          scenario="fixed_service_upload_and_legitimate_tcp", seed=pair, order=(index+pair) % 2)
+                     for pair in range(2) for index, arm in enumerate(ARMS)],
+    )
+    safety = {assignment["id"]: dict.fromkeys(SAFETY_FIELDS, 0) for assignment in value["assignments"]}
+    return value, safety
+
+
 def validate(manifest, safety, scope, core_sha256):
     assignments = validate_manifest(manifest)
     reviewed_source = manifest["provenance"]["repo_commits"].get("01rabbit/Azazel-Edge")
     require(manifest["experiment_id"] == experiment_identifier(reviewed_source),
             "new versioned network experiment identity required; do not resume old experiment")
     require(isinstance(core_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", core_sha256), "exact core SHA256 required")
+    require(manifest.get("plan_purpose") == PLAN_PURPOSE,
+            "explicit pilot instrumentation/calibration purpose required; no operational acceptance claim")
+    require(manifest["plan"]["minimum_gain_seconds"] < manifest["horizon_seconds"],
+            "minimum gain must be strictly below the common horizon; threshold unreachable")
     require(scope == SCOPE and manifest["phase"] == "pilot" and manifest["evidence_kind"] == "recorded_lab"
             and manifest["horizon_seconds"] == 5 and len(assignments) == 4,
             "exact four-run/two-pair five-second local pilot required")
@@ -521,7 +556,9 @@ def run_trial(manifest, output_dir, *, safety_by_assignment, scope_acknowledgmen
                           scope="colocated_not_independent_rollback_witness"))
             snapshot = ledger.snapshot()
             report = dict(snapshot=snapshot, comparison=analyze(manifest, snapshot["observations"]),
-                          scope=SCOPE, production_origin_admitted=False, authorized_actions=[])
+                          scope=SCOPE, production_origin_admitted=False, authorized_actions=[],
+                          plan_purpose=manifest["plan_purpose"],
+                          thresholds_scope="instrumentation_calibration_only_not_operational_acceptance")
             write_new(output / "report.json", report)
             return report
         except BaseException as exc:
