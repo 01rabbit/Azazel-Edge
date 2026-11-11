@@ -169,6 +169,66 @@ def planned(source, core):
     return value, safety
 
 
+def planned_telemetry(source, core, *, abi_sha256, interpreter_sha256):
+    """Explicit new lab plan only; mandatory pins originate outside the manifest.
+
+    Source hashes describe this checkout; Root must authenticate its archive and
+    freeze all final source before any assignment. No old receipt is admission.
+    """
+    import signed_network_telemetry_contract as role
+    import signed_network_telemetry_material as material
+
+    material.pin(abi_sha256)
+    material.pin(interpreter_sha256)
+    value, safety = planned(source, core)
+    value["experiment_id"] = "signed-v4-network-telemetry-v2-" + source[:12]
+    binding = value["measurement_binding"]
+    binding["observer_profile"] = role.PROFILE
+    binding["observer_initialization"] = "new_empty_scope_after_verified_pre_api_fence"
+    binding["telemetry_lab"] = dict(
+        role=role.ROLE,
+        initialize=role.observer_spec("initialize"),
+        live=role.observer_spec("live"),
+        abi_sha256=abi_sha256,
+        interpreter_sha256=interpreter_sha256,
+        source_sha256=material.source_hashes(),
+        provenance="root_manifest_and_current_runtime_proof_not_crypto_journal_label_binding",
+    )
+    for arm in value["arms"]:
+        arm["config_sha256"] = manifest_digest(
+            arm_configuration(
+                arm["id"],
+                core,
+                binding,
+                value["observer_policy_sha256"],
+                value["protected_policy_sha256"],
+            )
+        )
+    return value, safety
+
+
+def validate_telemetry_manifest(value, core):
+    """Structural v2 check only; existing legacy phase MUST still refuse v2.
+
+    Root independently supplies/checks declared pins against current guest bytes;
+    manifest JSON does not authenticate those pins or authorize preparation.
+    """
+    source = value["provenance"]["repo_commits"]["01rabbit/Azazel-Edge"]
+    pins = value["measurement_binding"]["telemetry_lab"]
+    expected, safety = planned_telemetry(
+        source,
+        core,
+        abi_sha256=pins["abi_sha256"],
+        interpreter_sha256=pins["interpreter_sha256"],
+    )
+    need(
+        json.dumps(value, sort_keys=True, allow_nan=False)
+        == json.dumps(expected, sort_keys=True, allow_nan=False),
+        "exact frozen new telemetry experiment required",
+    )
+    return safety
+
+
 def validate_manifest(value, core):
     source = value["provenance"]["repo_commits"]["01rabbit/Azazel-Edge"]
     expected, safety = planned(source, core)
