@@ -97,7 +97,27 @@ def _configure(callback, created, namespace_identity, *, owner, output):
                 == [expected],
                 "exact current witness command required",
             )
-            data = data.replace(expected, expected.replace(" -I -m ", " -I -B -m "), 1)
+            for key, old, new in (
+                ("Type", "notify", "exec"),
+                ("NotifyAccess", "main", "none"),
+            ):
+                lab.need(
+                    [
+                        line
+                        for line in data.splitlines(keepends=True)
+                        if line.lstrip().startswith(key + "=")
+                    ]
+                    == [key + "=" + old + "\n"],
+                    "exact witness notify source required",
+                )
+                data = data.replace(key + "=" + old + "\n", key + "=" + new + "\n", 1)
+            data = data.replace(
+                expected,
+                expected.replace(" -I -m ", " -I -B -m ").replace(
+                    " --systemd-notify", ""
+                ),
+                1,
+            )
             lab.need(
                 "NetworkNamespacePath=" not in data,
                 "witness namespace already configured",

@@ -56,6 +56,7 @@ def source_paths():
         *(
             SRC / "py/azazel_edge/outcome" / (name + ".py")
             for name in (
+                "service_switch",
                 "input_transport",
                 "input_auth",
                 "input_witness",
