@@ -469,3 +469,32 @@ def test_durable_fullbundle_directory_failure_never_sends_go(tmp_path, monkeypat
             pytest.fail("GO must follow durable proof")
     assert children[0].returncode == 7  # Synthetic child received no exact GO.
     assert "cleanup" in events and not (tmp_path / "live-result.json").exists()
+
+
+def test_client_popen_bracket_is_retained_readonly_and_distinct_from_observer_exec(
+    tmp_path, monkeypatch
+):
+    args, _, children, _ = fixture(tmp_path, monkeypatch)
+    outer_before = time.monotonic_ns()
+    with live.live(tmp_path, **args) as session:
+        launch = json.loads((tmp_path / "live-launch.json").read_bytes())
+        assert launch["kind"] == "owned_systemd_run_client_popen/v1"
+        assert launch["client_pid"] == session.pid == children[0].pid
+        assert (
+            outer_before
+            <= session.client_launch_before_ns
+            <= session.client_launch_after_ns
+            <= time.monotonic_ns()
+        )
+        assert launch["client_launch_before_ns"] == session.client_launch_before_ns
+        assert launch["client_launch_after_ns"] == session.client_launch_after_ns
+        assert (
+            launch["deadline_monotonic_ns"]
+            == session.client_launch_before_ns + 40_000_000_000
+        )
+        assert launch["budget_seconds"] == 40
+        with pytest.raises(AttributeError):
+            session.client_launch_before_ns = 0
+        with pytest.raises(AttributeError):
+            session.client_launch_after_ns = 0
+    assert session.result is not None
