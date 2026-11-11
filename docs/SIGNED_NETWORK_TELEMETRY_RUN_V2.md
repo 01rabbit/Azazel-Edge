@@ -1,4 +1,8 @@
-# Explicit telemetry assignment runner v2 (code only)
+# Explicit telemetry assignment runner v2
+
+The [frozen four-VM pilot](SIGNED_TELEMETRY_VM_PILOT_20261112.md) records actual
+historical execution, three timing refusals, and the independent safety gap.
+The experiment remains withheld; the later safety correction is diagnostic-only.
 
 `signed_network_telemetry_run.run_telemetry_assignment` consumes the direct
 privately constructed preparation context. It does not reopen ownership from
@@ -35,7 +39,7 @@ synthetic ownership context. Complete synthetic direct-context C0 and candidate 
 exercise the unchanged decision helpers, service calculation and recording
 parser with declared mocked actors/source/clock/privileged I/O. They establish
 no actual namespaces, confinement, authentication, traffic effect, or
-measurement acceptance. A full reviewed composition and fresh explicitly
-marked VM run are still required. Existing actual manual positive/refusal evidence belongs to its
-historical source and does not qualify this runner. No four-assignment run,
-performance, production admission, or efficacy claim follows from this change.
+measurement acceptance. The historical pilot and its exact source are documented
+separately; it establishes no qualified four-assignment comparison. Existing
+actual manual positive/refusal evidence also belongs to its historical source.
+No performance, production admission, or efficacy claim follows from this change.
