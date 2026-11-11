@@ -50,5 +50,5 @@ No namespace is selected from untrusted JSON. Tests use synthetic Root/namespace
 facts and fake setns, with real private fork/pipe/group/reap checks; they establish
 no actual role, transport, sealed Switch or VM acceptance by themselves. One
 scoped positive VM result is recorded in [the commissioning guide](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12);
-separate invalid-signature runtime qualification remains open. No four-run manifest,
+the separate signature-refusal result is recorded there too. No four-run manifest,
 trial, efficacy, admission, source repair or production activation is authorized.

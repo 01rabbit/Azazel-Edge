@@ -1,7 +1,7 @@
 # Optional signed telemetry join: interface and scoped commissioning
 
 There is one [scoped positive init/live/terminal result](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12),
-with separate negative runtime qualification still open and no frozen four-assignment manifest. The existing signed-network preparation/runner still selects the
+plus a separate exact signature-refusal case, and no frozen four-assignment manifest. The existing signed-network preparation/runner still selects the
 legacy role and **rejects the new manifest**. Do not use this component as an
 operator entrypoint or interpret structural validation as permission to proceed.
 The old-profile telemetry gap remains blocked. The separately completed v6

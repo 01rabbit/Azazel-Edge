@@ -1,4 +1,4 @@
-# Single authenticated telemetry commissioning: one scoped positive result
+# Single authenticated telemetry commissioning: two scoped runtime cases
 
 `signed_network_telemetry_commission.commission_telemetry(output, *, source_commit,
 archive_sha256, core_sha256, abi_sha256, interpreter_sha256)` now composes one
@@ -46,11 +46,38 @@ no core remained and parent state was unchanged; the VM was stopped. Guest
 regression checks also passed: 106 tests in 2.06 seconds.
 
 Failed connection attempts v1–v7 remain retained at their original sources/boots;
-v8 does not relabel them or the separate stateless precheck. The separate fresh
-negative case has no reviewed runtime result yet.
+v8 does not relabel them or the separate stateless precheck. The separate reviewed
+negative case is recorded below.
 This is one authenticated connection, not a four-assignment manifest/trial,
 performance or efficacy result, hardware proof, general isolation acceptance or
 production admission. Transition/experiment/admission/measurement flags stay false.
+
+## Reviewed negative runtime evidence: separate v1, 2026-11-12
+
+A separate fresh VM used the same source/archive pins above. Root independently
+reviewed its evidence; no positive scope or key material was reused:
+
+- Actual kernel boot: `b51683cc-ff52-40c8-928d-c13062992364`.
+- Private public-only evidence archive SHA256: `c507012c45592337ace7923bcab4a161d7807b3973878ebe3edc423199077d4b`
+  (972,800 bytes; excludes keys).
+
+Genuine empty initialization produced four closed journal frames, five signed
+witness anchors and a zero cursor. Root then appended exactly one explicitly
+synthetic invalid-signature wire through the owned source FD. The actual worker
+refused with exactly `authentication signature invalid`. The poisoned source
+retained its bytes/inode across refusal; journal and anchors were byte-identical
+before append, after append and after refusal. **Source verification READ the
+bytes; zero durable cursor consumption does not mean no source access.** This
+result neither acknowledges the bad frame nor fills missing evidence/backlog.
+
+No live start-context, sidecar, outcomes, terminal artifacts or live result existed;
+no core, Switch or workload ran. Root observed the UID61002 cap0/NNP enforcing
+role, original three FIFOs and cookie versus separately owned namespace binding.
+All Root metadata children reaped without force; cgroups were empty, namespaces
+absent, no core remained and parent state was unchanged. The operator reported
+`synthetic_signature_refusal_complete` with all authorization/measurement flags
+false. Guest checks passed: 128 tests in 1.56 seconds; the VM was stopped.
+Both cases remain narrow manual commissioning evidence, not four-trial, performance, efficacy, hardware or admission acceptance. Earlier failures remain.
 
 ## External prerequisites and current-source checks
 

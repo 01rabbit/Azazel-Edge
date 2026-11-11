@@ -25,8 +25,8 @@ This is sampled Root metadata, not cryptographic observer-label binding,
 continuous actor liveness, API permission/terminal-operation proof, negative
 probe qualification, experiment admission or efficacy evidence. The separate
 [one-boot positive connection](SIGNED_TELEMETRY_COMMISSION.md#reviewed-positive-runtime-evidence-v8-2026-11-12)
-now exercises the joined worker/orchestrator; fresh negative runtime qualification
-remains open before any trial can be considered. Root source/archive trust
+and separate signature-refusal case exercise the joined worker/orchestrator;
+these narrow results do not authorize a trial. Root source/archive trust
 is an external operator boundary; a caller-supplied digest is not an attestation.
 
 
@@ -53,8 +53,8 @@ synthetic witness callbacks and an explicit local input-owner adapter. The
 initialize success exercises real input/authentication/journal/recovery classes;
 the signed live terminal smoke uses existing synthetic API/witness callbacks.
 Neither constitutes an actual UID/LSM, live authenticated permission or runtime
-negative proof. Fresh joined-source commissioning must still demonstrate the
-remaining actual negative behavior before any assignment is frozen. The scoped
+negative proof. Separate runtime evidence covers one exact signature refusal;
+other negative behaviors and trial qualification remain open. The scoped
 positive/terminal result above does not upgrade these synthetic tests. Origin
 registration v4 and persistence context do not cryptographically bind the observer
 label/interpreter.
