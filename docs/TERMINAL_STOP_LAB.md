@@ -39,7 +39,13 @@ backfill, recovery override, key reuse, or unconfined observer is permitted.
 `Switch.plan/apply` starts the genuine normal core under the unchanged native
 profile. The observer begins after real prepare/start bytes exist, recovers
 those as missed, and the controller verifies the exact durable `input_ready`
-source-prefix offset/hash before requesting clean core stop.
+source-prefix offset/hash before requesting clean core stop. Before that stop,
+the controller reads the effective observer unit command, UID/group, AppArmor,
+zero capabilities, AF_UNIX restriction, no-new-privileges, explicit Restart=no,
+runtime limits and restricted dependencies, then verifies actual kernel UID,
+capabilities, enforced label and cgroup membership. DefaultDependencies=no avoids
+unreviewed default activation edges; no observer/core/witness activation hook
+is accepted.
 
 The positive worker passes only the protected bundle `origin.json` to
 `terminal_stop_registration`. After return it independently reads the closed
@@ -55,6 +61,14 @@ product unit tests.
 A signed end alone is not actor quiescence. Cleanup independently attempts all
 worker, core and witness unit stops, checks unit states/MainPIDs, retained cgroup
 membership and original PID identities, and scans existing core process discovery.
+The narrow read-only `terminal_cgroup.py` extraction preserves reviewed signed
+network scope semantics: matching PID1 cgroup namespace and canonical full
+unified-v2 mount/root/device view, no subtree overlays, physical protected path
+walks, empty parent cgroup.procs AND cgroup.events populated=0 (including
+descendants). Missing groups count absent only in that verified full view.
+Original, final and canonical fixed-unit groups are all checked even after
+transient-unit collection. Pre-stop status/PID read errors remain sticky and
+never skip any fixed unit stop attempt; each stop is bounded to five seconds.
 Cleanup errors are retained even when the original test failure is raised. A
 success artifact is written only after cleanup passes. Material and raw failure
 evidence remain for operator review and eventual VM disposal; no host policy or

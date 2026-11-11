@@ -15,6 +15,7 @@ import uuid
 SRC = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(SRC / "py"), str(SRC / "tests"), str(Path(__file__).parent)]
 import armor as a
+import terminal_cgroup as cg
 
 g = a.g
 POLICY = SRC / "tests/fixtures/terminal_stop_policy.json"
@@ -90,7 +91,7 @@ def guard():
         need(g.systemctl("show", unit, "-p", "LoadState", "--value", check=False).stdout.strip() == "not-found", "existing worker unit refused")
     files = {}
     for name, path in dict(helper=Path(__file__), policy=POLICY, armor=Path(a.__file__),
-                           guest=Path(g.__file__), apparmor=SRC / "tests/real_systemd/edge400.apparmor").items():
+                           guest=Path(g.__file__), cgroup=Path(cg.__file__), apparmor=SRC / "tests/real_systemd/edge400.apparmor").items():
         raw, _ = read_regular(path, owner=0, max_bytes=1024 * 1024)
         files[name + "_sha256"] = sha(raw)
     boot = g.boot()
@@ -103,7 +104,7 @@ def role_argv(mode, case):
     return ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit=" + (INIT if mode == "initialize" else OBSERVER),
             "-p", "User=edge400-observer", "-p", "Group=edge400-observer", "-p", "NoNewPrivileges=yes",
             "-p", "CapabilityBoundingSet=", "-p", "AppArmorProfile=edge400-observer",
-            "-p", "RestrictAddressFamilies=AF_UNIX", "-p", "RuntimeMaxSec=25", "-p", "TimeoutStopSec=5",
+            "-p", "RestrictAddressFamilies=AF_UNIX", "-p", "Restart=no", "-p", "DefaultDependencies=no", "-p", "RuntimeMaxSec=25", "-p", "TimeoutStopSec=5",
             str(g.PYTHON.with_name("edge-observe")), "-I", str(Path(__file__)), "--worker", mode, "--case", case]
 
 
@@ -154,42 +155,107 @@ def pid_identity(raw):
 
 
 def unit_snapshot(unit):
-    raw = g.systemctl("show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "MainPID", "-p", "ControlGroup", check=False).stdout
+    raw = g.systemctl("show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "MainPID", "-p", "ControlPID", "-p", "ControlGroup", check=False).stdout
     value = dict(line.split("=", 1) for line in raw.splitlines())
     pid = int(value.get("MainPID", "0"))
     value["pid_stat"] = Path(f"/proc/{pid}/stat").read_text() if pid else None
     return value
 
 
+EFFECTIVE_PROPERTIES = (
+    "ExecStart", "User", "Group", "AppArmorProfile", "CapabilityBoundingSet",
+    "AmbientCapabilities", "RestrictAddressFamilies", "NoNewPrivileges", "Restart",
+    "RuntimeMaxUSec", "TimeoutStopUSec", "DefaultDependencies", "Slice",
+    "Wants", "Requires", "Requisite", "BindsTo", "PartOf", "Upholds",
+    "OnFailure", "OnSuccess", "Triggers", "TriggeredBy", "After", "Before", "Conflicts",
+)
+
+
+def validate_effective(value, case):
+    need(set(value) == set(EFFECTIVE_PROPERTIES), "effective worker properties incomplete")
+    expected = dict(User="edge400-observer", Group="edge400-observer", AppArmorProfile="edge400-observer",
+        CapabilityBoundingSet="", AmbientCapabilities="", RestrictAddressFamilies="AF_UNIX", NoNewPrivileges="yes",
+        Restart="no", RuntimeMaxUSec="25s", TimeoutStopUSec="5s", DefaultDependencies="no", Slice="system.slice")
+    need(all(value[key] == wanted for key, wanted in expected.items()), "effective worker authority/restart/bounds differ")
+    for key in ("Wants", "Requisite", "BindsTo", "PartOf", "Upholds", "OnFailure", "OnSuccess", "Triggers", "TriggeredBy", "Before", "Conflicts"):
+        need(value[key] == "", "unexpected worker activation/dependency")
+    need(set(value["Requires"].split()) <= {"system.slice"}
+         and set(value["After"].split()) <= {"system.slice", "systemd-journald.socket"}, "unexpected worker dependency")
+    executable = str(g.PYTHON.with_name("edge-observe"))
+    argv = " ".join([executable, "-I", str(Path(__file__)), "--worker", "live", "--case", case])
+    command = value["ExecStart"]
+    need(command.count("{") == command.count("}") == 1 and command.startswith("{ ") and command.endswith(" }"), "ambiguous worker commands")
+    fields = {}
+    for part in command[2:-2].split(" ; "):
+        key, sep, item = part.partition("=")
+        need(sep and key not in fields, "ambiguous effective command")
+        fields[key] = item
+    need(fields.get("path") == executable and fields.get("argv[]") == argv
+         and fields.get("ignore_errors") == "no", "effective worker command differs")
+
+
+def effective_worker(case):
+    result = subprocess.run(["systemctl", "show", OBSERVER, "--property=" + ",".join(EFFECTIVE_PROPERTIES)],
+                            capture_output=True, text=True, check=True, timeout=2)
+    need(len(result.stdout) <= 32768, "effective worker state oversized")
+    rows = result.stdout.splitlines()
+    need(all("=" in row for row in rows), "effective worker state malformed")
+    value = dict(row.split("=", 1) for row in rows)
+    need(len(rows) == len(value), "duplicate effective worker property")
+    validate_effective(value, case)
+    state = unit_snapshot(OBSERVER)
+    need(state["ActiveState"] == "active" and int(state["MainPID"]) > 0, "worker not active")
+    pid = state["MainPID"]
+    status = dict(line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line)
+    label = Path(f"/proc/{pid}/attr/apparmor/current").read_text().strip()
+    need(status["Uid"].split() == ["61002"] * 4 and status["Gid"].split() == ["61002"] * 4
+         and set(status["Groups"].split()) <= {"61002"} and status["NoNewPrivs"].strip() == "1"
+         and all(int(status[key], 16) == 0 for key in ("CapEff", "CapPrm", "CapAmb", "CapBnd"))
+         and label == "edge400-observer (enforce)", "actual worker kernel confinement differs")
+    need(cg._kernel_text(f"/proc/{pid}/cgroup", 4096) == "0::/system.slice/" + OBSERVER + "\n", "actual worker cgroup differs")
+    return dict(properties=value, state=state, kernel_status=status, kernel_apparmor=label)
+
+
 def cleanup(units, tracked):
     errors, records = [], []
+    before = {}
     for unit in units:
         try:
-            current = unit_snapshot(unit)
-            if current.get("LoadState") != "not-found":
-                g.systemctl("stop", unit)
+            before[unit] = unit_snapshot(unit)
         except BaseException as exc:
-            errors.append((unit, type(exc).__name__))
+            errors.append((unit, "before", type(exc).__name__))
+        # Always try stop, even when status/PID reads failed. A collected unit
+        # can return nonzero on stop; only an independently proven absent unit
+        # may excuse that error. Snapshot failures remain sticky either way.
+        try:
+            stopped = subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=5)
+            if stopped.returncode:
+                need(before.get(unit, {}).get("LoadState") == "not-found", "actor stop failed")
+        except BaseException as exc:
+            errors.append((unit, "stop", type(exc).__name__))
     for unit in units:
         try:
             state = unit_snapshot(unit)
-            need(state.get("ActiveState") in ("inactive", "failed") and int(state.get("MainPID", "0")) == 0, "unit still active")
-            for saved in tracked.get(unit, []):
-                cg = saved.get("ControlGroup", "")
-                need(cg.startswith("/") and ".." not in Path(cg).parts, "invalid saved cgroup")
-                path = Path("/sys/fs/cgroup") / cg.lstrip("/") / "cgroup.procs"
-                need(not path.exists() or not path.read_text().strip(), "residual cgroup processes")
+            need(state.get("ActiveState") in ("inactive", "failed")
+                 and state.get("MainPID") == state.get("ControlPID") == "0", "unit still active")
+            saved_states = [*tracked.get(unit, []), before.get(unit, {}), state]
+            groups = {"/system.slice/" + unit}
+            for saved in saved_states:
+                group = saved.get("ControlGroup", "")
+                need(group in ("", "/system.slice/" + unit), "unexpected actor cgroup")
+                groups.add(group)
                 if saved.get("pid_stat"):
-                    pid = saved["MainPID"]
-                    current = Path(f"/proc/{pid}/stat")
+                    current = Path("/proc") / saved["MainPID"] / "stat"
                     need(not current.exists() or pid_identity(current.read_text()) != pid_identity(saved["pid_stat"]), "original actor remains")
-            records.append(dict(unit=unit, state=state))
+            for group in sorted(groups):
+                need(cg.group_empty(group, units), "actor cgroup or descendants populated/unknown")
+            records.append(dict(unit=unit, state=state, verified_groups=sorted(groups)))
         except BaseException as exc:
-            errors.append((unit, type(exc).__name__))
+            errors.append((unit, "verify", type(exc).__name__))
     try:
         need(not g.Systemd().cores(), "core actor remains")
     except BaseException as exc:
-        errors.append(("core-process-scan", type(exc).__name__))
+        errors.append(("core-process-scan", "verify", type(exc).__name__))
     return dict(errors=errors, units=records)
 
 
@@ -244,7 +310,9 @@ def run_case(case, output):
                     break
                 need(time.monotonic() < deadline, "missing exact input_ready fence")
                 time.sleep(.05)
-            tracked[OBSERVER].append(unit_snapshot(OBSERVER))
+            effective = effective_worker(case)
+            tracked[OBSERVER].append(effective["state"])
+            save_json(output / "effective-worker.json", effective)
             save(output / "ready-journal.raw", raw)
             g.stop()  # Clean real actor shutdown; signed end is not actor-cleanup proof.
             process.wait(timeout=15)

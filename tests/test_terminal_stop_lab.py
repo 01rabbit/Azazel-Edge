@@ -53,16 +53,18 @@ def test_worker_retains_existing_observer_authority():
 def test_cleanup_continues_after_stop_failure_and_records_residual(monkeypatch):
     called = []
 
-    def stop(*args):
-        called.append(args)
-        if args == ("stop", "bad.service"):
+    def stop(argv, **kwargs):
+        called.append(argv[-1])
+        if argv[-1] == "bad.service":
             raise OSError("original stop failed")
+        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(lab.g, "systemctl", stop)
-    monkeypatch.setattr(lab, "unit_snapshot", lambda unit: dict(ActiveState="inactive", MainPID="0", ControlGroup="", pid_stat=None))
+    monkeypatch.setattr(lab.subprocess, "run", stop)
+    monkeypatch.setattr(lab, "unit_snapshot", lambda unit: dict(ActiveState="inactive", MainPID="0", ControlPID="0", ControlGroup="", pid_stat=None))
+    monkeypatch.setattr(lab.cg, "group_empty", lambda *args: True)
     monkeypatch.setattr(lab.g, "Systemd", lambda: SimpleNamespace(cores=lambda: [dict(pid=99)]))
     result = lab.cleanup(["bad.service", "good.service"], {})
-    assert called == [("stop", "bad.service"), ("stop", "good.service")]
+    assert called == ["bad.service", "good.service"]
     assert {row[0] for row in result["errors"]} == {"bad.service", "core-process-scan"}
     assert len(result["units"]) == 2
 
@@ -97,10 +99,84 @@ def test_pid_identity_ignores_changing_runtime_fields_but_not_starttime():
     assert lab.pid_identity(raw.replace(" 123 ", " 124 ")) != lab.pid_identity(raw)
 
 
-def test_cleanup_accepts_collected_transient_unit_only_with_empty_readback(monkeypatch):
-    monkeypatch.setattr(lab.g, "systemctl", lambda *args: pytest.fail("collected unit must not be stopped"))
-    monkeypatch.setattr(lab, "unit_snapshot", lambda unit: dict(LoadState="not-found", ActiveState="inactive", MainPID="0", ControlGroup="", pid_stat=None))
+def test_cleanup_accepts_collected_unit_only_after_stop_attempt_and_verified_hierarchy(monkeypatch):
+    called = []
+    monkeypatch.setattr(lab.subprocess, "run", lambda argv, **kw: (called.append(argv[-1]) or SimpleNamespace(returncode=5)))
+    monkeypatch.setattr(lab, "unit_snapshot", lambda unit: dict(LoadState="not-found", ActiveState="inactive", MainPID="0", ControlPID="0", ControlGroup="", pid_stat=None))
     monkeypatch.setattr(lab.g, "Systemd", lambda: SimpleNamespace(cores=lambda: []))
+    groups = []
+    monkeypatch.setattr(lab.cg, "group_empty", lambda group, units: groups.append(group) or True)
     assert lab.cleanup(["collected.service"], {})["errors"] == []
-    monkeypatch.setattr(lab, "unit_snapshot", lambda unit: dict(LoadState="not-found", ActiveState="active", MainPID="7", ControlGroup="", pid_stat=None))
-    assert lab.cleanup(["collected.service"], {})["errors"]
+    assert called == ["collected.service"]
+    assert groups == ["", "/system.slice/collected.service"]
+
+
+def test_preread_failure_never_skips_any_unit_stop(monkeypatch):
+    calls, reads = [], {}
+
+    def state(unit):
+        reads[unit] = reads.get(unit, 0) + 1
+        if unit == "bad.service" and reads[unit] == 1:
+            raise PermissionError("PID stat unavailable")
+        return dict(LoadState="loaded", ActiveState="inactive", MainPID="0", ControlPID="0", ControlGroup="", pid_stat=None)
+
+    monkeypatch.setattr(lab, "unit_snapshot", state)
+    monkeypatch.setattr(lab.subprocess, "run", lambda argv, **kw: calls.append(argv[-1]) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(lab.cg, "group_empty", lambda *args: True)
+    monkeypatch.setattr(lab.g, "Systemd", lambda: SimpleNamespace(cores=lambda: []))
+    result = lab.cleanup(["bad.service", "good.service"], {})
+    assert calls == ["bad.service", "good.service"]
+    assert ("bad.service", "before", "PermissionError") in result["errors"]
+
+
+def test_cgroup_wrong_or_partial_mount_refuses_absence():
+    full = "25 1 0:20 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n"
+    assert lab.cg._unified_mount(full)["root"] == "/"
+    for raw in (full.replace(" / /sys", " /hidden /sys"), full + "26 25 0:21 / /sys/fs/cgroup/hidden rw - tmpfs tmpfs rw\n", full.replace("cgroup2", "cgroup")):
+        with pytest.raises(AssertionError):
+            lab.cg._unified_mount(raw)
+
+
+def test_nested_child_populated_refuses_even_when_parent_has_no_pids(tmp_path, monkeypatch):
+    unit = "actor.service"
+    group = tmp_path / "system.slice" / unit
+    group.mkdir(parents=True)
+    (group / "cgroup.procs").write_text("")
+    (group / "cgroup.events").write_text("populated 1\nfrozen 0\n")
+    monkeypatch.setattr(lab.cg, "_cgroup_view", lambda: os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY))
+    assert not lab.cg.group_empty("/system.slice/" + unit, [unit])
+    (group / "cgroup.events").write_text("populated 0\nfrozen 0\n")
+    assert lab.cg.group_empty("/system.slice/" + unit, [unit])
+    (group / "cgroup.events").unlink()
+    with pytest.raises(FileNotFoundError):
+        lab.cg.group_empty("/system.slice/" + unit, [unit])
+
+
+def test_missing_group_still_requires_verified_full_view(monkeypatch):
+    def wrong_view():
+        raise AssertionError("manager cgroup namespace differs")
+    monkeypatch.setattr(lab.cg, "_cgroup_view", wrong_view)
+    for group in ("", "/system.slice/missing.service"):
+        with pytest.raises(AssertionError, match="namespace differs"):
+            lab.cg.group_empty(group, ["missing.service"])
+
+
+def effective_fixture():
+    value = dict.fromkeys(lab.EFFECTIVE_PROPERTIES, "")
+    value.update(User="edge400-observer", Group="edge400-observer", AppArmorProfile="edge400-observer",
+        RestrictAddressFamilies="AF_UNIX", NoNewPrivileges="yes", Restart="no", RuntimeMaxUSec="25s",
+        TimeoutStopUSec="5s", DefaultDependencies="no", Slice="system.slice", Requires="system.slice", After="system.slice")
+    executable = str(lab.g.PYTHON.with_name("edge-observe"))
+    argv = " ".join([executable, "-I", str(Path(lab.__file__)), "--worker", "live", "--case", "positive"])
+    value["ExecStart"] = "{ path=" + executable + " ; argv[]=" + argv + " ; ignore_errors=no ; pid=123 ; code=(null) ; status=0/0 }"
+    return value
+
+
+@pytest.mark.parametrize("field,replacement", [("Restart", "always"), ("ExecStart", "{ path=/bin/other }"), ("User", "root"), ("CapabilityBoundingSet", "cap_net_admin"), ("RestrictAddressFamilies", "AF_UNIX AF_INET"), ("Wants", lab.g.UNIT), ("TriggeredBy", "unexpected.timer"), ("DefaultDependencies", "yes")])
+def test_effective_unit_rejects_reopen_authority_or_unregistered_command(field, replacement):
+    value = effective_fixture()
+    lab.validate_effective(value, "positive")
+    value[field] = replacement
+    with pytest.raises(AssertionError):
+        lab.validate_effective(value, "positive")
+    assert "Restart=no" in lab.role_argv("live", "positive")
