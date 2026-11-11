@@ -17,6 +17,7 @@ import signed_network_telemetry_material as material
 from signed_network_freshness import _validate_fresh_records
 from signed_network_clock import _anchor
 from azazel_edge.benchmark.measurement import measure_experiment
+from azazel_edge.benchmark.benefit import SAFETY_FIELDS
 from azazel_edge.outcome.input_transport import validate_transport
 
 need, canonical, plan, phase = (
@@ -707,9 +708,12 @@ def read_telemetry_assignment(
         abi_sha256=abi_sha256,
         interpreter_sha256=interpreter_sha256,
     )
-    return old._read_assignment_artifacts(
+    result = old._read_assignment_artifacts(
         expected_manifest_sha256, expected_start_head, contract=_TelemetryReader(pins)
     )
+    result["safety_provenance"] = _safety_provenance()
+    result["measurement_record_purpose"] = "mechanical_diagnostic_only"
+    return result
 
 
 def validate_fresh_telemetry_records(
@@ -738,9 +742,35 @@ def validate_fresh_telemetry_records(
     )
 
 
+def _safety_provenance():
+    """No independent category observations exist in this fixed v2 contract."""
+    return dict(
+        declared_counts_basis="instrumentation_registration_not_independent_observation",
+        independently_observed=False,
+        observations={field: None for field in SAFETY_FIELDS},
+        qualification="unmeasured",
+    )
+
+
 def read_telemetry_experiment(manifest, read_results, **pins):
-    """Read-only existing calculation after exact four fresh authenticated runs."""
+    """Validate all four records; calculate diagnostics, always withhold safety."""
     records = validate_fresh_telemetry_records(manifest, read_results, **pins)
-    return measure_experiment(
+    diagnostic = measure_experiment(
         manifest, dict(manifest_sha256=plan.manifest_digest(manifest), records=records)
+    )
+    return dict(
+        schema_version="signed-network-telemetry-experiment-diagnostic/v1",
+        status="withheld",
+        reasons=["independent_safety_measurements_unavailable"],
+        safety_provenance=_safety_provenance(),
+        mechanical_diagnostic=dict(
+            purpose="mechanical_calculation_with_declared_safety_counts_only",
+            qualified_benefit=False,
+            calculation=diagnostic,
+        ),
+        qualified_benefit=False,
+        measurement_completed=False,
+        authorizes_transition=False,
+        experiment=False,
+        production_admission=False,
     )

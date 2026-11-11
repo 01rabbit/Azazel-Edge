@@ -68,9 +68,24 @@ keys. It returns the original measurement-record objects in manifest order.
 This is a local structural gate, not authentication of caller-authored JSON.
 
 `read_telemetry_experiment(manifest, read_results, **pins)` applies that gate and
-calls the existing `measure_experiment` unchanged. A per-assignment
-`calculation_available` is not measurement completion, runtime authority, resume,
-production admission or permission to launch another scope. Broad interface and
+calls the existing `measure_experiment` unchanged only for a mechanical
+diagnostic. Its outer result is always `status=withheld` with reason
+`independent_safety_measurements_unavailable`. The diagnostic is retained under
+`mechanical_diagnostic.calculation`; its numerical thresholds and ledger labels
+cannot qualify benefit. All authorization/completion flags remain false.
+
+The four `safety_violations` counts in this instrumentation path originate in
+registration declarations, not independent category counters. Retained captures
+and original historical artifacts stay unchanged; those counts are diagnostic
+inputs, never measured absence of unauthorized action, protected escape, forged
+evidence acceptance or advisory authority conversion. Each assignment now
+explicitly labels its record `mechanical_diagnostic_only` and reports all four
+safety observations as unknown (`null`). Caller booleans or JSON claiming safety
+coverage cannot unlock the experiment API: no independent safety contract is
+implemented. A future scope-bound observation contract requires separate review.
+
+A per-assignment `calculation_available` is not measurement completion, runtime
+authority, resume, production admission or permission to launch another scope. Broad interface and
 system telemetry remains confounded; causal support and two-pair pilot limits
 are unchanged. No new score, threshold or production entrypoint is introduced.
 
@@ -80,3 +95,9 @@ ownership, role/kernel metadata, telemetry and clock sources are explicitly
 synthetic. The collector uses `persistence=None`; journal bytes are manually
 assembled through the existing fixture writer. These tests establish no actual
 journal durability, systemd confinement, native execution or four-VM efficacy.
+
+The complete four-assignment synthetic regression reaches the original
+calculator's threshold gate with no integrity rejections, while the enclosing v2
+API still withholds safety qualification. An attempted caller-supplied safety
+flag is also ineffective. This is a software regression, not runtime safety or
+efficacy evidence; existing clock/authentication/cleanup negatives remain strict.

@@ -538,8 +538,9 @@ class TelemetryFixture(Fixture):
         )
 
 
-def test_four_v2_records_compose_through_real_crypto_and_unchanged_measurement(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("forged_safety_flag", [False, True])
+def test_four_v2_records_remain_diagnostic_despite_valid_crypto_and_calculation(
+    tmp_path, monkeypatch, forged_safety_flag
 ):
     fixture = TelemetryFixture(tmp_path, monkeypatch)
     results = []
@@ -547,6 +548,18 @@ def test_four_v2_records_compose_through_real_crypto_and_unchanged_measurement(
         result, outcomes = fixture.build(i)
         assert result["status"] == "calculation_available", result["reasons"]
         assert result["live_outcomes"] == [o.to_dict() for o in outcomes]
+        assert result["safety_provenance"]["observations"] == {
+            name: None for name in new.SAFETY_FIELDS
+        }
+        assert result["safety_provenance"]["independently_observed"] is False
+        assert result["measurement_record_purpose"] == "mechanical_diagnostic_only"
+        if forged_safety_flag:
+            # Caller-authored booleans/JSON cannot supply the absent contract.
+            result["safety_provenance"] = dict(
+                independently_observed=True,
+                observations=dict.fromkeys(new.SAFETY_FIELDS, 0),
+            )
+            result["qualified_benefit"] = True
         results.append(result)
     before = old.recording.canonical(results)
     records = new.validate_fresh_telemetry_records(
@@ -562,11 +575,33 @@ def test_four_v2_records_compose_through_real_crypto_and_unchanged_measurement(
         for record in records
     )
     report = new.read_telemetry_experiment(fixture.manifest, results, **fixture.pins)
+    assert report["status"] == "withheld"
+    assert report["reasons"] == ["independent_safety_measurements_unavailable"]
+    assert report["safety_provenance"]["independently_observed"] is False
+    assert report["safety_provenance"]["observations"] == dict.fromkeys(
+        new.SAFETY_FIELDS
+    )
+    assert report["qualified_benefit"] is False
+    assert all(
+        report[key] is False
+        for key in (
+            "measurement_completed",
+            "authorizes_transition",
+            "experiment",
+            "production_admission",
+        )
+    )
+    assert report["mechanical_diagnostic"]["qualified_benefit"] is False
+    report = report["mechanical_diagnostic"]["calculation"]
     assert report["integrity_rejections"] == 0 and report["received_runs"] == 4
     assert [row["status"] for row in report["ledger"]] == ["qualified"] * 4
     assert (
         report["comparison"]["complete_pairs"] == 2
         and report["comparison"]["claim_status"] == "mechanical_only"
+    )
+    assert (
+        report["comparison"]["measurement_gate"]
+        == "recorded_thresholds_met_requires_independent_review"
     )
     assert before == old.recording.canonical(results)
 
