@@ -221,6 +221,7 @@ def test_current_compile_retains_originals_never_loads_and_rechecks_material(
             "--skip-kernel-load",
             "--skip-cache",
             "--stdout",
+            "--warn=all",
             "--Werror",
             str(material.SOURCE_POLICY),
         ]

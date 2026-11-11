@@ -101,6 +101,7 @@ def stage_fixture(tmp_path, monkeypatch, fault=None):
         assert (out / "root-before.json").exists() and (out / "baseline.json").exists()
         assert (
             argv[0] == "apparmor_parser"
+            and "--warn=all" in argv
             and "--Werror" in argv
             and "--skip-cache" in argv
         )
