@@ -9,8 +9,10 @@ import socket
 import subprocess
 import sys
 
-assert sys.argv[1:] in ([], ["--provider"])
-profile = "edge400-provider" if sys.argv[1:] else "edge400-native"
+assert sys.argv[1:] in ([], ["--provider"], ["--tc"])
+profile = {"--provider": "edge400-provider", "--tc": "edge400-tc"}.get(
+    sys.argv[1] if len(sys.argv) > 1 else "", "edge400-native"
+)
 lib = ctypes.CDLL("libapparmor.so.1", use_errno=True)
 assert lib.aa_change_profile(profile.encode()) == 0
 assert (
@@ -62,6 +64,9 @@ if profile == "edge400-provider":
         allowed = socket.socket(family, kind)
         allowed.close()
 else:
+    if profile == "edge400-tc":
+        allowed = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW)
+        allowed.close()
     expect("inet", lambda: socket.socket(socket.AF_INET))
 expect("inet6", lambda: socket.socket(socket.AF_INET6))
 print(json.dumps(dict(uid=os.getuid(), profile=profile + " (enforce)", denied=denied)))

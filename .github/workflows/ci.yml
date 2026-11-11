@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [baseline, apparmor, native-apparmor, provider-apparmor]
+        flavor: [baseline, apparmor, native-apparmor, provider-apparmor, legacy-tc-apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -133,6 +133,7 @@ jobs:
           driver=guest.py
           if [ '${{ matrix.flavor }}' != baseline ]; then driver=armor.py; fi
           if [ '${{ matrix.flavor }}' = provider-apparmor ]; then driver=provider.py; fi
+          if [ '${{ matrix.flavor }}' = legacy-tc-apparmor ]; then driver=legacy_tc.py; fi
           native_args=
           if [ '${{ matrix.flavor }}' = native-apparmor ]; then native_args=--native-core; fi
           for phase in prepare exercise smoke-finish; do

@@ -1717,22 +1717,58 @@ fn tc_owned_state_present<R: ReleaseCommandRunner>(
     let items = payload
         .as_array()
         .ok_or_else(|| "tc readback was not an array".to_string())?;
+    // A root delete also destroys its qdisc subtree. The legacy ledger owns
+    // only its exact TBF root, never an operator-installed child qdisc. Inspect
+    // the complete readback before deciding: do not return on the first match.
+    let mut roots = 0;
+    let mut owned = None;
+    let own_major = u16::from_str_radix(task.tc_handle.trim_end_matches(':'), 16)
+        .map_err(|_| "invalid tc ownership major")?;
     for item in items {
-        if item.get("root").and_then(Value::as_bool) != Some(true) {
-            continue;
+        if !item.is_object() || item.get("kind").and_then(Value::as_str).filter(|s| !s.is_empty()).is_none()
+            || item.get("handle").and_then(Value::as_str).and_then(|h| tc_major(h, true)).is_none()
+            || item.get("root").is_some_and(|v| !v.is_boolean()) {
+            return Err("tc qdisc readback has ambiguous identity".to_string());
         }
-        if item.get("handle").and_then(Value::as_str) != Some(task.tc_handle.as_str()) {
-            continue;
+        let root = item.get("root").and_then(Value::as_bool) == Some(true);
+        if root { roots += 1; }
+        if let Some(parent) = item.get("parent") {
+            let parent = parent.as_str().ok_or("tc qdisc parent is ambiguous")?;
+            if root { return Err("tc root unexpectedly claims a parent".to_string()); }
+            let major = tc_major(parent, false).ok_or("tc qdisc parent is ambiguous")?;
+            if major == own_major {
+                return Err("owned TBF has an unowned child qdisc; root delete refused".to_string());
+            }
+        } else if !root {
+            return Err("tc qdisc topology is ambiguous".to_string());
         }
-        if item.get("kind").and_then(Value::as_str) != Some("tbf") {
-            return Err("tc ownership handle exists with unexpected qdisc kind".to_string());
+        if root && item.get("handle").and_then(Value::as_str) == Some(task.tc_handle.as_str()) {
+            if owned.is_some() { return Err("tc ownership root is ambiguous".to_string()); }
+            owned = Some(item);
         }
-        if !tbf_parameters_match(task, item) {
-            return Err("tc ownership handle exists with unexpected TBF parameters".to_string());
-        }
-        return Ok(true);
     }
-    Ok(false)
+    if roots > 1 { return Err("tc readback contains multiple root qdiscs".to_string()); }
+    let Some(item) = owned else { return Ok(false); };
+    if item.get("kind").and_then(Value::as_str) != Some("tbf") {
+        return Err("tc ownership handle exists with unexpected qdisc kind".to_string());
+    }
+    if !tbf_parameters_match(task, item) {
+        return Err("tc ownership handle exists with unexpected TBF parameters".to_string());
+    }
+    Ok(true)
+}
+
+// Validate kernel-visible class identifiers without interpreting an unknown
+// handle as absence. Qdisc handles have only a major; parents may have a minor.
+fn tc_major(value: &str, qdisc: bool) -> Option<u16> {
+    let (major, minor) = value.split_once(':')?;
+    if major.is_empty() || major.len() > 4 || minor.len() > 4
+        || (qdisc && !minor.is_empty())
+        || !major.bytes().all(|b| b.is_ascii_hexdigit())
+        || !minor.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u16::from_str_radix(major, 16).ok()
 }
 
 fn release_nft_rule<R: ReleaseCommandRunner>(
@@ -3305,6 +3341,52 @@ mod tests {
                 ])
             );
         }
+    }
+
+    #[test]
+    fn tc_release_refuses_foreign_child_and_ambiguous_topology_before_any_delete() {
+        let task = tbf_task();
+        let root = captured_item(TC_JSON_IPROUTE2_6_15, &task);
+        let major = task.tc_handle.trim_end_matches(':');
+        let bad = [
+            json!([root, {"kind":"pfifo", "handle":"99:", "parent":format!("{major}:1")}]),
+            json!([{"kind":"pfifo", "handle":"99:", "parent":format!("{major}:1")}, root]),
+            json!([root, root]),
+            json!([root, {"kind":"noqueue", "handle":"0:", "root":true}]),
+            json!([root, {"kind":"pfifo", "handle":"99:", "parent":null}]),
+            json!([root, {"kind":"pfifo", "handle":"99:"}]),
+            json!([root, null]),
+            json!([{"kind":"noqueue", "root":true}]),
+            json!([{"kind":"noqueue", "handle":"unknown", "root":true}]),
+            json!([{"kind":"tbf", "handle":task.tc_handle, "root":true,
+                "parent":"ffff:1", "options":{"rate":32000,"burst":4096,"lat":999999}}]),
+        ];
+        for readback in bad {
+            let path = test_path("ledger.json");
+            let _ = due_throttle(&path);
+            let runner = FakeRunner::new(vec![ok_json(readback)]);
+            let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
+            assert_eq!(outcomes[0].status, "retry_pending");
+            assert_eq!(outcomes[0].postcondition["verified"], json!(false));
+            assert_eq!(runner.calls.lock().unwrap().len(), 1, "a refused topology must never issue delete");
+        }
+    }
+
+    #[test]
+    fn tc_release_preserves_independent_clsact_while_removing_only_owned_root() {
+        let path = test_path("ledger.json");
+        let task = due_throttle(&path);
+        let clsact = json!({"kind":"clsact", "handle":"ffff:", "parent":"ffff:fff1", "options":{}});
+        let runner = FakeRunner::new(vec![
+            ok_json(json!([captured_item(TC_JSON_IPROUTE2_6_15, &task), clsact])),
+            ok_raw(""),
+            ok_json(json!([{"kind":"noqueue", "handle":"0:", "root":true}, clsact])),
+        ]);
+        let outcomes = process_due_releases_with_runner(&path, &LeaseNow::wall_only(102.0), &runner).unwrap();
+        assert_eq!(outcomes[0].result, "rollback_applied_and_absence_verified");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[1], strings(&["tc", "qdisc", "del", "dev", &task.iface, "root", "handle", &task.tc_handle]));
     }
 
     #[test]
