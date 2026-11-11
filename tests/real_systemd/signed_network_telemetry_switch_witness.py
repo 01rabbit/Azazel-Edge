@@ -208,32 +208,52 @@ class WitnessProof:
             self.owner.failed = True
         finally:
             if pid is not None and status is None:
-                try:
-                    exited = os.waitid(
+
+                def attempt(name, call):
+                    try:
+                        return True, call()
+                    except BaseException as exc:
+                        receipt["errors"].append(name + ":" + type(exc).__name__)
+                        self.owner.failed = True
+                        return False, None
+
+                reserved, exited = attempt(
+                    "exit_probe",
+                    lambda: os.waitid(
                         os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
-                    )
-                    members = _members(pid) if group_owned else {}
-                    receipt["members_before_reap"] = members
-                    if exited is None or members:
+                    ),
+                )
+                known, members = attempt(
+                    "group_inventory", lambda: _members(pid) if group_owned else {}
+                )
+                receipt["members_before_reap"] = members
+                if reserved:
+                    if exited is None or not known or members:
                         self.owner.failed = True
                         receipt["forced"] = True
-                        if group_owned:
-                            os.killpg(pid, signal.SIGKILL)
-                        else:
-                            os.kill(pid, signal.SIGKILL)  # Unreaped own child only.
-                    _exited(pid, time.monotonic() + 2)
-                    until = time.monotonic() + 2
-                    while group_owned:
-                        receipt["members_after_kill"] = _members(pid)
-                        if not receipt["members_after_kill"]:
-                            break
-                        lab.need(
-                            time.monotonic() < until, "owned descendants remain/unknown"
+                        attempt(
+                            "kill_owned",
+                            lambda: os.killpg(pid, signal.SIGKILL)
+                            if group_owned
+                            else os.kill(pid, signal.SIGKILL),
                         )
-                        time.sleep(0.01)
-                    receipt["group_empty_before_reap"] = True
-                except BaseException as exc:
-                    receipt["errors"].append("reap:" + type(exc).__name__)
+                    attempt("leader_exit", lambda: _exited(pid, time.monotonic() + 2))
+
+                    def group_empty():
+                        until = time.monotonic() + 2
+                        while group_owned:
+                            receipt["members_after_kill"] = _members(pid)
+                            if not receipt["members_after_kill"]:
+                                break
+                            lab.need(
+                                time.monotonic() < until,
+                                "owned descendants remain/unknown",
+                            )
+                            time.sleep(0.01)
+
+                    receipt["group_empty_before_reap"] = attempt(
+                        "group_empty", group_empty
+                    )[0]
                 # No group signal is permitted after this reap releases its PID.
                 try:
                     got, reaped = os.waitpid(pid, os.WNOHANG)
