@@ -97,6 +97,30 @@ is a known-valid syscall permission denial, **not AA-only causal attribution**.
 Unsupported errors, partial33-row transcripts, blocked frames and missing later
 proof still refuse. Fresh commissioning of the corrected source is required.
 
+## Retained v5 partial probe and specific signal-zero errno correction
+
+Root's fresh v5 used source `bfef8a4df44d76c73ea9aefa59ca78bbe45b04b9`,
+archive SHA256 `65d2ca9a0335651be5213934f6e3b241e3dd9cf4ec56fdd0a600450aba7ba604`,
+boot `2c75000f-2639-45b4-bc52-bb30625ebc5b`. Its 314 component tests passed.
+Actual coverage was again true for all four paths, but only 39 rows were retained:
+four other observations (including unexercised setns), 34 accepted negative
+attempts, and peer `signal_zero` EACCES13 recorded as unsupported by the old
+EPERM-only gate. User-namespace EACCES, network-namespace EPERM, namespace-FD
+EACCES and both network-family errno97 denials had already been accepted. The
+last PID1 signal-zero row and Root post-probe peer proof were not executed.
+This case remains **failed and incomplete**, retained without retry or repair.
+The VM is stopped; all actor cgroups/namespaces were absent and parent/old assets
+unchanged. Private failed-evidence archive SHA256 is
+`8be4fea7df63a771a94ef78176457216d8655a150c08c9d0c686e80fb9948a08`.
+
+Only both fixed `kill(pid, 0)` rows now accept EACCES or EPERM in worker and
+result validation. Signal zero sends no actual signal. ESRCH/ENOENT/EINVAL/ENOSYS
+and all other unsupported errors still refuse; an unexpected successful check
+still aborts immediately. No profile/unit/order/bound or other-operation changes;
+network-namespace unshare remains EPERM-only. The observation is a permission
+denial, not AA-only causal attribution. Full40 rows and independent Root post-peer
+proof/cleanup remain required; partial39 rows cannot qualify.
+
 ## Candidate policy and pure contracts
 
 `tests/real_systemd/edge400-observer-telemetry-lab.apparmor` names only the NEW

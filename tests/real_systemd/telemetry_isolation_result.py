@@ -191,7 +191,7 @@ def expected_operations(peer_pid):
     for family in (2, 10):
         expected[f"network_family:{family}"] = (*denied, errno.EAFNOSUPPORT)
     for pid in (peer_pid, 1):
-        expected[f"signal_zero:{pid}"] = (errno.EPERM,)
+        expected[f"signal_zero:{pid}"] = denied
     return expected
 
 

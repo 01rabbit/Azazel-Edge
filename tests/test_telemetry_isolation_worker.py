@@ -490,3 +490,47 @@ def test_newnet_eacces_is_not_relaxed_by_newuser_errno_support(monkeypatch):
         w.probe(libc, context(), dict(pid=123, address=4096), records)
     assert records[-1]["operation"] == "unshare_newnet"
     assert records[-1]["outcome"] == "unsupported_error"
+
+
+@pytest.mark.parametrize("pid", [123, 1])
+@pytest.mark.parametrize(
+    "code",
+    [errno.EPERM, errno.EACCES, errno.ENOENT, errno.EINVAL, errno.ENOSYS, errno.ESRCH],
+)
+def test_fixed_signal_zero_permission_denials_only_never_send_signal(
+    monkeypatch, pid, code
+):
+    libc, _, _ = probe_fixture(monkeypatch)
+    seen = []
+
+    def killing(target, signal):
+        seen.append((target, signal))
+        raise OSError(
+            code if target == pid else errno.EPERM, "synthetic kill-zero denial"
+        )
+
+    monkeypatch.setattr(w.os, "kill", killing)
+    records = []
+    if code in (errno.EPERM, errno.EACCES):
+        w.probe(libc, context(), dict(pid=123, address=4096), records)
+        assert len(records) == 40 and seen == [(123, 0), (1, 0)]
+        row = next(r for r in records if r["operation"] == f"signal_zero:{pid}")
+        assert row["outcome"] == "denied" and row["errno"] == code
+    else:
+        with pytest.raises(RuntimeError):
+            w.probe(libc, context(), dict(pid=123, address=4096), records)
+        assert records[-1]["operation"] == f"signal_zero:{pid}"
+        assert records[-1]["outcome"] == "unsupported_error"
+        assert seen == ([(123, 0)] if pid == 123 else [(123, 0), (1, 0)])
+
+
+def test_unexpected_signal_zero_success_remains_fatal_before_pid1(monkeypatch):
+    libc, _, _ = probe_fixture(monkeypatch)
+    seen = []
+    monkeypatch.setattr(w.os, "kill", lambda pid, signal: seen.append((pid, signal)))
+    records = []
+    with pytest.raises(RuntimeError):
+        w.probe(libc, context(), dict(pid=123, address=4096), records)
+    assert seen == [(123, 0)]
+    assert records[-1]["operation"] == "signal_zero:123"
+    assert records[-1]["outcome"] == "unexpected_success"

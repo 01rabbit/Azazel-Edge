@@ -354,3 +354,45 @@ def test_newuser_permission_denial_never_promotes_incomplete_or_other_namespace_
     with pytest.raises(ValueError):
         r.validate_result(raw(value), start, peer_pid=123)
     assert value == before
+
+
+@pytest.mark.parametrize("pid", [123, 1])
+@pytest.mark.parametrize(
+    "code",
+    [errno.EPERM, errno.EACCES, errno.ENOENT, errno.EINVAL, errno.ENOSYS, errno.ESRCH],
+)
+def test_both_fixed_signal_zero_rows_require_legitimate_permission_errno(
+    tmp_path, pid, code
+):
+    start, value = final(tmp_path)
+    row = next(r for r in value["operations"] if r["operation"] == f"signal_zero:{pid}")
+    row["errno"] = code
+    before = deepcopy(value)
+    if code in (errno.EPERM, errno.EACCES):
+        assert r.validate_result(raw(value), start, peer_pid=123) == value
+    else:
+        with pytest.raises(ValueError):
+            r.validate_result(raw(value), start, peer_pid=123)
+    assert value == before
+
+
+@pytest.mark.parametrize("fault", ["partial", "blocked", "unsupported", "success"])
+def test_signal_zero_eacces_never_promotes_v5_partial_or_unexpected_success(
+    tmp_path, fault
+):
+    start, value = final(tmp_path)
+    peer = next(r for r in value["operations"] if r["operation"] == "signal_zero:123")
+    peer["errno"] = errno.EACCES
+    if fault == "partial":
+        value["operations"] = value["operations"][:39]
+        assert value["operations"][-1] is peer
+    elif fault == "blocked":
+        value["kind"] = "blocked"
+    else:
+        peer["outcome"] = (
+            "unsupported_error" if fault == "unsupported" else "unexpected_success"
+        )
+    before = deepcopy(value)
+    with pytest.raises(ValueError):
+        r.validate_result(raw(value), start, peer_pid=123)
+    assert value == before

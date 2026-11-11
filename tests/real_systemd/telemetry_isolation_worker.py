@@ -248,7 +248,7 @@ def probe(libc, context, peer, records):
             records,
             f"signal_zero:{pid}",
             lambda pid=pid: os.kill(pid, 0),
-            (errno.EPERM,),
+            DENIED,
         )
 
 
