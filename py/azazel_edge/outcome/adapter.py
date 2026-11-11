@@ -109,16 +109,37 @@ def _extract_iface(command_plan: list[str]) -> str:
     return ""
 
 
-def _scope(event: Mapping[str, Any], action: str, command_plan: list[str]) -> dict[str, Any]:
+def _scope(
+    event: Mapping[str, Any], action: str, command_plan: list[str]
+) -> dict[str, Any]:
     normalized = _as_mapping(event.get("normalized"))
     src_ip = str(normalized.get("src_ip") or "")
     target_port = normalized.get("target_port")
     if action == "throttle":
-        return {
-            "scope_kind": "interface_root_qdisc",
-            "interface": _extract_iface(command_plan),
-            "decision_subject_ip": src_ip,
-        }
+        from .nft_flow_evidence import flow_scope, legacy_tbf_interface, UNKNOWN_SCOPE
+
+        try:
+            original = _as_mapping(event.get("enforcement"))
+            if any(type(original.get(k)) is not int for k in ("executed_count", "failed_count")):
+                raise ValueError("native integer command counts required")
+            return flow_scope(
+                original.get("command_plan"),
+                original.get("rollback_plan"),
+                original.get("metadata"),
+                original.get("trace_id"),
+                normalized=normalized,
+            )
+        except (ValueError, TypeError, KeyError):
+            pass
+        try:
+            interface = legacy_tbf_interface(_as_mapping(event.get("enforcement")).get("command_plan"))
+            return {
+                "scope_kind": "interface_root_qdisc",
+                "interface": interface,
+                "decision_subject_ip": src_ip,
+            }
+        except (ValueError, TypeError):
+            return {"scope_kind": UNKNOWN_SCOPE, "decision_subject_ip": src_ip}
     if action == "redirect":
         return {
             "scope_kind": "source_ip_and_destination_port",
