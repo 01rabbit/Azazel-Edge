@@ -88,7 +88,7 @@ def test_unknown_actor_quiescence_cannot_delete_owned_namespace(monkeypatch):
         t.close_namespace_after_actors(assets, dict(errors=[("unit", "unknown")]), {})
 
 
-@pytest.mark.parametrize("name", [t.UNIT, t.UNIT+".d", "service.d", "edge400-.service.d", "edge400-telemetry-.service.d"])
+@pytest.mark.parametrize("name", [t.UNIT, t.UNIT+".d", t.UNIT+".wants", t.UNIT+".requires", t.UNIT+".upholds", "service.d", "edge400-.service.d", "edge400-telemetry-.service.d"])
 def test_preexisting_exact_and_global_unit_material_refuses(tmp_path,name):
     (tmp_path/name).symlink_to(tmp_path/"missing")
     with pytest.raises(AssertionError, match="unit material"):

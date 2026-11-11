@@ -32,7 +32,7 @@ def reject_used_base():
 def reject_unit_material(paths):
     for parent in paths:
         lab.need(parent.is_absolute() and ".." not in parent.parts, "invalid system unit search path")
-        for name in (UNIT, UNIT + ".d", "edge400-.service.d", "edge400-telemetry-.service.d", "service.d"):
+        for name in (UNIT, UNIT + ".d", UNIT + ".wants", UNIT + ".requires", UNIT + ".upholds", "edge400-.service.d", "edge400-telemetry-.service.d", "service.d"):
             lab.need(not os.path.lexists(parent / name), "preexisting exact/global unit material refused")
 
 
