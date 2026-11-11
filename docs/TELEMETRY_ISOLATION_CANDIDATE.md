@@ -78,7 +78,7 @@ pure validators do not authenticate an imported precheck.
    manual function with a new protected private output path. Existing output,
    base, candidate alias/profile/label, units/drop-ins or namespace names refuse.
    The case contains PUBLIC NONKEY canaries only; no auth scope, signer, journal,
-   witness, capture/core execution, traffic or registered trial is created.
+   witness, capture/core execution, benchmark workload or registered trial is created.
 3. Guarded setup records Root parent state and old asset/loaded-profile facts
    **before** candidate mutations. It records current ABI/feature/Yama evidence,
    compiles the current protected profile with warnings fatal, then exclusively
@@ -86,7 +86,8 @@ pure validators do not authenticate an imported precheck.
    raw compiler/load output. Command success alone does not prove mediation.
 4. Before each file/directory/namespace creation, retain intended inventory or
    creation intent; immediately retain confirmed owned-FD identity. Never change
-   process umask, repair preexisting modes, predelete names or reuse unknown handles.
+   process umask inside creation helpers, repair preexisting modes, predelete names
+   or reuse unknown handles.
    Every intended path is inventoried even after partial creation/load failure;
    missing, partial or unknown objects cannot be reported as unchanged/clean.
 5. Create only the two fixed owned namespaces and dummy `es` interface. Finish
