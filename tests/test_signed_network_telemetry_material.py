@@ -258,3 +258,22 @@ def test_current_compile_retains_originals_never_loads_and_rechecks_material(
         "telemetry-compile.stderr",
     ):
         assert (tmp_path / name).exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "changed"])
+def test_reviewed_proof_module_is_real_mandatory_source_material(fault):
+    path = material.SRC / "tests/real_systemd/signed_network_telemetry_proof.py"
+    key = str(path.relative_to(material.SRC))
+    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    sources = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
+    assert sources[key] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert (
+        sources[key]
+        == "8c72eb7901a31edd95de99f6412415446c251c148be81502c006664e9ea1c231"
+    )
+    if fault == "missing":
+        del sources[key]
+    else:
+        sources[key] = "0" * 64
+    with pytest.raises(plan.BenefitInputError):
+        plan.validate_telemetry_manifest(value, "b" * 64)

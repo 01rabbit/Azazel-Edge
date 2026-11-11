@@ -35,9 +35,10 @@ compare independently provisioned pins with current protected guest material.
 Source hashes describe the constructor's current checkout. Root's mandatory
 external source-archive hash verification on host/guest and protected revision
 boundary authenticates the source; these selected hashes are not a replacement
-recursive source proof. The not-yet-integrated Root proof module has no placeholder
-hash. Its real reviewed bytes, final worker and remaining consumed helpers must be
-included before any final plan/source freeze. Changes invalidate previous hashes.
+recursive source proof. The reviewed Root proof module is now present and mandatory in the source-pin
+map, using its actual bytes; missing or changed entries refuse. The final worker
+and remaining consumed helpers must still be integrated/reviewed before any final
+plan/source freeze. Changes invalidate previous hashes.
 
 ## Current protected material, without installation or activation
 

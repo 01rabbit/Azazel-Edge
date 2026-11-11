@@ -22,6 +22,7 @@ SOURCE_FILES = (
     "signed_network_plan.py",
     "signed_network_telemetry_contract.py",
     "signed_network_telemetry_material.py",
+    "signed_network_telemetry_proof.py",
     "signed_network_observer.py",
     "telemetry_isolation_contract.py",
     "telemetry_isolation_preflight.py",
