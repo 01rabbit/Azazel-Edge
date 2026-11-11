@@ -255,18 +255,45 @@ class _TelemetryReader:
         launch_receipt = snap.json(phase.WORK / "live/live-launch.json")
         reaped = snap.json(phase.WORK / "live/live-client-reap.json")
         need(
-            set(launch_receipt) == {"client_pid", "launch_before_ns", "launch_after_ns"}
+            set(launch_receipt)
+            == {
+                "kind",
+                "client_pid",
+                "client_launch_before_ns",
+                "client_launch_after_ns",
+                "deadline_monotonic_ns",
+                "budget_seconds",
+            }
+            and launch_receipt["kind"] == "owned_systemd_run_client_popen/v1"
             and type(launch_receipt["client_pid"]) is int
             and launch_receipt["client_pid"] == reaped["pid"]
             and reaped["reaped"] is True
             and reaped["forced"] is False
             and reaped["errors"] == []
-            and type(launch_receipt["launch_before_ns"]) is int
-            and type(launch_receipt["launch_after_ns"]) is int
-            and launch_receipt["launch_before_ns"]
-            <= launch_receipt["launch_after_ns"]
-            <= start[0]
-            and end[2] <= launch_receipt["launch_before_ns"] + 40_000_000_000,
+            and all(
+                type(launch_receipt[key]) is int
+                for key in (
+                    "client_launch_before_ns",
+                    "client_launch_after_ns",
+                    "deadline_monotonic_ns",
+                    "budget_seconds",
+                )
+            )
+            and launch_receipt["budget_seconds"] == 40
+            and launch_receipt["deadline_monotonic_ns"]
+            == launch_receipt["client_launch_before_ns"] + 40_000_000_000
+            and type(record["observer_helper_return_ns"]) is int
+            and start[2]
+            <= launch_receipt["client_launch_before_ns"]
+            <= launch_receipt["client_launch_after_ns"]
+            <= record["origin_ns"]
+            <= record["deadline_ns"]
+            <= end[0]
+            and end[2]
+            <= terminal["end_clock_anchor"]["monotonic_before_ns"]
+            <= terminal["end_clock_anchor"]["monotonic_after_ns"]
+            <= record["observer_helper_return_ns"]
+            <= launch_receipt["deadline_monotonic_ns"],
             "original live client launch/runtime bound differs",
         )
         for label in ("baseline", "active", "absence"):
@@ -301,6 +328,15 @@ class _TelemetryReader:
                 and query["query_ended_at"]
                 == datetime.fromtimestamp(b[1] / 1e9, timezone.utc).isoformat(),
                 "query UTC is not original sampled anchor epoch",
+            )
+            need(
+                (b[2] <= launch_receipt["client_launch_before_ns"])
+                if label == "baseline"
+                else (
+                    launch_receipt["client_launch_after_ns"]
+                    <= launch["launch_before_ns"]
+                ),
+                "query/client launch ordering differs",
             )
             self.controller_samples.extend((first, last))
         need(len(self.controller_samples) == 6, "all six actual Root anchors required")
