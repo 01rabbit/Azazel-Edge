@@ -73,6 +73,30 @@ or AA-only attribution (write-open may also be denied by DAC). Endpoint metadata
 unit fixtures are explicitly synthetic; v3 collected none. Current source still
 requires fresh compilation and complete actual positive/negative commissioning.
 
+## Retained v4 partial probe and specific user-namespace errno correction
+
+Root's fresh v4 used source `491acb02a92a567bc1234eedc5e5e320f3bac6e1`,
+archive SHA256 `53d669853f0f9c74e4a635e7fde814d28e6acdc2ebeebac9be6495961e21759b`,
+boot `f15ad7fa-672b-4695-91b5-c8cca9da59e8`. Its 297 component tests passed.
+The actual probe reached all four telemetry paths with coverage true and retained
+33 ordered rows: self-byte/sample/enumeration, 29 accepted negative attempts
+(including binfmt status/register EACCES), then `unshare_newuser` with valid
+`CLONE_NEWUSER` flag and EACCES13. The old EPERM-only gate recorded that last row
+as unsupported and aborted. Seven later rows and Root's post-probe peer proof
+were not executed. This is a **failed partial case, not complete qualification**.
+Root actor/cgroup/namespace cleanup and parent/asset invariants were clean; retain
+this used case without retry or repair. The VM is stopped; private failed-evidence
+archive SHA256 is
+`eaad833408d0af67b50830daecb21d19240de1187ef963666c30fa22b5a7ad76`.
+
+Only the fixed user-namespace operation now accepts EACCES or EPERM, both in the
+worker and the exact result-row allowlist. Network-namespace unshare remains
+EPERM-only; every other operation/order, profile, unit, bound and gate is unchanged.
+The actual candidate audit supplied no corroborating userns row, so the observation
+is a known-valid syscall permission denial, **not AA-only causal attribution**.
+Unsupported errors, partial33-row transcripts, blocked frames and missing later
+proof still refuse. Fresh commissioning of the corrected source is required.
+
 ## Candidate policy and pure contracts
 
 `tests/real_systemd/edge400-observer-telemetry-lab.apparmor` names only the NEW

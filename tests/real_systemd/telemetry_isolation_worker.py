@@ -226,7 +226,7 @@ def probe(libc, context, peer, records):
             records,
             "unshare_" + name,
             lambda flag=flag: _checked(libc.unshare(flag)),
-            (errno.EPERM,),
+            DENIED if name == "newuser" else (errno.EPERM,),
         )
     _denied(
         records,

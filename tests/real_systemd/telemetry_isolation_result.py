@@ -184,8 +184,8 @@ def expected_operations(peer_pid):
     for name in ("setuid_zero", "capset_raise_sysadmin"):
         expected[name] = (errno.EPERM,)
     expected["aa_change_profile_unconfined"] = denied
-    for name in ("unshare_newuser", "unshare_newnet"):
-        expected[name] = (errno.EPERM,)
+    expected["unshare_newuser"] = denied
+    expected["unshare_newnet"] = (errno.EPERM,)
     expected["namespace_fd_open"] = denied
     expected["setns"] = None
     for family in (2, 10):

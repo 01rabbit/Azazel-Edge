@@ -310,3 +310,47 @@ def test_binfmt_api_requires_both_actual_ordered_permission_denials(tmp_path, fa
     with pytest.raises(ValueError):
         r.validate_result(raw(value), start, peer_pid=123)
     assert value == before
+
+
+@pytest.mark.parametrize(
+    "code",
+    [errno.EPERM, errno.EACCES, errno.ENOENT, errno.EINVAL, errno.ENOSYS, errno.ESRCH],
+)
+def test_only_newuser_accepts_two_permission_denial_errnos(tmp_path, code):
+    start, value = final(tmp_path)
+    row = next(r for r in value["operations"] if r["operation"] == "unshare_newuser")
+    row["errno"] = code
+    before = deepcopy(value)
+    if code in (errno.EPERM, errno.EACCES):
+        assert r.validate_result(raw(value), start, peer_pid=123) == value
+    else:
+        with pytest.raises(ValueError):
+            r.validate_result(raw(value), start, peer_pid=123)
+    assert value == before
+
+
+@pytest.mark.parametrize(
+    "fault", ["partial", "blocked", "unsupported", "newnet_eacces"]
+)
+def test_newuser_permission_denial_never_promotes_incomplete_or_other_namespace_facts(
+    tmp_path, fault
+):
+    start, value = final(tmp_path)
+    rows = value["operations"]
+    user = next(r for r in rows if r["operation"] == "unshare_newuser")
+    user["errno"] = errno.EACCES
+    if fault == "partial":
+        value["operations"] = rows[: rows.index(user) + 1]
+        assert len(value["operations"]) == 33
+    elif fault == "blocked":
+        value["kind"] = "blocked"
+    elif fault == "unsupported":
+        user["outcome"] = "unsupported_error"
+    else:
+        next(r for r in rows if r["operation"] == "unshare_newnet")["errno"] = (
+            errno.EACCES
+        )
+    before = deepcopy(value)
+    with pytest.raises(ValueError):
+        r.validate_result(raw(value), start, peer_pid=123)
+    assert value == before

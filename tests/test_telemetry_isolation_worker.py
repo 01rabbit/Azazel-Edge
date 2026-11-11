@@ -445,3 +445,48 @@ def test_failed_self_read_sanity_never_reaches_sampling_or_foreign_read(monkeypa
 def test_reserved_root_argv_now_points_to_committed_worker_source_only():
     assert Path(root.worker_argv("probe")[3]).name == "telemetry_isolation_worker.py"
     assert root.worker_argv("peer")[-2:] == ["--worker", "peer"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [errno.EPERM, errno.EACCES, errno.ENOENT, errno.EINVAL, errno.ENOSYS, errno.ESRCH],
+)
+def test_valid_newuser_permission_errnos_only_and_newnet_remains_strict(
+    monkeypatch, code
+):
+    libc, calls, _ = probe_fixture(monkeypatch)
+    flags_seen = []
+
+    def unshare(flag):
+        flags_seen.append(flag)
+        ct.set_errno(code if flag == 0x10000000 else errno.EPERM)
+        return -1
+
+    libc.unshare = unshare
+    records = []
+    if code in (errno.EPERM, errno.EACCES):
+        w.probe(libc, context(), dict(pid=123, address=4096), records)
+        row = next(r for r in records if r["operation"] == "unshare_newuser")
+        assert row["outcome"] == "denied" and row["errno"] == code
+        assert len(records) == 40 and flags_seen == [0x10000000, 0x40000000]
+    else:
+        with pytest.raises(RuntimeError):
+            w.probe(libc, context(), dict(pid=123, address=4096), records)
+        assert records[-1]["operation"] == "unshare_newuser"
+        assert records[-1]["outcome"] == "unsupported_error"
+        assert flags_seen == [0x10000000]
+
+
+def test_newnet_eacces_is_not_relaxed_by_newuser_errno_support(monkeypatch):
+    libc, _, _ = probe_fixture(monkeypatch)
+
+    def unshare(flag):
+        ct.set_errno(errno.EACCES)
+        return -1
+
+    libc.unshare = unshare
+    records = []
+    with pytest.raises(RuntimeError):
+        w.probe(libc, context(), dict(pid=123, address=4096), records)
+    assert records[-1]["operation"] == "unshare_newnet"
+    assert records[-1]["outcome"] == "unsupported_error"
