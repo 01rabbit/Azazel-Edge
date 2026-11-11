@@ -41,7 +41,10 @@ REQUIRED_ENV = frozenset(
 
 def registration(policy, path):
     d = policy.data
-    if d["schema_version"] != "outcome-input-trust/v3" or d["witness_uid"] != 0:
+    if (
+        d["schema_version"] not in ("outcome-input-trust/v3", "outcome-input-trust/v4")
+        or d["witness_uid"] != 0
+    ):
         raise OutcomeJournalError(
             "live origin requires explicit root-owned v3 enrollment"
         )

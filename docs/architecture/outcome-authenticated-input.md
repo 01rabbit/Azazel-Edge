@@ -1,7 +1,8 @@
 # G3 authenticated capture and protected-prefix witness
 
 Tracking: #400. Status: optional software implementation; **G6 and production
-commissioning remain open**. New v3 scopes only; no v1/v2 migration or unsealing.
+commissioning remain open**. New v3 pathname scopes or explicit v4 abstract
+scopes only; no automatic migration or unsealing.
 
 ## What is authenticated
 
@@ -222,3 +223,76 @@ new-scope `outcome-input-trust/v3` registration profile. It authenticates unchan
 normal-path provider/release reports with explicit producer/native lifecycle
 records, not read-only computation or causal effect. Existing witness and
 protected-prefix trust limits remain; no older scope migrates or downgrades.
+
+## Explicit v4 Linux abstract witness transport
+
+Pathname Unix sockets remain the default for trust v1/v2/v3. A **new** Root-prepared
+scope can explicitly call `input_service.prepare(...,
+witness_network_namespace={"cookie": ..., "kernel_boot_id": ...})`. This produces trust
+v4 with the exact additional public field:
+
+```json
+{"witness_transport":{"kind":"unix-abstract/v1","name":"azazel-edge-witness-v1-<sha256(scope_ref UTF-8)>","network_namespace":{"cookie":123,"kernel_boot_id":"93840600-9e68-4c6b-a778-b918d81dfe02"}}}
+```
+
+The shown namespace values are illustrative, never defaults. Root must obtain
+and independently fence the intended owned network namespace. Public preparation
+and provisioning do not enter it or infer authority from supplied JSON. The
+existing absolute `socket_path` stays present for the protected bundle layout,
+but this explicit transport does not read, bind, probe, unlink or fall back to
+that pathname. No environment variable, automatic migration or runtime selector
+can upgrade an older scope. The foreground witness needs no new argument: its
+explicit, protected trust policy selects the transport.
+
+The canonical ASCII abstract name is derived solely from the public scope and is
+not a secret. The complete transport and namespace identity are bound into the
+trust digest; the nested public descriptor is copied and immutable through its
+normal mapping API. As with other Python policy objects, this does not sandbox
+trusted in-process Python code. All v3 live-origin registration, signed source,
+restart and optional terminal-stop requirements also apply to v4. Native Rust
+wire frames and registration schemas are unchanged; the Rust core does not parse
+this Python witness trust policy. Existing provisioning imports the exact v4
+policy and never rewrites existing source, journal, keys or anchors.
+
+Before using an endpoint, **each** actual client/server checks Linux support
+and a newly created unbound Unix stream socket. `getpeername()` must fail with
+exactly `ENOTCONN`; connected unnamed sockets refuse. `SO_NETNS_COOKIE` returns
+exactly eight native-byte-order bytes, interpreted as an unsigned nonzero 64-bit
+value. That cookie and the bounded canonical kernel boot UUID must exactly match
+the policy before bind/connect, private-key/store or anchor access. An unsupported
+option, unavailable/invalid boot, wrong size, zero cookie or mismatch refuses.
+No namespace-file `stat` or permission fallback is used. Root retains owned
+namespace device/inode separately from this socket namespace identity.
+The endpoint is exactly `b"\0" + canonical_name.encode("ascii")`. An occupied
+abstract name refuses without probing, takeover, repair or pathname fallback.
+Abstract addresses do not have filesystem DAC permissions. An unrelated process
+in the same namespace can deny availability by occupying the public name; it
+cannot satisfy both the configured peer UID and signed, nonce-bound witness
+response. Both directions retain Linux `SO_PEERCRED`, original UID separation,
+bounded requests/responses, domain-separated signatures, counters and exact
+source/journal-prefix acknowledgements. No IP transport or namespace FD transfer
+is added.
+
+This is an optional transport foundation, **not** confinement, production
+commissioning, admission or observer-effect acceptance. A caller must separately
+commission its namespace placement, LSM rules and service configuration. The
+Linux tests use actual temporary separate-UID processes and Unix sockets; their
+structural preparation fixture never executes its synthetic ELF-shaped file.
+Host-skipped Linux tests establish no runtime result, and this change makes no
+power-loss or new authenticated VM claim.
+
+Linux 6.8's [generic socket getter](https://github.com/torvalds/linux/blob/v6.8/net/core/sock.c#L1867-L1872)
+returns `sock_net(sk)->net_cookie` for `SO_NETNS_COOKIE`, requiring an eight-byte
+result. [Namespace initialization](https://github.com/torvalds/linux/blob/v6.8/net/core/net_namespace.c#L298-L311)
+assigns a generated cookie, and [Unix socket creation](https://github.com/torvalds/linux/blob/v6.8/net/unix/af_unix.c#L903-L941)
+allocates the socket in that network namespace before binding. The cookie is
+boot-local kernel metadata, not an inode, secret or proof of authority; pairing it
+with the actual boot UUID prevents treating a value from another boot as current.
+Separate confined Root probes establish permission availability only for their
+actual tested role/UID; they do not substitute for authenticated commissioning.
+
+The fixed read-only cutover proof runs its authorized observer subprocess with
+working directory `/`. Its UID, groups, script, environment and five-second
+timeout remain fixed. Caller-controlled modules in a writable working directory
+cannot substitute for witness verification. The protected interpreter, package
+path and installation remain required trust boundaries.

@@ -45,7 +45,8 @@ def layout(root, p):
     if (
         any(p.data[k] != v for k, v in expected.items())
         or p.data["witness_uid"] != 0
-        or p.data["schema_version"] != "outcome-input-trust/v3"
+        or p.data["schema_version"]
+        not in ("outcome-input-trust/v3", "outcome-input-trust/v4")
     ):
         raise OutcomeJournalError(
             "new live service bundle requires exact protected layout"
@@ -154,6 +155,7 @@ def prepare(
     ai_socket_uid=None,
     capture_apparmor_profile=None,
     native_apparmor_profile=None,
+    witness_network_namespace=None,
 ):
     require_root()
     root = Path(root)
@@ -222,6 +224,13 @@ def prepare(
         socket_path=str(root / "socket/witness.sock"),
         origin_registration_sha256=hashlib.sha256(_json(r)).hexdigest(),
     )
+    if witness_network_namespace is not None:
+        from .input_transport import transport
+
+        d.update(
+            schema_version="outcome-input-trust/v4",
+            witness_transport=transport(d["scope_ref"], witness_network_namespace),
+        )
     policy = TrustPolicy(d)
     layout(root, policy)
     validate_registration(policy, r)

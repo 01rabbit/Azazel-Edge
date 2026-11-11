@@ -194,9 +194,12 @@ class TrustPolicy:
             "anchor_max_records",
         }
         d = self.data
+        if type(d) is dict and d.get("schema_version") == "outcome-input-trust/v4":
+            fields.add("witness_transport")
         if type(d) is dict and d.get("schema_version") in (
             "outcome-input-trust/v2",
             "outcome-input-trust/v3",
+            "outcome-input-trust/v4",
         ):
             fields.add("origin_registration_sha256")
             hex_bytes(d.get("origin_registration_sha256"), 32)
@@ -208,6 +211,7 @@ class TrustPolicy:
                 "outcome-input-trust/v1",
                 "outcome-input-trust/v2",
                 "outcome-input-trust/v3",
+                "outcome-input-trust/v4",
             )
         ):
             raise OutcomeJournalError("invalid input trust policy")
@@ -257,7 +261,14 @@ class TrustPolicy:
         if len(set(paths)) != 4:
             raise OutcomeJournalError("authentication paths must be separate")
 
-        object.__setattr__(self, "data", MappingProxyType(dict(d)))
+        values = dict(d)
+        if d["schema_version"] == "outcome-input-trust/v4":
+            from .input_transport import validate_transport
+
+            values["witness_transport"] = validate_transport(
+                d["scope_ref"], d["witness_transport"]
+            )
+        object.__setattr__(self, "data", MappingProxyType(values))
 
     @property
     def digest(self):
@@ -379,7 +390,10 @@ class SourceVerifier:
                 raise OutcomeJournalError("signed input identity/sequence mismatch")
             _ref(wire["boot_ref"])
             registration = p.get("origin_registration_sha256")
-            if p["schema_version"] == "outcome-input-trust/v3":
+            if p["schema_version"] in (
+                "outcome-input-trust/v3",
+                "outcome-input-trust/v4",
+            ):
                 live_state = signed_live_event(wire["event"], registration, live_state)
             elif registration is not None:
                 validate_readonly_origin_event(wire["event"])

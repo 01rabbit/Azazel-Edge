@@ -141,7 +141,8 @@ def prepare_terminal_stop(line, journal, *, registration_sha256):
     authentication = source.authentication
     policy = authentication.policy
     _need(
-        policy.data["schema_version"] == "outcome-input-trust/v3"
+        policy.data["schema_version"]
+        in ("outcome-input-trust/v3", "outcome-input-trust/v4")
         and policy.data["origin_registration_sha256"] == registration_sha256,
         "terminal trust registration mismatch",
     )
