@@ -203,3 +203,34 @@ the actual pipe/unit/source/mount/FD and before/after target-liveness bindings;
 caller-authored JSON does not become proof through these local checks. Tests use
 synthetic frames and the real telemetry parser on synthetic proc text, not a
 running role or actual kernel-access result.
+
+## Root staging component (no actor loop yet)
+
+`telemetry_isolation_setup.stage(output)` is callable code for a later explicitly
+reviewed Root run, not an automatic command. It requires the NEW
+`EDGE_TELEMETRY_ISOLATION_PREFLIGHT=1` plus the corresponding prefixed
+`SOURCE_COMMIT`, `ARCHIVE_SHA256`, `CORE_SHA256`, `ABI_SHA256` pins. Root must
+independently verify the source archive on host/guest; revision text is not proof.
+The old locked UID61002 account and exact old interpreter aliases/profile must be
+staged **externally** with the reviewed old helpers before this function; it
+validates them without reinstalling, repairing or reloading old policy. Existing
+candidate files/labels/units/drop-ins/names/base/output refuse rather than reuse.
+
+Before any new alias/profile change, staging saves `root-before.json`, baseline
+old inode/hash/mode/loaded-label facts, current ABI/mask metadata and Yama context.
+It compiles the current protected candidate with warnings fatal before installing
+new assets. Exclusive new files and directories use owned no-follow FDs, exact
+modes and named-identity checks, never process-umask changes or existing repairs.
+All fake canaries contain PUBLIC NONKEY data with newly created traversable
+parents. `install-intent.json` precedes alias/profile/canary creation. A successful
+fixed Werror load must add exactly the new enforcing label while retaining old
+labels; command success is not loaded mediation or role qualification.
+
+Failure retains the used scope, raw compiler/load output, new assets and original
+intent. Independent invariant attempts continue through parent-state, old-asset,
+new-asset and loaded-profile checks even when one check or evidence write fails.
+No actors, namespaces, signer, real keys, witness, journal, trial or qualification
+are created by this staging component. Its tests stub Root tools/kernel metadata;
+no actual installation, policy load or candidate access test has been performed.
+The next controller component must compose this with both live roles and all
+cleanup proofs before returning any complete precheck result.
