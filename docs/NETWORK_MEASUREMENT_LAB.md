@@ -27,7 +27,11 @@ objective when fully received. Six small legitimate requests run concurrently
 from the separate protected address; errors stay in the denominator.
 
 The controller's five-second horizon begins **before** alert append and peer
-launch. Upload starts at +0.4 seconds; legitimate requests at +0.2 seconds and
+launch. The actual canonical UUID read from `/proc/sys/kernel/random/boot_id`
+is retained in private `clock-source.json` and full result evidence. Its capture
+reference is the injective `kernel-boot-<actual UUID>` encoding, satisfying the
+letter-first reference contract for both numeric-first and letter-first UUIDs;
+no synthetic replacement boot identity is generated. Upload starts at +0.4 seconds; legitimate requests at +0.2 seconds and
 then every 0.6 seconds. Missed launch budgets or late/missing results are failures,
 not reasons to move the clock, repeat the attack or substitute replay times.
 The service reports its own objective commit and complete terminal audit;
@@ -42,6 +46,13 @@ The service stops processing at H. Release is measured afterward, within a
 separate bound; it cannot extend the service measurement horizon. The core's
 actual execution/release facts and independent nft readback remain separate
 from service/client observations and read-only receipt calculations.
+
+The experiment ID is `network-c0-flow-throttle-v2-<reviewed source prefix>`;
+validation refuses earlier generic IDs or a different reviewed source prefix.
+A corrected source revision must use a newly registered manifest, new source
+staging/output directory and its new experiment identity. Retain any earlier
+failed assignment/ledger as failed or missing in that original experiment;
+do not delete, resume, rerun or backfill it.
 
 Every assignment is frozen and `start` is fsynced before namespace/process work.
 Full capture/audits are exclusive-created and file+directory fsynced before

@@ -29,6 +29,7 @@ from network_measure_peer import ATK, LEGIT, SERVER, PORT, GOAL_BYTES, MAX_MESSA
 PEER = Path(__file__).with_name("network_measure_peer.py")
 SCOPE = "trusted_local_netns_mechanism_service_instrumentation_only"
 ARMS = ("c0", "flow_throttle")
+EXPERIMENT_VERSION = "network-c0-flow-throttle-v2"
 TOOLS = ("ip", "nft", "tc", "conntrack")
 
 
@@ -52,8 +53,17 @@ def plan(arm, core_sha256):
                 mechanism="none" if arm == "c0" else "existing_core_prerouting_flow_throttle")
 
 
+def experiment_identifier(source_commit):
+    require(isinstance(source_commit, str) and re.fullmatch(r"[0-9a-f]{40}", source_commit),
+            "reviewed source commit required for network experiment identity")
+    return EXPERIMENT_VERSION + "-" + source_commit[:12]
+
+
 def validate(manifest, safety, scope, core_sha256):
     assignments = validate_manifest(manifest)
+    reviewed_source = manifest["provenance"]["repo_commits"].get("01rabbit/Azazel-Edge")
+    require(manifest["experiment_id"] == experiment_identifier(reviewed_source),
+            "new versioned network experiment identity required; do not resume old experiment")
     require(isinstance(core_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", core_sha256), "exact core SHA256 required")
     require(scope == SCOPE and manifest["phase"] == "pilot" and manifest["evidence_kind"] == "recorded_lab"
             and manifest["horizon_seconds"] == 5 and len(assignments) == 4,
@@ -61,6 +71,7 @@ def validate(manifest, safety, scope, core_sha256):
     require(manifest["baseline"] == "c0" and manifest["candidate"] == "flow_throttle"
             and {arm["id"] for arm in manifest["arms"]} == set(ARMS), "fixed C0/flow-throttle arms required")
     for arm in manifest["arms"]:
+        require(arm["source_commit"] == reviewed_source, "arm source differs from reviewed experiment source")
         require(arm["role"] == ("local_core_observe_only" if arm["id"] == "c0" else "existing_flow_scoped_throttle"),
                 "arm role must name the actual existing mechanism")
         require(arm["config_sha256"] == manifest_digest(plan(arm["id"], core_sha256)), "frozen core/plan mismatch")
@@ -322,11 +333,23 @@ def receive(process):
     return value
 
 
+def boot_reference(kernel_boot_id):
+    require(type(kernel_boot_id) is str and re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", kernel_boot_id),
+        "canonical actual kernel boot UUID required")
+    require(str(uuid.UUID(kernel_boot_id)) == kernel_boot_id, "invalid kernel boot UUID")
+    # Prefixing is injective and satisfies the capture contract's letter-first
+    # reference grammar without replacing or hashing away the actual boot ID.
+    return "kernel-boot-" + kernel_boot_id
+
+
 def read_boot_id():
-    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    actual = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    boot_reference(actual)
+    return actual
 
 
-def measured_capture(manifest, assignment, run_id, safety, origin, deadline, service, client):
+def measured_capture(manifest, assignment, run_id, safety, origin, deadline, service, client, *, kernel_boot_id=None):
     require(service.get("kind") == "audit" and client.get("kind") == "client"
             and service.get("nonce") == run_id == client.get("nonce"), "peer audit identity mismatch")
     require(all(type(service.get(key)) is int for key in ("started_ns", "origin_ns", "deadline_ns", "ended_ns"))
@@ -345,8 +368,9 @@ def measured_capture(manifest, assignment, run_id, safety, origin, deadline, ser
             "objective client did not supply a complete bounded attempt")
     goal = service.get("goal_ns")
     require(goal is None or type(goal) is int and origin <= goal < deadline, "invalid service-owned objective time")
+    actual_boot = read_boot_id() if kernel_boot_id is None else kernel_boot_id
     capture = IndependentServiceCapture(manifest, assignment["id"], run_id=run_id,
-                                        boot_id=read_boot_id(), clock_id="host-monotonic")
+                                        boot_id=boot_reference(actual_boot), clock_id="host-monotonic")
     for kind, count in safety.items():
         capture.safety_violation(kind, count=count)
     events = [(row["elapsed_seconds"], "transaction", row) for row in rows]
@@ -366,6 +390,9 @@ def one_run(manifest, assignment, run_id, safety, work):
     assets = Assets(work)
     evidence = None
     try:
+        kernel_boot = read_boot_id()
+        write_new(work / "clock-source.json", dict(kernel_boot_id=kernel_boot,
+                  boot_reference=boot_reference(kernel_boot), clock_scope="same_host_monotonic"))
         assets.setup()
         foreign = assets.rules()
         require(len(foreign) == 1 and foreign[0].get("comment") == assets.foreign, "foreign canary missing")
@@ -428,10 +455,12 @@ def one_run(manifest, assignment, run_id, safety, work):
         else:
             require(applied.get("executed_count") == 0 and assets.rules() == foreign, "C0 unexpectedly enforced")
             release = None
-        capture, receipt = measured_capture(manifest, assignment, run_id, safety, origin, deadline, service_audit, client_audit)
+        capture, receipt = measured_capture(manifest, assignment, run_id, safety, origin, deadline, service_audit, client_audit,
+                                            kernel_boot_id=kernel_boot)
         evidence = dict(capture=capture, receipt=receipt, service_audit=service_audit, client_audit=client_audit,
                         execution_fact=applied, independent_rule_readback=owned, release_fact=release,
                         production_origin_admitted=False, scope=SCOPE, namespace_names=assets.names,
+                        kernel_boot_id=kernel_boot,
                         client_ack_is_not_objective_truth=True)
     finally:
         try:

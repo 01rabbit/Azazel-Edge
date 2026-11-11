@@ -14,7 +14,7 @@ from test_benefit_comparison import manifest as base_manifest
 
 def registration(source_commit="a" * 40, core_sha256="b" * 64):
     value = base_manifest()
-    value.update(experiment_id="isolated-network-local-pilot", phase="pilot", evidence_kind="recorded_lab",
+    value.update(experiment_id=driver.experiment_identifier(source_commit), phase="pilot", evidence_kind="recorded_lab",
                  horizon_seconds=5, baseline="c0", candidate="flow_throttle")
     value["provenance"]["repo_commits"] = {"01rabbit/Azazel-Edge": source_commit}
     value["arms"] = [dict(id=arm, role="local_core_observe_only" if arm == "c0" else "existing_flow_scoped_throttle",
@@ -59,7 +59,7 @@ def peer_audits():
 
 
 def test_client_ack_never_substitutes_for_service_commit_and_lost_horizon_refuses(monkeypatch):
-    monkeypatch.setattr(driver, "read_boot_id", lambda: "unit-test-boot")
+    monkeypatch.setattr(driver, "read_boot_id", lambda: "7be45004-1731-4b7c-8e62-59a5ddf129a4")
     m, safety = registration()
     origin, deadline, service, client = peer_audits()
     capture, receipt = driver.measured_capture(m, m["assignments"][0], "run", safety["0-c0"], origin, deadline, service, client)
@@ -285,3 +285,48 @@ def test_unexpected_objective_thread_error_prohibits_complete_client_audit(monke
     with pytest.raises(ValueError, match="unexpectedly"):
         peer.client("unit-only", 0, 5_000_000_000)
     assert emitted == []
+
+
+@pytest.mark.parametrize("actual", ["7be45004-1731-4b7c-8e62-59a5ddf129a4",
+                                   "abe45004-1731-4b7c-8e62-59a5ddf129a4"])
+def test_actual_kernel_uuid_reference_is_injective_and_capture_valid(actual, monkeypatch):
+    from azazel_edge.benchmark.measurement import _ref
+    monkeypatch.setattr(driver, "read_boot_id", lambda: actual)
+    reference = driver.boot_reference(actual)
+    assert reference == "kernel-boot-" + actual
+    assert reference.removeprefix("kernel-boot-") == actual
+    assert _ref(reference) == reference
+    m, safety = registration()
+    origin, deadline, service, client = peer_audits()
+    capture, receipt = driver.measured_capture(m, m["assignments"][0], "run", safety["0-c0"],
+                                               origin, deadline, service, client)
+    assert capture["boot_id"] == reference and receipt["horizon_verified"]
+
+
+def test_kernel_boot_source_format_is_validated_and_raw_id_retained(tmp_path, monkeypatch):
+    actual = "7be45004-1731-4b7c-8e62-59a5ddf129a4"
+    source = tmp_path / "boot-source"
+    source.write_text(actual + "\n")
+    requested = []
+    def kernel_path(path):
+        requested.append(path)
+        return source
+    monkeypatch.setattr(driver, "Path", kernel_path)
+    assert driver.read_boot_id() == actual
+    assert requested == ["/proc/sys/kernel/random/boot_id"]
+    for malformed in ("unit-test-boot", actual.upper(), "{" + actual + "}", actual.replace("-", ""), "", None):
+        with pytest.raises(BenefitInputError): driver.boot_reference(malformed)
+    source.write_text("unit-test-boot\n")
+    with pytest.raises(BenefitInputError): driver.read_boot_id()
+
+
+def test_new_reviewed_source_uses_new_scoped_versioned_experiment_identifier():
+    first, safety = registration("a" * 40)
+    corrected, _ = registration("b" * 40)
+    assert first["experiment_id"] == "network-c0-flow-throttle-v2-" + "a" * 12
+    assert corrected["experiment_id"] != first["experiment_id"]
+    for old in ("mechanical-pilot", "isolated-network-local-pilot", first["experiment_id"]):
+        old_manifest = copy.deepcopy(corrected)
+        old_manifest["experiment_id"] = old
+        with pytest.raises(BenefitInputError, match="experiment identity"):
+            driver.validate(old_manifest, safety, driver.SCOPE, "b" * 64)
