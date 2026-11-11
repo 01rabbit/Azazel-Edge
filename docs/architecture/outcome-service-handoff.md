@@ -262,3 +262,20 @@ The opt-in witness CLI supports `--systemd-notify` for `Type=notify`, gracefully
 closes its endpoint on TERM/INT and retires a dead socket only after acquiring
 and validating the same protected store. Neither readiness nor transport cleanup
 initializes/repairs evidence or permits unverified connected restarts.
+
+### Exact mode for a newly created managed drop-in directory
+
+The switch creates a missing managed directory privately (`0700` subject to the
+operator's existing umask), opens that new owned directory with a no-follow
+file descriptor, verifies its named/opened device and inode, then uses only
+`fchmod` on that descriptor to reach exact `0755`. It verifies ownership, identity
+and exact mode again, and syncs both the directory and protected parent before
+publishing the managed file. The process umask is never changed.
+
+Existing names are validated unchanged: an existing `0700`/otherwise wrong-mode
+directory, symlink, non-directory or foreign owner is refused, never repaired or
+replaced. A detected replacement or I/O failure retains the newly created state
+for review; it does not delete or chmod the replacement. The root-owned protected
+parent remains the trust boundary; this does not claim exclusion of a hostile
+root or another trusted operator racing the namespace. No unit/permission/profile
+or enforcement default changes follow from correcting this creation precondition.
