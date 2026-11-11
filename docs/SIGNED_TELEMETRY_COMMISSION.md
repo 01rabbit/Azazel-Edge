@@ -61,3 +61,34 @@ fenced namespace deletion. Failed/unknown proof retains named scope/evidence; no
 resident-kill shortcut, retry, reset, backfill or profile widening is authorized.
 No H window, workload, service effect, G5 calculation or four-run ledger belongs
 in that single authenticated-connection case.
+
+## Fixed dependency-marker helper (not namespace setup)
+
+`signed_network_telemetry_marker.Marker(output, baseline)` holds ownership state
+before `start()` can mutate anything. The outer namespace owner must retain this
+object on all paths and independently fence all three namespaces before each use.
+The helper itself provides **dependency compatibility only**, not namespace proof,
+authenticated API permission or a complete commissioning entrypoint.
+
+It checks current material/boot, all-family inherited unit material and known
+absent marker/cgroup state. It exclusively creates only fixed `p.NET_UNIT` through
+a protected nofollow parent/owned FD, records intent and inode immediately, then
+establishes exact0644 with that new FD and fsync. It never overwrites, repairs,
+unlinks or reloads profiles. The fixed unit runs only `/usr/bin/true`, oneshot with
+RemainAfterExit, Root user/group, cap0/AF_UNIX/NNP, Restart=no and no default
+dependencies. Its five-second startup/three-second stop settings are fixed; manager
+queries use the existing two-second retained command helper.
+
+Original reload/start/state query outputs precede parsing. Typed empty-hook proof,
+exact executable/argv, effective authority/dependencies/fragment, active-exited
+MainPID/ControlPID0 and full-PID1 cgroup emptiness are required. `marker-verified`
+metadata explicitly sets transition/experiment/admission false and still proves
+no namespace or scope readiness. `stop()` acts only on its unchanged confirmed
+owned file/unit and retains stop/cgroup evidence. Unknown/replaced files do not
+permit stopping a foreign unit; failed stop/persistence proof remains failure.
+The unit file is retained as used-case evidence after stop, never reused/deleted.
+
+The real current preflight and marker modules are now mandatory new-plan source
+pins, with no placeholder for the not-yet-implemented namespace context or main.
+Tests use real private file writes plus explicitly synthetic Root/unit metadata;
+no actual systemd unit, namespace, key or hardened role is created by these tests.
