@@ -34,7 +34,6 @@ def effective():
 def fixture(tmp_path, monkeypatch, fault=None):
     units, output = tmp_path / "units", tmp_path / "evidence"
     units.mkdir()
-    output.mkdir()
     events = []
     monkeypatch.setattr(marker.g, "UNITS", units)
     monkeypatch.setattr(marker.g, "guard", lambda: events.append("guard"))
@@ -48,18 +47,30 @@ def fixture(tmp_path, monkeypatch, fault=None):
         marker.material, "verify_current", lambda **pins: baseline["material"]
     )
     monkeypatch.setattr(marker.material.preflight, "_output", lambda path: None)
+    monkeypatch.setattr(
+        marker.material.preflight.old,
+        "private_output",
+        lambda path: path.mkdir(mode=0o700),
+    )
 
     def inherited(path):
         events.append("unit-material")
+        marker.lab.save(
+            path / "commission-unit-paths.stdout", b"SYNTHETIC retained unit paths\n"
+        )
         if fault == "inherited":
             raise AssertionError("synthetic inherited material")
 
     monkeypatch.setattr(marker.setup, "_unit_material", inherited)
     monkeypatch.setattr(
-        marker.setup.scope, "_state", lambda unit: {"expected": "absent"}
+        marker.setup.scope,
+        "_state",
+        lambda unit: {"expected": "owned" if "marker-start" in events else "absent"},
     )
     monkeypatch.setattr(
-        marker.setup.scope, "_known_collected", lambda value: fault != "existing"
+        marker.setup.scope,
+        "_known_collected",
+        lambda value: value.get("expected") == "absent" and fault != "existing",
     )
     monkeypatch.setattr(
         marker.lab.cg, "group_empty", lambda group, allowed: fault != "cgroup"
@@ -94,6 +105,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
             **{
                 key: getattr(os, key)
                 for key in (
+                    "path",
                     "open",
                     "close",
                     "fstat",
@@ -114,7 +126,7 @@ def fixture(tmp_path, monkeypatch, fault=None):
     )
 
     def collect(unit, prefix, path):
-        assert unit == marker.p.NET_UNIT and prefix == "marker"
+        assert unit == marker.p.NET_UNIT and prefix in ("marker", "marker-stop-fence")
         value = effective()
         if fault == "hook":
             value["ExecStartPre"] = "unexpected"
@@ -150,11 +162,26 @@ def fixture(tmp_path, monkeypatch, fault=None):
             if prefix == "marker-state"
             else b""
         )
-        code = None if fault == "starttimeout" and prefix == "marker-start" else 0
+        if prefix == "marker-stop-type":
+            raw = b"Type=oneshot\nRemainAfterExit=yes\nLoadState=loaded\n"
+        code = (
+            None
+            if fault == "starttimeout"
+            and prefix == "marker-start"
+            or fault == "reloadtimeout"
+            and prefix == "marker-reload"
+            else 0
+        )
         marker.lab.save(path / (prefix + ".stdout"), raw)
         marker.lab.save(path / (prefix + ".stderr"), b"")
         marker.lab.save_json(path / (prefix + ".result.json"), dict(returncode=code))
         assert argv in (
+            [
+                "systemctl",
+                "show",
+                marker.p.NET_UNIT,
+                "--property=Type,RemainAfterExit,LoadState",
+            ],
             ["systemctl", "daemon-reload"],
             ["systemctl", "start", marker.p.NET_UNIT],
             [
@@ -174,11 +201,15 @@ def fixture(tmp_path, monkeypatch, fault=None):
         return dict(errors=["synthetic unknown CG"] if fault == "stop" else [])
 
     monkeypatch.setattr(marker.lab, "cleanup", cleanup)
-    if fault == "createdsave":
+    if fault in ("createdsave", "startintentsave"):
         save = marker.lab.save_json
 
         def saving(path, value):
-            if path.name == "marker-file-created.json":
+            if path.name == (
+                "marker-file-created.json"
+                if fault == "createdsave"
+                else "marker-start-intent.json"
+            ):
                 raise OSError("synthetic evidence failure")
             return save(path, value)
 
@@ -232,7 +263,10 @@ def test_any_setup_gap_retains_state_and_never_publishes_verified_marker(
     assert not (output / "marker-verified.json").exists()
     if state.identity is not None:
         assert (units / marker.p.NET_UNIT).exists()
-        if fault != "owner":
+        if fault in ("hook", "cap", "exec", "duplicateexec"):
+            with pytest.raises(AssertionError):
+                state.stop()
+        elif fault != "owner":
             state.stop()
     else:
         assert "marker-start" not in events
@@ -304,3 +338,142 @@ def test_actual_setup_and_marker_are_mandatory_new_plan_source_pins(name, fault)
         pins[key] = "0" * 64
     with pytest.raises(plan.BenefitInputError):
         plan.validate_telemetry_manifest(value, "b" * 64)
+
+
+@pytest.mark.parametrize("fault", ["bytes", "mode"])
+def test_same_inode_edit_or_mode_drift_never_grants_stop_authority(
+    tmp_path, monkeypatch, fault
+):
+    state, units, output, events = fixture(tmp_path, monkeypatch)
+    state.start()
+    path = units / marker.p.NET_UNIT
+    before = path.stat().st_ino
+    if fault == "bytes":
+        path.write_bytes(b"FOREIGN SAME-INODE CONFIGURATION")
+    else:
+        path.chmod(0o600)
+    assert path.stat().st_ino == before
+    with pytest.raises(AssertionError):
+        state.stop()
+    assert "owned-stop" not in events
+    assert (output / "marker-stop-before-file.json").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("FragmentPath", "/run/systemd/transient/foreign.service"),
+        (
+            "ExecStart",
+            "{ path=/usr/bin/false ; argv[]=/usr/bin/false ; ignore_errors=no }",
+        ),
+        ("ExecStopPost", "unexpected hook"),
+        ("CapabilityBoundingSet", "cap_net_admin"),
+        ("NoNewPrivileges", "no"),
+    ],
+)
+def test_current_loaded_unit_replacement_or_hook_cannot_be_stopped(
+    tmp_path, monkeypatch, field, value
+):
+    state, _, output, events = fixture(tmp_path, monkeypatch)
+    state.start()
+    original = marker.material.preflight._collect_effective
+
+    def collect(unit, prefix, path):
+        current = original(unit, prefix, path)
+        if prefix == "marker-stop-fence":
+            current[field] = value
+        return current
+
+    monkeypatch.setattr(marker.material.preflight, "_collect_effective", collect)
+    with pytest.raises(AssertionError):
+        state.stop()
+    assert "owned-stop" not in events
+    assert (
+        json.loads((output / "marker-stop-effective.json").read_bytes())[field] == value
+    )
+
+
+@pytest.mark.parametrize(
+    "fault", ["shortwrite", "createdsave", "reloadtimeout", "startintentsave"]
+)
+def test_partial_creation_or_reload_without_start_has_no_stop_authority(
+    tmp_path, monkeypatch, fault
+):
+    state, _, _, events = fixture(tmp_path, monkeypatch, fault)
+    with pytest.raises((AssertionError, OSError)):
+        state.start()
+    assert state.identity is not None and state.start_attempted is False
+    receipt = state.stop()
+    assert (
+        receipt["stop_attempted"] is False
+        and receipt["scope"] == "marker_not_started_no_stop_authority"
+    )
+    assert "owned-stop" not in events
+    assert state.manager_attempted is (fault in ("reloadtimeout", "startintentsave"))
+
+
+@pytest.mark.parametrize("fault", [None, "cgroup", "drift"])
+def test_only_independently_absent_unit_and_full_cgroup_can_skip_stop(
+    tmp_path, monkeypatch, fault
+):
+    state, _, output, events = fixture(tmp_path, monkeypatch)
+    state.start()
+    reads = []
+
+    def current(unit):
+        reads.append(1)
+        return {
+            "expected": "owned" if fault == "drift" and len(reads) > 1 else "absent"
+        }
+
+    monkeypatch.setattr(marker.setup.scope, "_state", current)
+    monkeypatch.setattr(
+        marker.lab.cg, "group_empty", lambda group, allowed: fault != "cgroup"
+    )
+    if fault is None:
+        assert state.stop()["scope"] == "marker_known_absent_full_cgroup_empty"
+    else:
+        with pytest.raises(AssertionError):
+            state.stop()
+    assert len(reads) == 2 and "owned-stop" not in events
+    assert (output / "marker-stop-absent-after.json").exists()
+
+
+def test_marker_uses_fresh_child_evidence_with_preflight_artifacts_preserved(
+    tmp_path, monkeypatch
+):
+    state, _, _, _ = fixture(tmp_path, monkeypatch)
+    parent = tmp_path / "preflight-evidence"
+    parent.mkdir()
+    (parent / "commission-unit-paths.stdout").write_bytes(b"ORIGINAL PREFLIGHT QUERY")
+    state.output = parent / "namespace-marker"
+    state.start()
+    assert (
+        parent / "commission-unit-paths.stdout"
+    ).read_bytes() == b"ORIGINAL PREFLIGHT QUERY"
+    assert (
+        state.output / "commission-unit-paths.stdout"
+    ).read_bytes() == b"SYNTHETIC retained unit paths\n"
+    assert state.stop()["errors"] == []
+
+
+@pytest.mark.parametrize("kind", ["directory", "dangling"])
+def test_marker_rejects_reused_parent_or_evidence_alias_before_manager_actions(
+    tmp_path, monkeypatch, kind
+):
+    state, _, _, events = fixture(tmp_path, monkeypatch)
+    if kind == "directory":
+        state.output.mkdir()
+        (state.output / "commission-unit-paths.stdout").write_bytes(b"ORIGINAL")
+    else:
+        state.output.symlink_to(tmp_path / "absent-evidence")
+    with pytest.raises(AssertionError, match="dedicated"):
+        state.start()
+    assert "marker-reload" not in events and state.identity is None
+    if kind == "directory":
+        assert (
+            state.output / "commission-unit-paths.stdout"
+        ).read_bytes() == b"ORIGINAL"
+    else:
+        assert state.output.is_symlink()

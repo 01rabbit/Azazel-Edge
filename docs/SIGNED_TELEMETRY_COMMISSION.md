@@ -64,8 +64,12 @@ in that single authenticated-connection case.
 
 ## Fixed dependency-marker helper (not namespace setup)
 
-`signed_network_telemetry_marker.Marker(output, baseline)` holds ownership state
-before `start()` can mutate anything. The outer namespace owner must retain this
+`signed_network_telemetry_marker.Marker(output, baseline)` requires an explicit
+**fresh dedicated marker evidence child**, such as a new `namespace-marker` under
+the preflight output. It refuses an existing directory/alias, so its exclusive
+`commission-unit-paths` artifacts cannot collide with preflight's originals. The
+helper creates that child itself; the outer caller must not precreate it. The
+state object exists before `start()` can mutate anything. The outer namespace owner must retain this
 object on all paths and independently fence all three namespaces before each use.
 The helper itself provides **dependency compatibility only**, not namespace proof,
 authenticated API permission or a complete commissioning entrypoint.
@@ -83,9 +87,16 @@ Original reload/start/state query outputs precede parsing. Typed empty-hook proo
 exact executable/argv, effective authority/dependencies/fragment, active-exited
 MainPID/ControlPID0 and full-PID1 cgroup emptiness are required. `marker-verified`
 metadata explicitly sets transition/experiment/admission false and still proves
-no namespace or scope readiness. `stop()` acts only on its unchanged confirmed
-owned file/unit and retains stop/cgroup evidence. Unknown/replaced files do not
-permit stopping a foreign unit; failed stop/persistence proof remains failure.
+no namespace or scope readiness. `stop()` requires a finalized exact0644 protected file with original identity
+and exact fixed bytes/hash, then a current loaded-unit fragment/command/hooks/
+properties/type fence, retained and rechecked before stop. Separate durable
+manager/start intents distinguish file creation from an attempted start. Partial
+creation or reload without start grants **no STOP authority**, even if an inode
+was confirmed. Alternatively, two known-not-found snapshots plus actual full-PID1
+empty cgroup proof establish absence without issuing stop. Unknown, edited,
+replaced or unsupported configuration refuses; failed proof remains failure.
+A no-start/absent receipt is not whole-scope quiescence or namespace-deletion proof;
+outer actual all-actor/cgroup/resident guards remain required.
 The unit file is retained as used-case evidence after stop, never reused/deleted.
 
 The real current preflight and marker modules are now mandatory new-plan source

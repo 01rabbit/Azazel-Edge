@@ -93,6 +93,7 @@ class Marker:
 
     def __init__(self, output, baseline):
         self.output, self.baseline, self.identity = Path(output), baseline, None
+        self.finalized = self.manager_attempted = self.start_attempted = False
 
     def _identity(self):
         parent, name = material.preflight.open_parent(
@@ -113,7 +114,6 @@ class Marker:
 
     def start(self):
         g.guard()
-        material.preflight._output(self.output)
         pins = self.baseline["pins"]
         lab.need(
             g.boot() == self.baseline["kernel_boot_id"]
@@ -124,6 +124,12 @@ class Marker:
             == self.baseline["material"],
             "current marker source/material differs",
         )
+        lab.need(
+            not os.path.lexists(self.output),
+            "fresh dedicated marker evidence child required",
+        )
+        material.preflight.old.private_output(self.output)
+        material.preflight._output(self.output)
         setup._unit_material(self.output)  # All families/prefixes, before creation.
         lab.need(
             setup.scope._known_collected(setup.scope._state(p.NET_UNIT))
@@ -171,10 +177,27 @@ class Marker:
             and material._read(g.UNITS / p.NET_UNIT, 16384, 0o644) == raw,
             "marker file bytes/mode differ",
         )
+        self.finalized = True
+        lab.save_json(
+            self.output / "marker-file-finalized.json",
+            dict(
+                device=self.identity[0],
+                inode=self.identity[1],
+                mode=0o644,
+                sha256=hashlib.sha256(raw).hexdigest(),
+            ),
+        )
         for prefix, argv in (
             ("marker-reload", ["systemctl", "daemon-reload"]),
             ("marker-start", ["systemctl", "start", p.NET_UNIT]),
         ):
+            lab.save_json(
+                self.output / (prefix + "-intent.json"),
+                dict(argv=argv, file_identity=self.identity),
+            )
+            self.manager_attempted = True
+            if prefix == "marker-start":
+                self.start_attempted = True
             code, _ = material.preflight.old._retained_query(argv, prefix, self.output)
             lab.need(code == 0, "owned marker manager command failed")
         effective = material.preflight._collect_effective(
@@ -226,10 +249,77 @@ class Marker:
         )
         return self
 
+    def _finalized_file(self, prefix):
+        info = self._identity()
+        lab.save_json(
+            self.output / (prefix + "-file.json"),
+            dict(device=info.st_dev, inode=info.st_ino, mode=info.st_mode),
+        )
+        lab.need(
+            self.finalized and stat.S_IMODE(info.st_mode) == 0o644,
+            "finalized exact marker file mode required",
+        )
+        raw = material._read(g.UNITS / p.NET_UNIT, 16384, 0o644)
+        lab.save_json(
+            self.output / (prefix + "-file-hash.json"),
+            dict(sha256=hashlib.sha256(raw).hexdigest()),
+        )
+        lab.need(raw == UNIT_TEXT.encode(), "finalized marker bytes changed")
+        self._identity()
+
     def stop(self):
         if self.identity is None:
-            return dict(errors=[], scope="marker_not_created")
-        self._identity()  # Unknown/replaced files do not grant authority to stop.
+            return dict(errors=[], scope="marker_not_created", stop_attempted=False)
+        if not self.start_attempted:
+            return dict(
+                errors=[],
+                scope="marker_not_started_no_stop_authority",
+                stop_attempted=False,
+            )
+        before = setup.scope._state(p.NET_UNIT)
+        lab.save_json(self.output / "marker-stop-before.json", before)
+        if setup.scope._known_collected(before):
+            empty = lab.cg.group_empty("/system.slice/" + p.NET_UNIT, setup.UNITS)
+            after = setup.scope._state(p.NET_UNIT)
+            lab.save_json(self.output / "marker-stop-absent-after.json", after)
+            lab.need(
+                empty
+                and setup.scope._known_collected(after)
+                and lab.cg.group_empty("/system.slice/" + p.NET_UNIT, setup.UNITS),
+                "unknown absent marker cgroup",
+            )
+            return dict(
+                errors=[],
+                scope="marker_known_absent_full_cgroup_empty",
+                stop_attempted=False,
+            )
+        self._finalized_file("marker-stop-before")
+        effective = material.preflight._collect_effective(
+            p.NET_UNIT, "marker-stop-fence", self.output
+        )
+        lab.save_json(self.output / "marker-stop-effective.json", effective)
+        _validate(effective)
+        code, raw = material.preflight.old._retained_query(
+            [
+                "systemctl",
+                "show",
+                p.NET_UNIT,
+                "--property=Type,RemainAfterExit,LoadState",
+            ],
+            "marker-stop-type",
+            self.output,
+        )
+        rows = [row.partition("=") for row in raw.decode().splitlines()]
+        lab.need(
+            code == 0
+            and len(raw) <= 4096
+            and all(sep for _, sep, _ in rows)
+            and len(rows) == len({k for k, _, _ in rows})
+            and {k: v for k, _, v in rows}
+            == dict(Type="oneshot", RemainAfterExit="yes", LoadState="loaded"),
+            "current marker type/loaded identity differs",
+        )
+        self._finalized_file("marker-stop-recheck")
         receipt = lab.cleanup((p.NET_UNIT,), {p.NET_UNIT: []})
         lab.save_json(self.output / "marker-stop.json", receipt)
         lab.need(receipt["errors"] == [], "owned marker stop/cgroup proof incomplete")
