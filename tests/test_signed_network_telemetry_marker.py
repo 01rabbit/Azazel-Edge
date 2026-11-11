@@ -319,6 +319,7 @@ def test_failed_stop_proof_is_retained_and_remains_failure(tmp_path, monkeypatch
     [
         "signed_network_telemetry_commission_setup.py",
         "signed_network_telemetry_marker.py",
+        "signed_network_telemetry_namespaces.py",
     ],
 )
 @pytest.mark.parametrize("fault", ["missing", "changed"])

@@ -103,3 +103,41 @@ The real current preflight and marker modules are now mandatory new-plan source
 pins, with no placeholder for the not-yet-implemented namespace context or main.
 Tests use real private file writes plus explicitly synthetic Root/unit metadata;
 no actual systemd unit, namespace, key or hardened role is created by these tests.
+
+## Owned namespace state (authentication still separate)
+
+Construct `signed_network_telemetry_namespaces.NamespaceSetup(output, baseline)`
+BEFORE calling `prepare()` and keep that same object through an outer `finally`
+that calls `close()`. The baseline must be the current direct preflight return,
+not imported JSON authority. The state owns the Assets object before any creation,
+so a partial add cannot lose its creation intent or confirmed original FD.
+
+Preparation creates only the three literal provider names, loopback links and
+one dummy `es` in EDGE. No address, route, forwarding toggle, traffic, nft rule,
+authenticated scope, key, witness or core is provisioned. The Root-private
+namespace workspace has intent/confirmed identity, each namespace uses the
+existing pre-add intent/immediate FD confirmation, and all three named/FD pairs
+plus CLOEXEC are rechecked before use. The marker creates its own fresh
+`namespace-marker` evidence child. `edge()` returns only the fenced parent-owned
+EDGE descriptor/pair while this context is ready and open; the descriptor is
+never an actor grant. The namespace/marker receipt keeps all authorization flags
+false and is not authenticated API readiness.
+
+Outer owners must stop their witness/core/observer actors before `close()`.
+This component stops only its owned marker and independently inspects every
+closed old/new actor family, canonical full-PID1 cgroup and unmanaged native scan.
+An unexpected active legacy/outer actor is refused and retained, never signalled.
+It audits parent network, old/provider assets and current material independently
+before and after cleanup, including other failure paths.
+
+Any unknown setup/creation/persistence, actor/group, resident query, named/FD or
+workspace identity prevents namespace deletion. Known cleanup first persists its
+actor checks, then rechecks each named original handle and zero residents before
+a fixed delete command/retained output. It NEVER calls the existing Assets.close
+resident-signalling path. Unknown/replaced names or foreign/reused descriptors
+are preserved; only confirmed original FDs may close. Setup failure conservatively
+retains namespace names, including known earlier creations. Failed state is never
+retried or repaired. `namespace-actor-cleanup.json` stays separate from the reserved
+`namespace-evidence/cleanup.json`; failed evidence publication blocks success.
+These tests use synthetic namespace/unit observations and real private FDs only.
+There is still no complete authenticated commissioner or new VM result here.
