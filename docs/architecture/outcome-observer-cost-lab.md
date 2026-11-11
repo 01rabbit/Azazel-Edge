@@ -41,7 +41,11 @@ synthetic fixture files in the guest's reported `/tmp/ea-*` directories; retain
 the guest/container storage privately if those originals are required after it
 stops. These directories include synthetic keys: export only the minimized
 report by default. Failed fixtures are never cleaned or repaired. Automated
-successful tests remove only their own fresh synthetic fixtures.
+successful tests remove only their own fresh synthetic fixtures, and only after
+all three arms pass the shared input/parity comparison. A cross-arm mismatch
+retains every original scope. Shutdown attempts observer/launcher stop and bounded
+reap, owned-child cleanup, pipe/log closure and witness halt even when an earlier
+cleanup step fails; a cleanup failure cannot produce a successful report.
 
 Each observer scope is initialized exactly once while its signed source is
 empty, using the existing authenticated journal APIs under the observer UID.
@@ -67,7 +71,11 @@ policy is empty because no provider applies an effect in this experiment.
 This measures disabled-path intake, proc sampling and cursor costs, **not**
 full applied-window telemetry cost. The faulted arm's unprocessed decision suffix
 is reported separately from signed capture coverage; no missing Outcome or
-baseline is fabricated. An off observer has unavailable counters, not zeros.
+baseline is fabricated. The on observer must remain alive through exact five-record
+cursor coverage before the intentional stop. The faulted observer must have the
+planned SIGKILL exit and exactly three cursor records; an unexpected exit or
+short/extra prefix refuses the report. An off observer has unavailable counters,
+not zeros.
 
 Process samples pin PID and kernel start ticks before/after procfs reads. CPU
 uses user+system ticks divided by the reported `SC_CLK_TCK`; it excludes child

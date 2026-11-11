@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -101,13 +102,89 @@ def decisions(f):
     ]
 
 
-def arm(mode, *, keep=False):
+def require_observer(observer, f, expected_cursors, *, exit_code=None):
+    """An arm's actual state and exact durable coverage are acceptance gates."""
+    if observer.poll() != exit_code:
+        raise RuntimeError("unexpected observer process state")
+    if len(cursors(f)) != expected_cursors:
+        raise RuntimeError("observer durable input coverage mismatch")
+
+
+def wait_observer(observer, f, expected_cursors):
+    def ready():
+        if observer.poll() is not None:
+            raise RuntimeError("observer exited before planned stop")
+        count = len(cursors(f))
+        if count > expected_cursors:
+            raise RuntimeError("unexpected observer cursor coverage")
+        return count == expected_cursors
+
+    wait(ready)
+    require_observer(observer, f, expected_cursors)
+
+
+def _cleanup(f, run, observer, logs):
+    """Attempt every shutdown step even when a previous wait/close failed."""
+    errors = []
+
+    def attempt(operation):
+        try:
+            return operation()
+        except BaseException as exc:
+            errors.append(exc)
+            return None
+
+    def stop_process(process):
+        if attempt(process.poll) is None:
+            attempt(process.kill)
+        attempt(lambda: process.wait(timeout=5))
+
+    # Capture owned child identity before attempting launcher shutdown. A later
+    # force-kill may orphan these children; never signal a reused PID.
+    pins = {}
+    if run and attempt(run.process.poll) is None:
+        for pid in attempt(lambda: children(run)) or []:
+            value = attempt(lambda: Path(f"/proc/{pid}/stat").read_text())
+            if value:
+                start = attempt(lambda: value.rsplit(")", 1)[1].split()[19])
+                if start is not None:
+                    pins[pid] = start
+    if observer:
+        stop_process(observer)
+    if run:
+        attempt(run.close)
+        stop_process(run.process)
+    for pid, start in pins.items():
+
+        def kill_owned(pid=pid, start=start):
+            try:
+                current = Path(f"/proc/{pid}/stat").read_text()
+            except FileNotFoundError:
+                return
+            if current.rsplit(")", 1)[1].split()[19] == start:
+                os.kill(pid, signal.SIGKILL)
+
+        attempt(kill_owned)
+    if run:
+        # Reap again after orphan cleanup if the first bounded wait failed.
+        attempt(lambda: run.process.wait(timeout=5))
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(run.process, name, None)
+            if stream is not None:
+                attempt(stream.close)
+    for stream in logs:
+        attempt(stream.close)
+    attempt(f.halt)
+    return errors
+
+
+def arm(mode, *, fixtures):
     if mode not in ("off", "on", "faulted"):
         raise ValueError("unknown observer arm")
     f = Fixture()
+    fixtures.append(f)  # Retain every scope until the complete comparison passes.
     run = observer = None
     logs = []
-    passed = False
     try:
         register_live(f)
         r = json.loads(f.registration.read_bytes())
@@ -197,7 +274,7 @@ def arm(mode, *, keep=False):
                 stdout=subprocess.DEVNULL,
                 stderr=err,
             )
-            wait(lambda: observer.poll() is None and len(cursors(f)) == 2)
+            wait_observer(observer, f, 2)
         kids = children(run)
         native = [
             pid
@@ -225,8 +302,10 @@ def arm(mode, *, keep=False):
                 os.fsync(stream.fileno())
             wait(lambda: len(decisions(f)) == index + 1)
             events(f, index + 3)
-            if observer and observer.poll() is None:
-                wait(lambda: len(cursors(f)) == index + 3)
+            if mode == "on" or (mode == "faulted" and index == 0):
+                wait_observer(observer, f, index + 3)
+            elif mode == "faulted":
+                require_observer(observer, f, 3, exit_code=-signal.SIGKILL)
             for role, pid in pids.items():
                 samples[role].append(
                     process_sample(pid, expected_start=samples[role][0]["start_ticks"])
@@ -234,6 +313,7 @@ def arm(mode, *, keep=False):
             if mode == "faulted" and index == 0:
                 observer.kill()
                 observer.wait(timeout=5)
+                require_observer(observer, f, 3, exit_code=-signal.SIGKILL)
         for role, pid in pids.items():
             samples[role].append(
                 process_sample(pid, expected_start=samples[role][0]["start_ticks"])
@@ -241,10 +321,13 @@ def arm(mode, *, keep=False):
         elapsed = time.monotonic() - start
         logical_after = store_bytes(f.root)
         projected = semantics(decisions(f), SIDS)
-        if observer and observer.poll() is None:
+        if mode == "on":
+            require_observer(observer, f, len(SIDS) + 2)
             # Stop before session_end: live lifecycle correctly closes the intake boundary.
             observer.terminate()
             observer.wait(timeout=5)
+        elif mode == "faulted":
+            require_observer(observer, f, 3, exit_code=-signal.SIGKILL)
         if run.stop() != 0:
             raise RuntimeError("signed core did not close cleanly")
         data = f.source.read_bytes()
@@ -290,31 +373,29 @@ def arm(mode, *, keep=False):
             else None,
             observer_exit=observer.returncode if observer else None,
         )
-        passed = True
         return result
     finally:
-        if observer and observer.poll() is None:
-            observer.kill()
-            observer.wait(timeout=5)
-        if run:
-            run.close()
-        for stream in logs:
-            stream.close()
-        if passed and not keep:
-            f.clean()
-        else:
-            f.halt()  # Preserve every original file on failure or explicit retention.
+        primary_error = sys.exc_info()[0] is not None
+        errors = _cleanup(f, run, observer, logs)
+        if errors and not primary_error:
+            raise RuntimeError("lab cleanup failed; all fixtures retained") from errors[
+                0
+            ]
 
 
 def run(*, keep=False):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise RuntimeError("isolated Linux root required")
-    arms = [arm(mode, keep=keep) for mode in ("off", "on", "faulted")]
+    fixtures = []
+    arms = [arm(mode, fixtures=fixtures) for mode in ("off", "on", "faulted")]
     if (
         len({a["input_sha256"] for a in arms}) != 1
         or len({a["semantic_sha256"] for a in arms}) != 1
     ):
         raise RuntimeError("observer changed exact covered decision semantics")
+    if not keep:
+        for fixture in fixtures:
+            fixture.clean()
     return dict(
         schema_version="edge-observer-cost-lab/v1",
         decision_parity="exact_for_fixed_disabled_input",
