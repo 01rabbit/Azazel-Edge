@@ -40,7 +40,7 @@ def _hex(value, size):
     return value
 
 
-def validate_fresh_records(manifest, read_results, *, core_sha256):
+def _validate_fresh_records(manifest, read_results, *, core_sha256, telemetry=False):
     """Return the SAME measurement records in frozen execution order, or refuse.
 
     This checks local completeness, consistency and freshness only. It neither
@@ -48,13 +48,26 @@ def validate_fresh_records(manifest, read_results, *, core_sha256):
     remain mandatory after this function, including baseline full signed chain.
     """
     try:
+        plan.need(type(telemetry) is bool, "closed plan version required")
         _bounded([manifest, read_results])
         _hex(core_sha256, 64)
         assignments = validate_manifest(manifest)
-        plan.validate_manifest(manifest, core_sha256)
-        expected, _ = plan.planned(
-            manifest["provenance"]["repo_commits"]["01rabbit/Azazel-Edge"], core_sha256
-        )
+        if telemetry:
+            plan.validate_telemetry_manifest(manifest, core_sha256)
+            pins = manifest["measurement_binding"]["telemetry_lab"]
+            expected, _ = plan.planned_telemetry(
+                manifest["provenance"]["repo_commits"]["01rabbit/Azazel-Edge"],
+                core_sha256,
+                abi_sha256=pins["abi_sha256"],
+                interpreter_sha256=pins["interpreter_sha256"],
+                source_archive_sha256=pins["source_archive_sha256"],
+            )
+        else:
+            plan.validate_manifest(manifest, core_sha256)
+            expected, _ = plan.planned(
+                manifest["provenance"]["repo_commits"]["01rabbit/Azazel-Edge"],
+                core_sha256,
+            )
         plan.need(
             canonical(manifest) == canonical(expected), "canonical frozen plan differs"
         )
@@ -153,3 +166,8 @@ def validate_fresh_records(manifest, read_results, *, core_sha256):
         return [records[assignment["id"]] for assignment in plan.order(manifest)]
     except (KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
         raise BenefitInputError("invalid/partial four-run structural input") from exc
+
+
+def validate_fresh_records(manifest, read_results, *, core_sha256):
+    """Closed legacy v1 completeness/freshness gate, never runtime authority."""
+    return _validate_fresh_records(manifest, read_results, core_sha256=core_sha256)

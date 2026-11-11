@@ -359,7 +359,9 @@ class _Snapshot:
             )
 
 
-def _root_probes(snap, record, inputs, event, candidate):
+def _root_probes(
+    snap, record, inputs, event, candidate, *, expected_source_identity=None
+):
     proof = snap.json(phase.WORK / "namespace-boot.json", maximum=8192)
     need(
         proof["kernel_boot_id"] == record["kernel_boot_id"]
@@ -397,7 +399,12 @@ def _root_probes(snap, record, inputs, event, candidate):
             recording.canonical(receipt) == recording.canonical(record[key])
             and launch["namespace_identity"] == edge
             and launch["pid"] == receipt["root_pid"]
-            and record["source_identity"] == run._source_identity(),
+            and record["source_identity"]
+            == (
+                run._source_identity()
+                if expected_source_identity is None
+                else expected_source_identity
+            ),
             "root raw launch/pin binding",
         )
         probes[label] = service.recorded_root_probe(
@@ -445,13 +452,19 @@ def _require_ordered_callbacks(calls, events):
     )
 
 
-def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
+def _read_assignment_artifacts(
+    expected_manifest_sha256, expected_start_head, *, contract=None
+):
     """Read only the protected original guest layout; never run a four-run analysis.
 
     External Root archive verification remains mandatory. This importer is not
     resistance to a malicious root producing fabricated unsigned lab receipts.
     Original service/live facts survive later authentication/calculation failure.
     """
+    if contract is not None:
+        from signed_network_telemetry_read import _TelemetryReader
+
+        need(type(contract) is _TelemetryReader, "closed v2 reader contract required")
     result = dict(
         status="withheld",
         reasons=[],
@@ -494,7 +507,13 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
     except Exception as exc:
         result["reasons"].append("actual_calls:" + type(exc).__name__)
     try:
-        inputs = phase.validated_inputs(expected_manifest_sha256, expected_start_head)
+        inputs = (
+            phase.validated_inputs(expected_manifest_sha256, expected_start_head)
+            if contract is None
+            else contract.validated_inputs(
+                expected_manifest_sha256, expected_start_head
+            )
+        )
         prepared = snap.json(phase.WORK / "prepared.json")
         facts = snap.json(phase.WORK / "run-facts.json")
         record = facts["record"]
@@ -520,6 +539,15 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
             == phase.plan.native_environment(inputs["assignment"]["arm"])
             and enrolled["binary_sha256"] == inputs["core_sha256"],
             "registered public origin differs",
+        )
+        need(
+            trust.data["schema_version"]
+            == (
+                "outcome-input-trust/v3"
+                if contract is None
+                else "outcome-input-trust/v4"
+            ),
+            "closed reader trust schema differs",
         )
         d, directory = trust.data, Path(trust.data["journal_directory"])
         need(
@@ -639,6 +667,10 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
                     "actual signed callback/epoch missing",
                 )
         _require_ordered_callbacks(calls, events)
+        if contract is not None:
+            result["root_runtime_metadata"] = contract.verify_context(
+                snap, inputs, prepared, facts, trust, terminal, calls
+            )
         clock = qualify_clock(
             kernel_boot_id=record["kernel_boot_id"],
             observer_boot_id=context["kernel_boot_id"],
@@ -648,6 +680,11 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
             controller_start=record["controller_start_anchor"],
             controller_end=record["controller_end_anchor"],
             recorded=calls,
+            **(
+                {}
+                if contract is None
+                else {"controller_samples": contract.controller_samples}
+            ),
         )
         result["clock_qualification"] = clock
         need(
@@ -679,28 +716,12 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
             ),
             "independent service capture differs",
         )
-        stop = snap.json(phase.WORK / "systemd-stop-receipt.json")
-        need(
-            stop["status"] == "verified_stopped"
-            and stop["failures"] == []
-            and [a["unit"] for a in stop["actors"]] == list(phase.scope.ACTOR_UNITS),
-            "actor cleanup receipt gap",
-        )
-        for actor in stop["actors"]:
-            after = actor["after"]
-            need(
-                after["ActiveState"] in ("inactive", "failed")
-                and after["MainPID"] == after["ControlPID"] == "0"
-                and type(actor["stop_returncode"]) is int,
-                "actor stop facts inconsistent",
-            )
-            if actor["stop_returncode"]:
-                need(
-                    phase.scope._known_collected(actor["before"])
-                    and phase.scope._known_collected(after),
-                    "collected actor exception differs",
-                )
-        probe = _root_probes(snap, record, inputs, event, candidate)
+        if contract is None:
+            _legacy_stop_receipt(snap)
+            probe = _root_probes(snap, record, inputs, event, candidate)
+        else:
+            contract.verify_stop(snap, inputs, record)
+            probe = contract.root_probes(snap, record, inputs, event, candidate)
         need(
             probe["epoch"] >= record["decision_callback_receipt_epoch"],
             "root probe precedes actual callback",
@@ -739,3 +760,32 @@ def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
         result["reasons"].append(type(exc).__name__ + ":" + str(exc)[:160])
         result["measurement_record"] = None
     return result
+
+
+def _legacy_stop_receipt(snap):
+    stop = snap.json(phase.WORK / "systemd-stop-receipt.json")
+    need(
+        stop["status"] == "verified_stopped"
+        and stop["failures"] == []
+        and [a["unit"] for a in stop["actors"]] == list(phase.scope.ACTOR_UNITS),
+        "actor cleanup receipt gap",
+    )
+    for actor in stop["actors"]:
+        after = actor["after"]
+        need(
+            after["ActiveState"] in ("inactive", "failed")
+            and after["MainPID"] == after["ControlPID"] == "0"
+            and type(actor["stop_returncode"]) is int,
+            "actor stop facts inconsistent",
+        )
+        if actor["stop_returncode"]:
+            need(
+                phase.scope._known_collected(actor["before"])
+                and phase.scope._known_collected(after),
+                "collected actor exception differs",
+            )
+
+
+def read_assignment_artifacts(expected_manifest_sha256, expected_start_head):
+    """Legacy v1 fixed-layout reader; new telemetry manifests remain refused."""
+    return _read_assignment_artifacts(expected_manifest_sha256, expected_start_head)

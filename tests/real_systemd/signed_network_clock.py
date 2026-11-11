@@ -33,7 +33,7 @@ def _epoch_interval(epoch):
 
 
 def qualify_clock(*, kernel_boot_id, observer_boot_id, controller_boot_id,
-                  observer_start, observer_end, controller_start, controller_end, recorded):
+                  observer_start, observer_end, controller_start, controller_end, recorded, controller_samples=()):
     """Withhold on missing evidence or any fixed 5ms timing-budget violation.
 
     Supplied epochs precede calls. Conservatively compare their exact float
@@ -52,7 +52,10 @@ def qualify_clock(*, kernel_boot_id, observer_boot_id, controller_boot_id,
         _need(os[2] <= oe[0] and cs[2] <= ce[0] and os[1] <= oe[1] and cs[1] <= ce[1])
         rows = recorded["calls"]
         _need(type(rows) is list and 0 < len(rows) <= 900)
-        anchors, calls, last = [os, oe, cs, ce], [], os[2]
+        _need(type(controller_samples) in (tuple, list) and len(controller_samples) in (0, 6))
+        additional = list(map(_anchor, controller_samples))
+        _need(all(left[2] <= right[0] and left[1] <= right[1] for left, right in zip(additional, additional[1:])))
+        anchors, calls, last = [os, oe, cs, ce, *additional], [], os[2]
         for sequence, row in enumerate(rows, 1):
             _need(type(row["seq"]) is int and row["seq"] == sequence)
             _need(row["kind"] in ("sample", "event", "finalize"))

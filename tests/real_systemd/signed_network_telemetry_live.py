@@ -202,8 +202,19 @@ def _terminal(raw, verified, binding):
 class LiveSession:
     """Status-only public view; helper exclusively owns pipes/wait/drain/reap."""
 
-    def __init__(self, process):
+    def __init__(self, process, client_launch_before_ns, client_launch_after_ns):
         self._process, self._result = process, None
+        self._client_launch_before_ns = client_launch_before_ns
+        self._client_launch_after_ns = client_launch_after_ns
+
+    @property
+    def client_launch_before_ns(self):
+        """Earliest Popen bracket for systemd-run CLIENT, not observer Exec."""
+        return self._client_launch_before_ns
+
+    @property
+    def client_launch_after_ns(self):
+        return self._client_launch_after_ns
 
     @property
     def pid(self):
@@ -281,7 +292,8 @@ def live(
     process, error, session, candidate = None, None, None, None
     tracked = {unit: []}
     try:
-        deadline = time.monotonic() + role.RUNTIME_SECONDS
+        client_launch_before_ns = time.monotonic_ns()
+        deadline = client_launch_before_ns / 1_000_000_000 + role.RUNTIME_SECONDS
         process = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
@@ -289,6 +301,19 @@ def live(
             stderr=subprocess.PIPE,
             close_fds=True,
             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"},
+        )
+        client_launch_after_ns = time.monotonic_ns()
+        lab.save_json(
+            output / "live-launch.json",
+            dict(
+                kind="owned_systemd_run_client_popen/v1",
+                client_pid=process.pid,
+                client_launch_before_ns=client_launch_before_ns,
+                client_launch_after_ns=client_launch_after_ns,
+                deadline_monotonic_ns=client_launch_before_ns
+                + role.RUNTIME_SECONDS * 1_000_000_000,
+                budget_seconds=role.RUNTIME_SECONDS,
+            ),
         )
         verified = proof.collect_pre_api(
             "live",
@@ -346,7 +371,7 @@ def live(
             "live short GO write",
         )
         process.stdin.close()
-        session = LiveSession(process)
+        session = LiveSession(process, client_launch_before_ns, client_launch_after_ns)
         yield session
         raw = init._drain(process, output, deadline, prefix="live-terminal")
         lab.need(

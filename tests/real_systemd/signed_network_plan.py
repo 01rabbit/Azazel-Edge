@@ -169,7 +169,20 @@ def planned(source, core):
     return value, safety
 
 
-def planned_telemetry(source, core, *, abi_sha256, interpreter_sha256):
+def telemetry_assignment_mode():
+    return dict(
+        schema_version="signed-network-telemetry-assignment-mode/v1",
+        namespace_kind="fixed-client-edge-service-veth/v1",
+        trust_schema="outcome-input-trust/v4",
+        witness_transport="unix-abstract/v1",
+        ticket_schema="signed-network-telemetry-ticket/v2",
+        phase="prepared-empty-no-native",
+    )
+
+
+def planned_telemetry(
+    source, core, *, source_archive_sha256, abi_sha256, interpreter_sha256
+):
     """Explicit new lab plan only; mandatory pins originate outside the manifest.
 
     Source hashes describe this checkout; Root must authenticate its archive and
@@ -178,6 +191,7 @@ def planned_telemetry(source, core, *, abi_sha256, interpreter_sha256):
     import signed_network_telemetry_contract as role
     import signed_network_telemetry_material as material
 
+    material.pin(source_archive_sha256)
     material.pin(abi_sha256)
     material.pin(interpreter_sha256)
     value, safety = planned(source, core)
@@ -187,6 +201,9 @@ def planned_telemetry(source, core, *, abi_sha256, interpreter_sha256):
     binding["observer_initialization"] = "new_empty_scope_after_verified_pre_api_fence"
     binding["telemetry_lab"] = dict(
         role=role.ROLE,
+        source_archive_sha256=source_archive_sha256,
+        assignment_mode=telemetry_assignment_mode(),
+        assignment_mode_sha256=manifest_digest(telemetry_assignment_mode()),
         initialize=role.observer_spec("initialize"),
         live=role.observer_spec("live"),
         abi_sha256=abi_sha256,
@@ -218,6 +235,7 @@ def validate_telemetry_manifest(value, core):
     expected, safety = planned_telemetry(
         source,
         core,
+        source_archive_sha256=pins["source_archive_sha256"],
         abi_sha256=pins["abi_sha256"],
         interpreter_sha256=pins["interpreter_sha256"],
     )

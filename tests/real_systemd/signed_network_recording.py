@@ -266,6 +266,24 @@ def read_calls(path):
 
 
 def decode_calls(raw):
+    return _decode_call_rows(raw, allow_open=False)[0]
+
+
+def decode_calls_prefix(raw):
+    """Validate original complete rows without inventing an END or fixing a tail.
+
+    Empty/partial-only input is WAIT evidence, never a validated callback/context.
+    Callers retain full raw bytes before parsing and reject closed early intake.
+    """
+    need(type(raw) is bytes and len(raw) <= MAX_BYTES, "recording byte bound")
+    end = raw.rfind(b"\n") + 1
+    complete, tail = raw[:end], raw[end:]
+    value, closed = (_decode_call_rows(complete, allow_open=True) if complete
+                     else (dict(context=None, calls=[]), False))
+    return dict(**value, complete_prefix=complete, partial_tail=tail, closed=closed)
+
+
+def _decode_call_rows(raw, *, allow_open):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -279,7 +297,7 @@ def decode_calls(raw):
     )
     lines = raw.splitlines()
     need(len(lines) <= MAX_ROWS, "recording row bound")
-    need(len(lines) >= 2, "unfinished recording")
+    need(len(lines) >= (1 if allow_open else 2), "unfinished recording")
     rows = []
     previous = "0" * 64
     for seq, line in enumerate(lines):
@@ -306,12 +324,14 @@ def decode_calls(raw):
         )
         rows.append(row)
         previous = row["sha256"]
+    closed = rows[-1]["kind"] == "end"
     need(
         rows[0]["kind"] == "begin"
-        and rows[-1]["kind"] == "end"
-        and rows[-1]["data"] == {},
+        and (closed or allow_open)
+        and (not closed or rows[-1]["data"] == {}),
         "unfinished recording",
     )
+    body = rows[1:-1] if closed else rows[1:]
     metadata = rows[0]["data"]
     need(
         type(metadata) is dict
@@ -319,7 +339,7 @@ def decode_calls(raw):
         "recorded policy context missing",
     )
     last_epoch = last_end = -1
-    for row in rows[1:-1]:
+    for row in body:
         data = row["data"]
         extra = (
             {"sample"}
@@ -356,7 +376,7 @@ def decode_calls(raw):
         need(last_end <= before["monotonic_before_ns"] <= before["monotonic_after_ns"] <= data["start_ns"]
              <= data["end_ns"] <= after["monotonic_before_ns"] <= after["monotonic_after_ns"], "recorded clock anchor monotonic overlap")
         last_epoch, last_end = data["epoch"], after["monotonic_after_ns"]
-    return dict(context=metadata, calls=rows[1:-1])
+    return dict(context=metadata, calls=body), closed
 
 
 def replay_calls(

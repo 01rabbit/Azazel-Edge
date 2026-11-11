@@ -66,7 +66,10 @@ def _base_created(output):
         os.close(parent)
 
 
-def _configure(callback, created, namespace_identity, *, owner, output):
+def _configure(callback, created, namespace_identity, *, owner, output, arm="c0"):
+    lab.need(
+        type(arm) is str and arm in ("c0", "flow_throttle"), "fixed native arm required"
+    )
     original = g.write
     held = dict(
         zip(("device", "inode"), initializer.proof.legacy._pair(namespace_identity))
@@ -148,7 +151,7 @@ def _configure(callback, created, namespace_identity, *, owner, output):
 
     g.Systemd.witness = witness_in_edge
     g.ENV.clear()
-    g.ENV.update(plan.native_environment("c0"))
+    g.ENV.update(plan.native_environment(arm))
     g.observer = callback
     return proof_adapter
 

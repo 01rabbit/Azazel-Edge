@@ -6,14 +6,17 @@ legacy role and **rejects the new manifest**. Do not use this component as an
 operator entrypoint or interpret structural validation as permission to proceed.
 The old-profile telemetry gap remains blocked. The separately completed v6
 stateless precheck is compatibility evidence at its own tested source, not admission
-for another source or scope.
+for another source or scope. The new explicit v2 empty-preparation/topology API is described in
+[SIGNED_TELEMETRY_ASSIGNMENT_PREPARE.md](SIGNED_TELEMETRY_ASSIGNMENT_PREPARE.md);
+that new path remains runtime unrun. Legacy signed-network entry points still
+reject the new manifest. Structural validation or old receipts are not admission.
 
 ## Explicit plan and external pins
 
 `signed_network_plan.planned(source, core)` and `validate_manifest(value, core)`
 retain their legacy behavior. New
-`planned_telemetry(source, core, *, abi_sha256, interpreter_sha256)` returns the
-separate literal `signed-v4-network-telemetry-v2` plan. Both lowercase SHA256 pins
+`planned_telemetry(source, core, *, source_archive_sha256, abi_sha256, interpreter_sha256)` returns the
+separate literal `signed-v4-network-telemetry-v2` plan. All three lowercase SHA256 pins
 are mandatory inputs from Root's independently frozen public-material receipts;
 there is no default, checkbox, imported old-receipt or manifest-derived trust.
 
@@ -28,9 +31,9 @@ C0 observe-only role and four fresh assignments remain unchanged.
 `validate_telemetry_manifest(value, core)` compares the complete v2 structure and
 types canonically. It does **not** authenticate imported JSON or independently
 establish that declared pin values came from Root. The legacy validator still
-rejects v2, preventing unwired preparation from provisioning an old role for it.
-Later reviewed wiring must explicitly select the new mode, require opt-in and
-compare independently provisioned pins with current protected guest material.
+rejects v2, preventing legacy preparation from provisioning an old role for it. The separate
+v2 preparation requires explicit opt-in and compares independent pins with current
+protected material; it does not supply a runner or four-record analysis.
 
 Source hashes describe the constructor's current checkout. Root's mandatory
 external source-archive hash verification on host/guest and protected revision
