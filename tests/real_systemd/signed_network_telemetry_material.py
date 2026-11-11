@@ -19,6 +19,7 @@ SOURCE_POLICY = SRC / "tests/real_systemd/edge400-observer-telemetry-lab.apparmo
 INSTALLED_POLICY = Path("/etc/apparmor.d") / role.PROFILE
 FLAG = "EDGE_SIGNED_NETWORK_TELEMETRY"
 SOURCE_FILES = (
+    "signed_network_telemetry_live_unit_refusal.py",
     "signed_network_telemetry_unit_refusal.py",
     "signed_network_telemetry_phase.py",
     "signed_network_telemetry_read.py",
