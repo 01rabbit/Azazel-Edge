@@ -24,7 +24,9 @@ PINS = dict(
 def test_new_plan_is_exact_explicit_and_all_arm_configs_bind_fixed_role_and_pins():
     legacy, old_safety = plan.planned("a" * 40, "b" * 64)
     before = deepcopy(legacy)
-    value, safety = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    value, safety = plan.planned_telemetry(
+        "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **PINS
+    )
     assert legacy == before and plan.planned("a" * 40, "b" * 64) == (before, old_safety)
     assert value["experiment_id"] == "signed-v4-network-telemetry-v2-" + "a" * 12
     assert value["experiment_id"] != legacy["experiment_id"] and safety == old_safety
@@ -56,7 +58,9 @@ def test_new_plan_is_exact_explicit_and_all_arm_configs_bind_fixed_role_and_pins
 def test_external_constructor_pins_are_mandatory_exact_strings(name, bad):
     pins = dict(PINS, **{name: bad})
     with pytest.raises(ValueError):
-        plan.planned_telemetry("a" * 40, "b" * 64, **pins)
+        plan.planned_telemetry(
+            "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **pins
+        )
 
 
 def test_missing_external_pins_have_no_default_or_old_receipt_fallback():
@@ -81,7 +85,9 @@ def test_missing_external_pins_have_no_default_or_old_receipt_fallback():
     ],
 )
 def test_exact_new_manifest_refuses_any_role_material_or_version_substitution(fault):
-    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    value, _ = plan.planned_telemetry(
+        "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **PINS
+    )
     spec = value["measurement_binding"]["telemetry_lab"]
     if fault == "label":
         spec["live"]["properties"]["AppArmorProfile"] = "unconfined"
@@ -265,7 +271,9 @@ def test_current_compile_retains_originals_never_loads_and_rechecks_material(
 def test_reviewed_proof_module_is_real_mandatory_source_material(fault):
     path = material.SRC / "tests/real_systemd/signed_network_telemetry_proof.py"
     key = str(path.relative_to(material.SRC))
-    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    value, _ = plan.planned_telemetry(
+        "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **PINS
+    )
     sources = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
     assert sources[key] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert (
@@ -284,7 +292,9 @@ def test_reviewed_proof_module_is_real_mandatory_source_material(fault):
 def test_actual_initializer_caller_is_mandatory_source_pin(fault):
     path = material.SRC / "tests/real_systemd/signed_network_telemetry_initialize.py"
     key = str(path.relative_to(material.SRC))
-    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    value, _ = plan.planned_telemetry(
+        "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **PINS
+    )
     sources = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
     assert sources[key] == hashlib.sha256(path.read_bytes()).hexdigest()
     if fault == "missing":
@@ -299,7 +309,9 @@ def test_actual_initializer_caller_is_mandatory_source_pin(fault):
 def test_current_public_auth_binding_implementation_is_mandatory_source_pin(fault):
     path = material.SRC / "tests/real_systemd/signed_network_telemetry_binding.py"
     key = str(path.relative_to(material.SRC))
-    value, _ = plan.planned_telemetry("a" * 40, "b" * 64, **PINS)
+    value, _ = plan.planned_telemetry(
+        "a" * 40, "b" * 64, source_archive_sha256="e" * 64, **PINS
+    )
     sources = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
     assert sources[key] == hashlib.sha256(path.read_bytes()).hexdigest()
     if fault == "missing":

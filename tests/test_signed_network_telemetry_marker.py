@@ -329,7 +329,11 @@ def test_actual_setup_and_marker_are_mandatory_new_plan_source_pins(name, fault)
     path = marker.material.SRC / "tests/real_systemd" / name
     key = str(path.relative_to(marker.material.SRC))
     value, _ = plan.planned_telemetry(
-        "a" * 40, "b" * 64, abi_sha256="c" * 64, interpreter_sha256="d" * 64
+        "a" * 40,
+        "b" * 64,
+        source_archive_sha256="e" * 64,
+        abi_sha256="c" * 64,
+        interpreter_sha256="d" * 64,
     )
     pins = value["measurement_binding"]["telemetry_lab"]["source_sha256"]
     assert pins[key] == hashlib.sha256(path.read_bytes()).hexdigest()
