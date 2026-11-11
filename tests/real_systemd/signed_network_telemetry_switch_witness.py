@@ -40,13 +40,43 @@ def _send(fd, value):
     lab.need(len(raw) <= 1024 and os.write(fd, raw) == len(raw), "short child frame")
 
 
-def _wait(pid, deadline):
+def _exited(pid, deadline):
     while True:
-        child, status = os.waitpid(pid, os.WNOHANG)
-        if child == pid:
-            return status
-        lab.need(time.monotonic() < deadline, "owned child reap deadline")
+        exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if exited is not None:
+            lab.need(exited.si_pid == pid, "owned child exit identity differs")
+            return exited
+        lab.need(time.monotonic() < deadline, "owned child exit deadline")
         time.sleep(0.01)
+
+
+def _members(pid):
+    """Root metadata only; leader stays unreaped to reserve its process group."""
+    members = {}
+    with os.scandir("/proc") as entries:
+        for index, entry in enumerate(entries):
+            lab.need(index < 4096, "owned group inventory bound")
+            if not entry.name.isascii() or not entry.name.isdecimal():
+                continue
+            try:
+                raw = context.p.cg._kernel_text(f"/proc/{entry.name}/stat", 8192)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            fields = raw.rsplit(")", 1)[1].split()
+            lab.need(
+                raw.split(" ", 1)[0] == entry.name and len(fields) >= 20,
+                "unknown group inventory",
+            )
+            if entry.name != str(pid) and (
+                fields[2] == str(pid) or fields[3] == str(pid)
+            ):
+                members[entry.name] = dict(
+                    state=fields[0],
+                    group=fields[2],
+                    session=fields[3],
+                    start_ticks=fields[19],
+                )
+    return members
 
 
 class WitnessProof:
@@ -168,27 +198,49 @@ class WitnessProof:
                 value == {"kind": "complete", "pid": pid} and type(value["pid"]) is int,
                 "unchanged sealed witness proof failed",
             )
-            status = _wait(pid, deadline)
-            lab.need(os.waitstatus_to_exitcode(status) == 0, "witness child failed")
+            exited = _exited(pid, deadline)  # WNOWAIT: group PID remains reserved.
+            lab.need(
+                exited.si_code == os.CLD_EXITED and exited.si_status == 0,
+                "witness child failed",
+            )
         except BaseException as exc:
             error = exc
             self.owner.failed = True
         finally:
             if pid is not None and status is None:
                 try:
-                    got, status_now = os.waitpid(pid, os.WNOHANG)
-                    if got:
-                        status = status_now
-                    else:
+                    exited = os.waitid(
+                        os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+                    )
+                    members = _members(pid) if group_owned else {}
+                    receipt["members_before_reap"] = members
+                    if exited is None or members:
                         self.owner.failed = True
                         receipt["forced"] = True
                         if group_owned:
                             os.killpg(pid, signal.SIGKILL)
                         else:
                             os.kill(pid, signal.SIGKILL)  # Unreaped own child only.
-                        status = _wait(pid, time.monotonic() + 2)
+                    _exited(pid, time.monotonic() + 2)
+                    until = time.monotonic() + 2
+                    while group_owned:
+                        receipt["members_after_kill"] = _members(pid)
+                        if not receipt["members_after_kill"]:
+                            break
+                        lab.need(
+                            time.monotonic() < until, "owned descendants remain/unknown"
+                        )
+                        time.sleep(0.01)
+                    receipt["group_empty_before_reap"] = True
                 except BaseException as exc:
                     receipt["errors"].append("reap:" + type(exc).__name__)
+                # No group signal is permitted after this reap releases its PID.
+                try:
+                    got, reaped = os.waitpid(pid, os.WNOHANG)
+                    lab.need(got == pid, "owned leader not reaped")
+                    status = reaped
+                except BaseException as exc:
+                    receipt["errors"].append("leader_reap:" + type(exc).__name__)
             for descriptor in (reply_r, reply_w, go_r, go_w):
                 if descriptor is not None:
                     try:
@@ -210,6 +262,7 @@ class WitnessProof:
                 lab.need(
                     not receipt["errors"]
                     and status is not None
+                    and receipt.get("group_empty_before_reap") is True
                     and not receipt.get("forced"),
                     "owned child cleanup incomplete/forced",
                 )
