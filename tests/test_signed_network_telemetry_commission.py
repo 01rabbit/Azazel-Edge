@@ -33,6 +33,58 @@ import signed_network_telemetry_commission as main
 BOOT = "095d28ff-ca7d-4b08-9e4b-e36a62db4810"
 
 
+def witness_unit():
+    return (
+        "[Unit]\n[Service]\n"
+        f"ExecStart={main.g.PYTHON} -I -m azazel_edge.outcome.input_witness "
+        f"--policy {main.g.BUNDLE}/trust.json --private-key {main.g.BUNDLE}/witness/key.raw "
+        "--systemd-notify --apparmor-profile edge400-witness\n"
+    )
+
+
+@pytest.mark.parametrize("fault", [None, "wrong", "duplicate", "missing"])
+def test_witness_no_bytecode_changes_only_exact_command_and_recorded_bytes(
+    tmp_path, monkeypatch, fault
+):
+    monkeypatch.setattr(main.g, "UNITS", tmp_path)
+    monkeypatch.setattr(main.g, "ENV", dict(main.g.ENV))
+    monkeypatch.setattr(main.g, "observer", None)
+    monkeypatch.setattr(main.plan.p, "configure", lambda: None)
+    prepared = main.g.prepare
+    captured = []
+
+    def write(path, data, mode):
+        with path.open("xb") as stream:
+            stream.write(data.encode())
+        path.chmod(mode)
+
+    monkeypatch.setattr(main.g, "write", write)
+    main._configure(lambda: None, lambda path, data: captured.append((path, data)))
+    assert main.g.prepare is prepared
+    original = witness_unit()
+    payload = original
+    if fault == "wrong":
+        payload = original.replace(" -I -m ", " -m ")
+    elif fault == "duplicate":
+        payload = original + "ExecStart=/usr/bin/true\n"
+    elif fault == "missing":
+        payload = "[Service]\nUser=root\n"
+    target = tmp_path / main.g.WITNESS
+    if fault:
+        with pytest.raises(AssertionError, match="exact current witness command"):
+            main.g.write(target, payload)
+        assert not target.exists() and captured == []
+        return
+    main.g.write(target, payload)
+    expected = original.replace(" -I -m ", " -I -B -m ")
+    assert target.read_bytes() == expected.encode() == captured[0][1].encode()
+    assert target.stat().st_mode & 0o7777 == 0o644
+    core = tmp_path / main.g.UNIT
+    main.g.write(core, original)
+    assert core.read_bytes() == original.encode() == captured[1][1].encode()
+    assert main.g.prepare is prepared
+
+
 class Case:
     def __init__(self, root, monkeypatch, fault=None):
         self.root, self.fault, self.events, self.source, self.rows = (
@@ -338,7 +390,7 @@ class Case:
         )
         main.g.write(
             main.g.UNITS / main.g.WITNESS,
-            "[Unit]\n[Service]\nExecStart=/unexecuted-witness\n",
+            witness_unit(),
         )
         bundle = main.g.BUNDLE
         base, self.pk, self.wk, *_ = make_policy(

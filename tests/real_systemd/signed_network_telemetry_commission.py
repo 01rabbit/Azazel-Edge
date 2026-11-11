@@ -71,6 +71,23 @@ def _configure(callback, created):
     def protected_write(path, data, mode=0o644):
         if path == g.BASE / "native/protected.yaml":
             data = plan.PROTECTED
+        if path == g.UNITS / g.WITNESS:
+            expected = (
+                f"ExecStart={g.PYTHON} -I -m azazel_edge.outcome.input_witness "
+                f"--policy {g.BUNDLE}/trust.json --private-key {g.BUNDLE}/witness/key.raw "
+                "--systemd-notify --apparmor-profile edge400-witness\n"
+            )
+            lab.need(
+                type(data) is str
+                and [
+                    line
+                    for line in data.splitlines(keepends=True)
+                    if line.lstrip().startswith("ExecStart=")
+                ]
+                == [expected],
+                "exact current witness command required",
+            )
+            data = data.replace(expected, expected.replace(" -I -m ", " -I -B -m "), 1)
         result = original(path, data, mode)
         if path in (g.UNITS / g.UNIT, g.UNITS / g.WITNESS):
             created(path, data)
