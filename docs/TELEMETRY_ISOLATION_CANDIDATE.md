@@ -13,6 +13,29 @@ Only new files are introduced. Existing `edge400.apparmor`, its installed roles,
 profiles, plans, defaults and schemas are unchanged. This does not authorize a
 four-assignment freeze, repair of a used scope, execution, admission or resume.
 
+## Retained v2 failure and narrow mount parser correction
+
+Root's fresh v2 case used source `31adaaa4f275f22e342834982ada3229357fc649`,
+archive SHA256 `9ebae8bab927c9a13845943e540d0bc2f90f3b17022418b9454f1a4206e2fcf4`,
+boot `6c182cdc-4e92-4ac7-9102-ffe24fa21c7e`. It reached genuine peer READY with
+validated UID61002/new enforcing label/zero capabilities/NNP/dumpable identity,
+then blocked in the Root mount parser before probe startup or any probe operation.
+The parser rejected namespace mount roots such as `net:[4026532228]` because they
+are not absolute paths. All actor cgroups/namespaces were subsequently absent and
+parent/old assets unchanged; the failed case is archived, stopped and never retried.
+Private evidence archive SHA256 is
+`0dc5deaa03838c4e6721359f29c2c82ac73d0711d95d4524d28fe5aa0bef0248`.
+
+[Linux 6.8 nsfs_show_path](https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/nsfs.c)
+renders namespace type plus inode instead of an absolute root path. The parser
+now accepts only canonical positive unsigned-64-bit `net:[inode]` roots on exactly
+`nsfs`, targeting exactly the two fixed role namespace paths. Other filesystems
+retain physical absolute root checks; every target remains subject to physical
+absolute path and proc-overlay checks. The four unchanged selected nsfs rows and
+actual proc row are regression fixtures, not evidence of completed isolation.
+No profile permission, namespace FD grant/proxy or proc visibility/device gate
+changes. Fresh commissioning and all actual negative probes remain required.
+
 ## Candidate policy and pure contracts
 
 `tests/real_systemd/edge400-observer-telemetry-lab.apparmor` names only the NEW

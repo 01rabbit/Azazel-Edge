@@ -5,6 +5,7 @@ Later Root code must collect original runtime evidence independently; caller JSO
 and these local structural checks cannot create proof of effective isolation.
 """
 
+import re
 import stat
 
 PROFILE = "edge400-observer-telemetry-lab"
@@ -142,13 +143,22 @@ def validate_proc_view(raw, *, own_mount_ns, pid1_mount_ns, proc_device):
         sep = fields.index("-")
         _need(sep >= 6 and len(fields) == sep + 4, "malformed mount fields")
         root, target, filesystem = fields[3], fields[4], fields[sep + 1]
+        if filesystem == "nsfs":
+            # Linux nsfs_show_path emits a namespace type and inode, not a path.
+            match = re.fullmatch(r"net:\[([1-9][0-9]{0,19})\]", root)
+            _need(
+                match is not None
+                and int(match[1]) < 2**64
+                and target in {"/run/netns/" + ns for _, ns in ROLES.values()},
+                "unknown namespace mount root/target",
+            )
         _need(
             all(
                 p.startswith("/")
                 and "\\" not in p
                 and "//" not in p
                 and all(part not in (".", "..") for part in p.split("/"))
-                for p in (root, target)
+                for p in ((target,) if filesystem == "nsfs" else (root, target))
             ),
             "unknown/escaped mount path",
         )

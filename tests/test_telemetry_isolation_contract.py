@@ -90,6 +90,94 @@ def test_actual_private_proc_shape_is_necessary_not_runtime_proof(hidepid):
     assert view(raw) is None and raw == before
 
 
+# Unchanged selected rows from Root's failed v2 peer-mountinfo.raw. These prove
+# parser compatibility only, not successful proc isolation or probe coverage.
+V2_NSFS = """415 414 0:4 net:[4026532228] /run/netns/edge400-telemetry-isolation-edge rw shared:343 master:295 - nsfs nsfs rw
+416 414 0:4 net:[4026532285] /run/netns/edge400-telemetry-isolation-foreign rw shared:344 master:311 - nsfs nsfs rw
+417 411 0:4 net:[4026532228] /run/netns/edge400-telemetry-isolation-edge rw shared:345 master:295 - nsfs nsfs rw
+418 411 0:4 net:[4026532285] /run/netns/edge400-telemetry-isolation-foreign rw shared:346 master:311 - nsfs nsfs rw
+"""
+V2_PROC = "434 405 0:47 / /proc rw,nosuid,nodev,noexec,relatime shared:351 - proc proc rw,hidepid=ptraceable\n"
+
+
+def test_actual_v2_namespace_mount_rows_parse_without_rewriting_originals():
+    raw = ROOT + V2_NSFS + V2_PROC
+    before = raw
+    assert view(raw, proc_device=(0, 47)) is None and raw == before
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "/",
+        "net:[]",
+        "net:[0]",
+        "net:[01]",
+        "net:[+1]",
+        "net:[-1]",
+        "net:[18446744073709551616]",
+        "net:[999999999999999999999]",
+        "net:[1]suffix",
+        "net:[1",
+        "pid:[1]",
+        "mnt:[1]",
+        "user:[1]",
+    ],
+)
+def test_namespace_root_is_only_canonical_positive_bounded_net_inode(root):
+    row = V2_NSFS.splitlines(keepends=True)[0].replace("net:[4026532228]", root)
+    with pytest.raises(ValueError):
+        view(ROOT + PROC + row)
+
+
+@pytest.mark.parametrize("filesystem", ["nsfs2", "tmpfs", "proc", "unknown"])
+def test_typed_namespace_root_never_accepted_for_another_filesystem(filesystem):
+    row = V2_NSFS.splitlines(keepends=True)[0].replace(
+        " - nsfs ", " - " + filesystem + " "
+    )
+    with pytest.raises(ValueError):
+        view(ROOT + PROC + row)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/run/netns/other",
+        "/run/netns/edge400-telemetry-isolation-edge/child",
+        "/run//netns/edge400-telemetry-isolation-edge",
+        "/run/netns/../edge400-telemetry-isolation-edge",
+        r"/run/netns/edge400-telemetry-isolation-edge\040alias",
+        "/proc",
+        "/proc/net",
+        "/run/alt-proc",
+    ],
+)
+def test_namespace_mount_target_remains_exact_fixed_owned_role_path(target):
+    row = V2_NSFS.splitlines(keepends=True)[0].replace(
+        "/run/netns/" + c.ROLES["probe"][1], target
+    )
+    with pytest.raises(ValueError):
+        view(ROOT + PROC + row)
+
+
+@pytest.mark.parametrize(
+    "proc",
+    [
+        V2_PROC.replace("hidepid=ptraceable", "hidepid=2"),
+        V2_PROC.replace("hidepid=ptraceable", "hidepid=ptraceable,gid=61002"),
+        V2_PROC.replace(" /proc ", " /run/alt-proc "),
+        V2_PROC.replace(" - proc ", " - tmpfs "),
+        V2_PROC.replace("0:47 / /proc", "0:48 / /proc"),
+        V2_PROC + "435 434 0:48 / /proc/net rw - tmpfs tmpfs rw\n",
+    ],
+)
+def test_valid_namespace_rows_do_not_relax_proc_visibility_device_or_overlay_gates(
+    proc,
+):
+    with pytest.raises(ValueError):
+        view(ROOT + V2_NSFS + proc, proc_device=(0, 47))
+
+
 @pytest.mark.parametrize(
     "raw",
     [
