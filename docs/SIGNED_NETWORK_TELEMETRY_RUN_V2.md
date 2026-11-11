@@ -31,9 +31,11 @@ also fails. Original raw observations and partial failure facts remain retained.
 
 Focused unit checks use original collector rows and real private pipes with
 explicitly synthetic Root/namespace metadata. Early failure tests use a
-synthetic ownership context. They do not establish a complete runner execution,
-actual namespaces, confinement, authentication, traffic effect, or measurement
-acceptance. A full reviewed composition and fresh explicitly marked VM run are
-still required. Existing actual manual positive/refusal evidence belongs to its
+synthetic ownership context. Complete synthetic direct-context C0 and candidate orchestration tests also
+exercise the unchanged decision helpers, service calculation and recording
+parser with declared mocked actors/source/clock/privileged I/O. They establish
+no actual namespaces, confinement, authentication, traffic effect, or
+measurement acceptance. A full reviewed composition and fresh explicitly
+marked VM run are still required. Existing actual manual positive/refusal evidence belongs to its
 historical source and does not qualify this runner. No four-assignment run,
 performance, production admission, or efficacy claim follows from this change.

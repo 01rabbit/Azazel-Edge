@@ -272,3 +272,240 @@ def test_query_cannot_spawn_before_closed_kind_and_retained_callback(
             callback=dict(observed_after_ns=time.monotonic_ns() + 10**9),
         )
     assert spawned == [] and list(tmp_path.iterdir()) == []
+
+
+def test_query_worker_uses_real_validator_positional_signature(monkeypatch):
+    """Bind against the frozen preparation function signature, without Root IO."""
+    import ast
+    import inspect
+    import importlib.util
+    import types
+
+    # Load just the actual function declaration: its body has no execution here.
+    source = Path(importlib.util.find_spec("signed_network_telemetry_phase").origin)
+    tree = ast.parse(source.read_text())
+    node = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "validated_telemetry_inputs"
+    )
+    declaration = ast.FunctionDef(
+        name=node.name, args=node.args, body=[ast.Pass()], decorator_list=[]
+    )
+    namespace = {}
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=[declaration], type_ignores=[])),
+            str(source),
+            "exec",
+        ),
+        namespace,
+    )
+    signature = inspect.signature(namespace[node.name])
+    sentinel = RuntimeError("constructor reached with correct arguments")
+
+    def exact(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        assert bound.arguments["expected_manifest_sha256"] == "manifest"
+        assert bound.arguments["expected_start_head"] == "head"
+        raise sentinel
+
+    module = types.ModuleType("signed_network_telemetry_phase")
+    module.validated_telemetry_inputs = exact
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(run.g, "guard", lambda: None)
+    monkeypatch.setattr(run.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("EDGE_SIGNED_NETWORK_TELEMETRY", "1")
+    pins = dict(
+        manifest_sha256="manifest",
+        start_head="head",
+        source_commit="a",
+        archive_sha256="b",
+        core_sha256="c",
+        abi_sha256="d",
+        interpreter_sha256="e",
+    )
+    with pytest.raises(RuntimeError) as caught:
+        run._query_worker(pins)
+    assert caught.value is sentinel and pins["manifest_sha256"] == "manifest"
+
+
+@pytest.mark.parametrize("candidate", [False, True])
+def test_direct_context_complete_lifecycle_real_service_capture_synthetic_actors(
+    tmp_path, monkeypatch, candidate
+):
+    """Actual orchestration/decision/capture/parser; synthetic actors/source/clock/IO."""
+    from contextlib import contextmanager
+    import types
+    import test_signed_network_run as legacy
+
+    log, work, clock, reader, event, released = legacy.run_fixture(
+        tmp_path, monkeypatch, candidate=candidate
+    )
+    monkeypatch.setattr(run, "time", clock)
+    monkeypatch.setattr(run, "_source_identity", lambda: dict(synthetic=True))
+    trust = run.TrustPolicy.from_file("ignored")
+    inputs = run.phase.validated_inputs()
+    inputs["assignment"]["arm"] = "flow_throttle" if candidate else "c0"
+    monkeypatch.setattr(
+        run,
+        "registration",
+        lambda *a: dict(
+            environment=run.plan.native_environment(inputs["assignment"]["arm"])
+        ),
+    )
+    assets, _ = run.old.scope.reopen_assets(work)
+    spawn = assets.spawn
+    children = []
+
+    def child(*a, **k):
+        process = spawn(*a, **k)
+        process.pid = 1000 + len(children)
+        children.append(process)
+        return process
+
+    assets.spawn = child
+
+    def close():
+        log.append("direct-owned-context-close")
+
+    ctx = SimpleNamespace(
+        inputs=inputs,
+        namespaces=SimpleNamespace(
+            assets=assets, edge=lambda: log.append("owned-edge-fence")
+        ),
+        initialization={"direct": True},
+        args={},
+        owned=set(),
+        tracked={},
+        close=close,
+    )
+    prep = types.ModuleType("signed_network_telemetry_phase")
+    prep.prepare_telemetry_assignment = lambda *a, **k: ctx
+    monkeypatch.setitem(sys.modules, prep.__name__, prep)
+    monkeypatch.setattr(
+        run.g, "systemctl", lambda *a: log.append("ordinary-core-start")
+    )
+    monkeypatch.setattr(run.g, "wait_for", lambda check: check())
+    monkeypatch.setattr(run.g, "Systemd", lambda: SimpleNamespace(cores=lambda: [123]))
+    monkeypatch.setattr(run.lab, "unit_snapshot", lambda unit: dict(unit=unit))
+    monkeypatch.setattr(
+        run.g,
+        "Switch",
+        lambda *a: SimpleNamespace(
+            plan=lambda: {}, apply=lambda *a: dict(status="started")
+        ),
+    )
+    monkeypatch.setattr(run.g, "live", lambda: log.append("sealed-native-live"))
+    query = run.old.root_query
+
+    def root_query(assets, label, pins, **kwargs):
+        if label == "active":
+            assert (work / "active-callback-ready.json").exists()
+        if label == "absence" and candidate:
+            assert (work / "absence-callback-ready.json").exists()
+        return query(assets, label)
+
+    monkeypatch.setattr(run, "root_query", root_query)
+    original_json = run.old._json
+    directory = Path(trust.data["journal_directory"])
+    closed_raw = (directory / "actual-collector-calls.jsonl").read_bytes()
+    source_rows = [json.loads(line) for line in closed_raw.splitlines()]
+    active = [False]
+
+    def calls():
+        rows = [source_rows[0]]
+        for row in source_rows[1:-1]:
+            release_row = row["data"]["event"] == released
+            when = 32_250_000_000 if release_row else 2_250_000_000
+            if release_row and clock.ns < when:
+                continue
+            row = json.loads(json.dumps(row))
+            row["data"].update(epoch=100 + when / 1e9, start_ns=when, end_ns=when)
+            for key in ("clock_before", "clock_after"):
+                row["data"][key] = dict(
+                    monotonic_before_ns=when,
+                    monotonic_after_ns=when,
+                    epoch_ns=100_000_000_000 + when,
+                )
+            rows.append(row)
+        if not active[0]:
+            rows.append(source_rows[-1])
+        previous = "0" * 64
+        for index, row in enumerate(rows):
+            row["seq"], row["prev"] = index, previous
+            row["sha256"] = run.recording.manifest_digest(
+                {k: row[k] for k in ("seq", "prev", "kind", "data")}
+            )
+            previous = row["sha256"]
+        return b"".join(run.recording.canonical(row) + b"\n" for row in rows)
+
+    monkeypatch.setattr(
+        run,
+        "read_regular",
+        lambda path, **kw: (
+            calls()
+            if Path(path).name == "actual-collector-calls.jsonl"
+            else b"journal\n",
+            SimpleNamespace(st_dev=4, st_ino=5, st_uid=61002),
+        ),
+    )
+
+    @contextmanager
+    def live(output, **kwargs):
+        assert kwargs["initialization"] is ctx.initialization
+        output.mkdir()
+        launch = dict(
+            client_launch_before_ns=clock.ns,
+            client_launch_after_ns=clock.ns,
+            client_pid=999,
+        )
+        run.n.write_new(output / "live-launch.json", launch)
+        session = SimpleNamespace(
+            client_launch_before_ns=clock.ns, poll=lambda: None, result=None
+        )
+        active[0] = True
+        yield session
+        active[0] = False
+        session.result = dict(terminal=original_json(Path("observer-terminal.json")))
+        log.append("natural-live-helper-return")
+
+    monkeypatch.setattr(run.observer, "live", live)
+    result = run.run_telemetry_assignment(
+        work,
+        **{
+            k: "a" * 64
+            for k in (
+                "manifest_sha256",
+                "start_head",
+                "source_commit",
+                "archive_sha256",
+                "core_sha256",
+                "abi_sha256",
+                "interpreter_sha256",
+            )
+        },
+    )
+    assert result["status"] == "run_facts_complete"
+    assert result["record"]["service_receipt"] and result["record"]["capture"]
+    assert (
+        result["measurement_completed"] is False
+        and result["production_admission"] is False
+    )
+    assert (
+        log.index("root-readonly-active")
+        < log.index("capture-core-stop")
+        < log.index("natural-live-helper-return")
+        < log.index("direct-owned-context-close")
+    )
+    for kind, child_process in zip(("service", "client"), children):
+        receipt = json.loads((work / (kind + "-peer-launch.json")).read_bytes())
+        assert (
+            receipt["pid"] == child_process.pid
+            and receipt["actual_child_argv"] == child_process.args
+        )
+    assert result["record"]["observer_helper_return_ns"] <= 41_000_000_000
+    assert (
+        result["record"]["controller_start_anchor"]["monotonic_before_ns"]
+        < result["record"]["controller_end_anchor"]["monotonic_after_ns"]
+    )
