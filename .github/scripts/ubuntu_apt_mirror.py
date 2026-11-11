@@ -30,7 +30,10 @@ def normalize(text, filename):
             or filename.endswith(".list")
             and line.lstrip().startswith(("deb ", "deb\t", "deb-src ", "deb-src\t"))
         )
-        result.append(URI.sub(lambda match: TARGET + match[1], line) if active else line)
+        comment = re.search(r"(?<!\S)#", line)
+        cut = comment.start() if comment else len(line)
+        prefix = URI.sub(lambda match: TARGET + match[1], line[:cut]) if active else line[:cut]
+        result.append(prefix + line[cut:])
     return "".join(result)
 
 

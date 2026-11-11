@@ -58,6 +58,13 @@ def test_classic_direct_azure_sources_preserve_options_and_suite_fields():
     assert mirror.normalize(original, "sources.list") == expected
 
 
+@pytest.mark.parametrize("filename,prefix", [("sources.list", "deb "), ("apt-mirrors.txt", "")])
+def test_inline_comments_remain_byte_identical(filename, prefix):
+    original = prefix + "http://azure.archive.ubuntu.com/ubuntu # https://archive.ubuntu.com/ubuntu\r\n"
+    expected = prefix + mirror.TARGET + " # https://archive.ubuntu.com/ubuntu\r\n"
+    assert mirror.normalize(original, filename) == expected
+
+
 @pytest.mark.parametrize(
     "uri",
     [
@@ -66,6 +73,7 @@ def test_classic_direct_azure_sources_preserve_options_and_suite_fields():
         "https://archive.ubuntu.com:8443/ubuntu",
         "http://azure.archive.ubuntu.com/ubuntu-extra",
         "https://archive.ubuntu.com/ubuntu?extra",
+        "https://archive.ubuntu.com/ubuntu#fragment",
         "https://ports.ubuntu.com/ubuntu-ports",
     ],
 )
