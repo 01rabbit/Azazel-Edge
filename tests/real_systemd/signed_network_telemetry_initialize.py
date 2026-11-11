@@ -266,6 +266,12 @@ def initialize(
                 binding_sha256=plan.manifest_digest(binding),
             ),
         )
+        # save_json fsyncs file data; persist its directory entry before GO.
+        directory = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
         lab.need(
             select.select([], [process.stdin], [], 2)[1],
             "initializer GO write deadline",

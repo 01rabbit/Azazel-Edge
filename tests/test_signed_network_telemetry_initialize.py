@@ -674,3 +674,86 @@ def test_full_verified_binding_retains_same_public_auth_snapshot_without_crypto_
     assert initial == before_go == after_init == verified["binding"]["public_auth"]
     assert initial["scope"] == "public_root_config_continuity_only"
     assert result["authorizes_transition"] is False
+
+
+def test_full_bundle_directory_is_fsynced_and_closed_before_go(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    args, events, sent = fixture(tmp_path, monkeypatch)
+    original_open, original_sync, original_close = os.open, os.fsync, os.close
+    directory_fds = []
+
+    def opening(path, flags, *a, **k):
+        fd = original_open(path, flags, *a, **k)
+        if path == tmp_path:
+            assert flags == os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            directory_fds.append(fd)
+        return fd
+
+    def syncing(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            assert fd in directory_fds
+            saved = json.loads(
+                (tmp_path / "initializer-verified-bundle.json").read_bytes()
+            )
+            assert set(saved["proof"]) == {"ready", "effective", "actor", "metadata"}
+            assert saved["binding_sha256"] == call.plan.manifest_digest(
+                saved["binding"]
+            )
+            events.append("directory-fsync")
+        return original_sync(fd)
+
+    def closing(fd):
+        if fd in directory_fds:
+            events.append("directory-close")
+        return original_close(fd)
+
+    monkeypatch.setattr(call.os, "open", opening)
+    monkeypatch.setattr(call.os, "fsync", syncing)
+    monkeypatch.setattr(call.os, "close", closing)
+    call.initialize(tmp_path, **args)
+    assert sent == [call.role.GO]
+    assert (
+        events.index("directory-fsync")
+        < events.index("directory-close")
+        < events.index("GO")
+    )
+
+
+def test_directory_fsync_failure_no_go_and_original_error_survives_cleanup(
+    tmp_path, monkeypatch
+):
+    import os
+    import stat
+
+    args, events, sent = fixture(tmp_path, monkeypatch, "cleanup")
+    original_sync, original_close = os.fsync, os.close
+    failure = OSError("synthetic directory persistence failure")
+    directory_fds = []
+    closed = []
+
+    def syncing(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fds.append(fd)
+            raise failure
+        return original_sync(fd)
+
+    def closing(fd):
+        if fd in directory_fds:
+            closed.append(fd)
+        return original_close(fd)
+
+    monkeypatch.setattr(call.os, "fsync", syncing)
+    monkeypatch.setattr(call.os, "close", closing)
+    with pytest.raises(OSError) as caught:
+        call.initialize(tmp_path, **args)
+    assert caught.value is failure and failure.__notes__
+    assert directory_fds and closed == directory_fds
+    assert sent == [] and not (tmp_path / "initializer-result.json").exists()
+    assert (
+        "stop-proof" in events and "reap" in events and events.count("pipeclose") == 3
+    )
+    assert (tmp_path / "initializer-verified-bundle.json").exists()
+    assert (tmp_path / "initializer-cleanup.json").exists()
+    assert (tmp_path / "initializer-client-reap.json").exists()
