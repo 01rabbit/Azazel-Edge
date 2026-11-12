@@ -247,7 +247,12 @@ def parse_readback(raw):
     )
 
 
-def readback_matches(payload, scope):
+def validated_owner_rows(payload, owner):
+    """Validate the complete fixed chain and expose all exact owner-token rows.
+
+    Expression semantics and owner multiplicity are deliberately checked by the
+    existing matcher, so malformed/duplicate owned expressions cannot mean absent.
+    """
     if (
         type(payload) is not dict
         or set(payload) != {"nftables"}
@@ -297,7 +302,7 @@ def readback_matches(payload, scope):
             if type(handle) is not int or handle <= 0 or handle in handles:
                 raise ValueError("ambiguous rule identity")
             handles.add(handle)
-            if rule.get("comment") == scope["owner_token"]:
+            if rule.get("comment") == owner:
                 if set(rule) - {
                     "family",
                     "table",
@@ -332,6 +337,11 @@ def readback_matches(payload, scope):
         or chain["handle"] <= 0
     ):
         raise ValueError("wrong or unverifiable chain attachment")
+    return owned
+
+
+def readback_matches(payload, scope):
+    owned = validated_owner_rows(payload, scope["owner_token"])
     if len(owned) > 1:
         raise ValueError("duplicate owned rules")
     if not owned:
