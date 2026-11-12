@@ -106,3 +106,16 @@ No local privileged environment or provider run was constructed for this slice.
 The existing provider-apparmor CI route must exercise original signed Source,
 three actual queries and the new diagnostic with all prior gates. Until that
 final-head actual gate passes, restoration remains unaccepted/unknown.
+
+## First hosted failure retained, no acquisition acceptance
+
+Head5ed25d8 CI43298894365 FAILED before the first readback: the existing CI's
+SOURCE_REVISION creation inherited mode0666, and strict Root provenance reading
+correctly refused it. Fix CI creation to explicit0644; keep the reader's exact
+owner/mode/size gate. This narrows write access, grants no permission and changes
+no production path. The exporter retained a partial error manifest and failed for
+missing artifacts, as required; no observation or restoration is claimed.
+The full Python job also rejected the new test-only real_systemd namespace as an
+undeclared external dependency. Add a side-effect-free __init__.py to identify
+this existing first-party test directory; do not weaken dependency scanning or
+add a fictitious runtime package. New final-head full CI remains required.

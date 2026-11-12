@@ -125,6 +125,7 @@ jobs:
           sudo chown -R root:root /opt/edge400-src
           sudo chmod -R go-w /opt/edge400-src
           git rev-parse HEAD | sudo tee /opt/edge400-src/SOURCE_REVISION >/dev/null
+          sudo chmod 644 /opt/edge400-src/SOURCE_REVISION
           # Hosted image tool directories can be runner-owned/group-writable.
           # Commission this disposable job's exact binary ancestors as root;
           # production preflight must continue to reject unprotected parents.
