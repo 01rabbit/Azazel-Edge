@@ -1,0 +1,102 @@
+{
+  "cases": [
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "sealed-positive-then-observer-sigkill",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "unsealed-observer-sigkill-no-report",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": false,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "observer-sigstop-past-absolute-deadline",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "owned-entry-link-fd-loss",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "owned-exit-link-fd-loss",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "lost-link-fd-reused-foreign-file",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "event-array-overflow-known-positive",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "target-restart-same-port-new-cookie",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "target-fd-number-reuse-no-adoption",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "expired-old-plan-rejected",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "fresh-explicit-capture-id-and-pins",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "automatic_reattach": false,
+      "id": "same-sealed-report-replay-readonly",
+      "missing_interval_count": null,
+      "published_historical_positive_preserved": true,
+      "qualified_safety_count": null
+    }
+  ],
+  "frozen_before_implementation": true,
+  "schema_version": "edge-udp-queue-lifecycle-cases/v1"
+}
