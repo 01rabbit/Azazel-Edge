@@ -110,6 +110,15 @@ def lab():
             stderr=subprocess.PIPE,
             text=True,
             preexec_fn=identity(uid) if uid is not None else None,
+            env=dict(
+                os.environ,
+                PYTHONPATH=os.pathsep.join(
+                    [
+                        str(Path(__file__).resolve().parent),
+                        os.environ.get("PYTHONPATH", ""),
+                    ]
+                ),
+            ),
         )
         processes.append(p)
         return p
