@@ -76,6 +76,12 @@ def run_worker(code, payload, uid=None):
         capture_output=True,
         timeout=12,
         preexec_fn=identity if uid is not None else None,
+        env=dict(
+            os.environ,
+            PYTHONPATH=os.pathsep.join(
+                [str(Path(__file__).resolve().parent), os.environ.get("PYTHONPATH", "")]
+            ),
+        ),
     )
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
