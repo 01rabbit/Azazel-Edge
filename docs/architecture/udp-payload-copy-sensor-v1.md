@@ -226,3 +226,28 @@ Pi/HIL, production activation or comparative efficacy is accepted by this slice.
 Mandatory actual-Linux CI explicitly includes the new suite and rejects skips;
 ordinary nonroot/platform suite skips are not actual-kernel acceptance. Final
 published head still requires complete CI, independent review and exact refs/tree.
+
+## Frozen cross-kernel argument-layout correction (CI failure gate)
+
+PR594 head c9bac451 on CI43269737980 failed13 required actual-Linux controls:
+copy_exit attempted ctx offset40, but the actual udp_recvmsg function had fewer
+arguments than the Linux6.8 five-argument signature. 252 existing cases passed;
+this is FAILED acquisition, never skipped/accepted or a privilege insufficiency.
+Do not retry unchanged, add capabilities or weaken expected actual observations.
+
+Before code correction, freeze the permitted build profiles: exact udp_recvmsg
+BTF prototypes with either (sock*,msghdr*,size_t,int,int*) or
+(sock*,msghdr*,size_t,int), both returning signed int. The latter removes only the
+unused address-length argument. Fixed entry accesses only the common first4;
+fixed exit reads return from the statically selected correct argument slot. Root
+TEST BUILD selects4 or5 only after exact local BTF prototype validation; unknown
+count/types/name bindings must fail before compilation/attachment. skb_consume_udp
+retains exact (sock*,sk_buff*,int) returning void. No verifier-error fallback,
+runtime recompilation, dynamic ctx indexing or permissive unknown ABI is allowed.
+The approved ELF and BTF are still external exact plan pins; no old report/ABI,
+privilege, proof meaning, target identity or event/count conversion is changed.
+
+Synthetic prototype-selection tests must accept only the two allowed shapes and
+reject unknown/malformed/type drift. Actual local five-argument controls must stay
+passing, while mandatory hosted actual controls must pass the hosted profile
+without skips. Both variants need independent review and final-head full CI.
