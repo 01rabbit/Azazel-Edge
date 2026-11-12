@@ -66,6 +66,10 @@ BEFORE any destroy: libbpf frees the struct even if it reports an error.
 Recheck identity before intentional cleanup. Healthy links use normal detach;
 unknown/lost links are disowned before pointer destruction. Every remaining link
 and object cleanup is attempted independently; cleanup failure blocks a result.
+Unverifiable ownership is not confirmed loss: if a possibly live original FD
+cannot be verified or safely closed, cleanup is unresolved and NO report may be
+returned. Stop that failed observer session; never claim disconnection alone
+proved teardown. Confirmed absent/foreign-reused FDs permit nonclosing release.
 Do not close a foreign file that reused the FD number. No fake successful cleanup,
 reattachment or retry. Hostile Root/concurrent arbitrary mutation is outside the
 trusted-code boundary; identity checks are sampled and do not prove gaplessness.
