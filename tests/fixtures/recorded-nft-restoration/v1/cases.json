@@ -1,0 +1,121 @@
+{
+  "cases": [
+    {
+      "evidence": "synthetic",
+      "id": "valid_exact_triplet"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "owner_rate_changed_not_absence"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "duplicate_owner"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "baseline_has_owner"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "foreign_row_changed"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "foreign_handle_changed"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "foreign_counter_changed"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "foreign_reordered"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "chain_changed"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_chain"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "bool_int_float_distinct"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_phase"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "denied_query"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "truncated_json"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "duplicate_key"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "nonfinite_or_deep"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_query"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_boot_namespace"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_source_binary"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_pid_childargv"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "unordered_or_outside_window"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_release_boolean_not_proof"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_source_frame_or_key"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_source_auth"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "residue_survives_bad_sibling"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_and_receipts_immutable"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "pure_no_io"
+    },
+    {
+      "evidence": "actual_linux_filesystem_only",
+      "id": "actual_sealed_reader"
+    },
+    {
+      "evidence": "actual_linux_filesystem_only",
+      "id": "actual_unsafe_artifacts"
+    }
+  ],
+  "schema_version": "edge-recorded-nft-restoration-cases/v1"
+}
