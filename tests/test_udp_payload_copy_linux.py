@@ -18,6 +18,7 @@ import pytest
 
 from udp_payload_copy_data import make_inputs, PAYLOAD
 from udp_payload_copy_lab import COPY_TARGET_WORKER
+from udp_payload_copy_build import select_recvmsg_arguments
 import test_udp_queue_linux as queue_lab
 
 pytestmark = pytest.mark.skipif(
@@ -52,7 +53,7 @@ JOIN_WORKER = (
 
 
 @pytest.fixture(scope="session")
-def copy_object():
+def copy_object(request):
     directory = Path(tempfile.mkdtemp(prefix="edge-udp-copy-object-", dir="/run"))
     directory.chmod(0o755)
     try:
@@ -71,6 +72,28 @@ def copy_object():
                 check=True,
                 timeout=30,
             )
+        raw_btf = subprocess.check_output(
+            [
+                "bpftool",
+                "-j",
+                "btf",
+                "dump",
+                "file",
+                "/sys/kernel/btf/vmlinux",
+                "format",
+                "raw",
+            ],
+            timeout=30,
+        )
+        arguments = select_recvmsg_arguments(raw_btf)
+        (directory / "prototype-selection.json").write_text(
+            json.dumps(
+                {
+                    "udp_recvmsg_arguments": arguments,
+                    "btf_json_sha256": digest(raw_btf),
+                }
+            )
+        )
         arch = {"aarch64": "arm64", "x86_64": "x86"}[platform.machine()]
         obj = directory / "copy.bpf.o"
         subprocess.run(
@@ -81,6 +104,7 @@ def copy_object():
                 "-target",
                 "bpf",
                 "-D__TARGET_ARCH_" + arch,
+                "-DUDP_RECVMSG_ARGUMENTS=" + str(arguments),
                 "-I" + str(directory),
                 "-c",
                 str(ROOT / "native/udp_payload_copy_observer.bpf.c"),
@@ -91,6 +115,29 @@ def copy_object():
             timeout=60,
         )
         obj.chmod(0o444)
+        # Retain the actual tested build profile in CI output, not only a
+        # temporary file. These are lab build facts, never runtime attestation.
+        reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(
+                "UDP payload-copy actual build: "
+                + json.dumps(
+                    {
+                        "kernel_release": platform.release(),
+                        "udp_recvmsg_arguments": arguments,
+                        "btf_sha256": digest(
+                            Path("/sys/kernel/btf/vmlinux").read_bytes()
+                        ),
+                        "object_sha256": digest(obj.read_bytes()),
+                        "native_source_sha256": digest(
+                            (
+                                ROOT / "native/udp_payload_copy_observer.bpf.c"
+                            ).read_bytes()
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
         yield obj
     finally:
         shutil.rmtree(directory)

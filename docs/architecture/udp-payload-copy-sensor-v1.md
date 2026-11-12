@@ -251,3 +251,11 @@ Synthetic prototype-selection tests must accept only the two allowed shapes and
 reject unknown/malformed/type drift. Actual local five-argument controls must stay
 passing, while mandatory hosted actual controls must pass the hosted profile
 without skips. Both variants need independent review and final-head full CI.
+
+The permitted4-argument semantics were checked against pinned upstream udp.c
+[6f8319e3](https://raw.githubusercontent.com/torvalds/linux/6f8319e3e9a44dd537d17f41565a8453c560a581/net/ipv4/udp.c):
+successful copy/checksum handling still consumes then returns the copied count;
+address length is stored in msg_namelen. This is not an attribution of CI's exact
+kernel revision. Actual BTF selects only its observed allowed prototype. The new
+selector has53 synthetic accept/reject tests; actual local BTF selected5 and all14
+controls passed without skips. Actual hosted4-profile success is still pending.

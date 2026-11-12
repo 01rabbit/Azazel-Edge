@@ -6,6 +6,19 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+/* Root test build must validate actual BTF before selecting a fixed return slot. */
+#ifndef UDP_RECVMSG_ARGUMENTS
+#error "Root build requires an explicitly validated udp_recvmsg argument profile"
+#elif UDP_RECVMSG_ARGUMENTS == 4
+#define COPY_ENTRY_ARGUMENTS struct sock *sk, struct msghdr *msg, size_t len, int flags
+#define COPY_EXIT_ARGUMENTS COPY_ENTRY_ARGUMENTS, int ret
+#elif UDP_RECVMSG_ARGUMENTS == 5
+#define COPY_ENTRY_ARGUMENTS struct sock *sk, struct msghdr *msg, size_t len, int flags, int *addr_len
+#define COPY_EXIT_ARGUMENTS COPY_ENTRY_ARGUMENTS, int ret
+#else
+#error "Unsupported udp_recvmsg argument profile"
+#endif
+
 struct configuration {
     __u64 socket_inode, socket_cookie, netns_cookie, netns_inode;
     __u64 started_ns, deadline_ns, pidns_device, pidns_inode;
@@ -43,7 +56,7 @@ static __always_inline struct invocation invocation(struct sock *sk)
 }
 
 SEC("fentry/udp_recvmsg")
-int BPF_PROG(copy_entry,struct sock *sk,struct msghdr *msg,size_t len,int flags,int *addr_len)
+int BPF_PROG(copy_entry,COPY_ENTRY_ARGUMENTS)
 {
     __u32 zero=0;
     struct configuration *cfg=bpf_map_lookup_elem(&config,&zero);
@@ -116,7 +129,7 @@ int BPF_PROG(copy_consume,struct sock *sk,struct sk_buff *skb,int len)
 }
 
 SEC("fexit/udp_recvmsg")
-int BPF_PROG(copy_exit,struct sock *sk,struct msghdr *msg,size_t len,int flags,int *addr_len,int ret)
+int BPF_PROG(copy_exit,COPY_EXIT_ARGUMENTS)
 {
     /* Only pointer values and previously saved scalars: skb may be freed. */
     struct invocation key=invocation(sk);
