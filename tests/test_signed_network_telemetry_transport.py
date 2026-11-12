@@ -524,8 +524,16 @@ def test_transition_pending_does_not_extend_original_two_second_deadline(
     ticks = iter(
         [0, 3]
     )  # Original deadline, AFTER full transition sample/final fences.
-    monkeypatch.setattr(t.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(t.time, "sleep", lambda seconds: pytest.fail("expired wait"))
+    # Isolate this two-tick clock from unrelated users of the process-wide time
+    # module (including background threads during the complete suite).
+    monkeypatch.setattr(
+        t,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: next(ticks),
+            sleep=lambda seconds: pytest.fail("expired wait"),
+        ),
+    )
     with pytest.raises(AssertionError, match="exceeded two seconds"):
         t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
     assert len(calls) == 2
