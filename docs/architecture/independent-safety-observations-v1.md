@@ -1,5 +1,5 @@
 # Frozen finite safety-observation evaluator v1 — #400 / #393
-Frozen data/design only; implementation and collection require separate review.
+Frozen data/design contract with an offline evaluator; runtime collection remains separate.
 The existing v2 reader/experiment safety gate remains ALWAYS WITHHELD. This new
 pure offline evaluator verifies signed observation bytes but cannot unlock that gate.
 It launches nothing, changes no permissions, and supplies no executor authority.
@@ -155,7 +155,18 @@ The five-file data/design boundary consists of this document and
 The corpus contains 33 bounded descriptive recipe cases fixed before evaluator
 implementation. Whole-wire contract hash includes its single LF; recipe/expected
 JSON is metadata, not wire. Three public deterministic test seeds are disclosed
-in README for a future inline test helper; no private-key file is included.
+in README for the inline test helper; no private-key file is included.
+
+## Offline evaluator
+
+`azazel_edge.benchmark.safety_observations.evaluate_safety_observations` accepts
+canonical contract and observation bytes, an externally retained contract digest,
+three public-key pins, and the four external stream heads. It performs no file,
+network, process, key-provisioning or runtime action. Global input errors raise
+`SafetyObservationInputError`; successful calls return the diagnostic structure
+defined above. Test-only signed recipes are built by
+`tests/safety_observation_data.py`; the 33 frozen expectations and additional
+adversarial tests run in `tests/test_safety_observations.py`.
 
 Wrong protected tuple or advisory/forged input hash is a wrong-bound anomaly:
 coverage incomplete, never a finite zero or known violation. An unauthorized
