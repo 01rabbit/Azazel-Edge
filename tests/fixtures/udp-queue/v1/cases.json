@@ -1,0 +1,166 @@
+{
+  "cases": [
+    {
+      "application_delivery_count": null,
+      "id": "exact-queue-admission",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": 1
+    },
+    {
+      "application_delivery_count": null,
+      "id": "after-socket-filter-drop-unknown",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "unrelated-datagram",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "empty-queue-unknown",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "readonly-nonconsuming-control",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": 1
+    },
+    {
+      "application_delivery_count": null,
+      "id": "target-restart-cookie-change",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "wrong-cookie-or-inode",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "wrong-object-pin",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "wrong-btf-pin",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "capability-denied",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "entry-collision",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "unmatched-exit",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "negative-enqueue-return",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "overflow-with-known-positive",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": 1
+    },
+    {
+      "application_delivery_count": null,
+      "id": "window-expired",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "namespace-drift",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "report-tamper",
+      "outcome": "rejected",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "sealed-real-report-join",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": 1
+    },
+    {
+      "application_delivery_count": null,
+      "id": "truncated-or-lost-event",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    },
+    {
+      "application_delivery_count": null,
+      "id": "target-lifecycle-change",
+      "outcome": "unqualified_udp_queue_diagnostic",
+      "protected_escape_count": null,
+      "qualified_safety_count": null,
+      "queue_admission_observed_count": null
+    }
+  ],
+  "frozen_before_implementation": true,
+  "schema_version": "edge-udp-queue-cases/v1"
+}
