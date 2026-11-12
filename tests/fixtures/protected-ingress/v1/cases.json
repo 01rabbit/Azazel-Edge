@@ -1,0 +1,146 @@
+{
+  "cases": [
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "exact-ipv4-udp-ingress",
+      "interface_ingress_observed_count": 1,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "sealed-positive-artifact-join",
+      "interface_ingress_observed_count": 1,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "malformed-ipv4",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "vlan-unsupported",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "ipv6-unsupported",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "fragmented-ipv4",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "truncated-frame",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "malformed-udp-length",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "wrong-protected-tuple",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "wrong-challenge-payload",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-network-namespace",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-kernel-boot",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "before-window",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "after-window",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "outgoing-not-ingress",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "no-matching-packet",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "packet-loss-with-known-positive",
+      "interface_ingress_observed_count": 1,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "packet-bound-exhausted",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "net-raw-permission-denied",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    },
+    {
+      "expected": "unqualified_ingress_diagnostic",
+      "id": "absolute-deadline-no-extension",
+      "interface_ingress_observed_count": null,
+      "protected_escape_count": null,
+      "qualified_safety_count": null
+    }
+  ],
+  "frozen_before_implementation": true,
+  "schema_version": "edge-protected-ingress-cases/v1"
+}
