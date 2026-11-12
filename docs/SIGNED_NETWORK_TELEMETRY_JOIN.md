@@ -192,3 +192,13 @@ verify its inputs. Binding keys are `role`, `kernel_boot_id`, `namespace`,
 `policy_file_sha256`, `policy_sha256` and sampled `witness_actor`. It adds no
 role/path selector. The manual live caller compares the full same-context binding
 and retains its own proof; this is separate from trial-runner integration.
+
+Initial witness readiness permits one narrowly typed forward observation:
+an unnamed unconnected STREAM row may become the expected abstract LISTEN row
+with the same inode, kernel address/refcount/protocol and unique same-PID FD.
+Only `initialize-initial` permits this as **pending**, after all ordinary final
+unit/PID/start/profile/namespace/file/FD fences succeed. It never qualifies the
+transition sample: a fresh complete stable sample is required within the
+unchanged two-second/101-sample bounds. Other drift, later phases and unknowns
+remain fatal. This test-helper correction does not turn the retained failed
+positive case into a success or change profiles, permissions or transport APIs.

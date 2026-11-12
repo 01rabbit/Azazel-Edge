@@ -405,3 +405,140 @@ def test_listener_requires_unique_stable_same_pid_fd_and_retains_partial(
     assert retained["error"] in ("AssertionError", "PermissionError")
     if fault == "injected":
         assert retained["names"] == names and calls == []
+
+
+def transition_tables(name, fault=None):
+    before = socket_row(name, flags="00000000").rsplit(" @", 1)[0] + "\n"
+    if fault == "replaced-inode":
+        before = before.replace("12345", "99999")
+    if fault == "type":
+        before = before.replace("0001 01", "0002 01")
+    if fault == "connected":
+        before = before.replace("0001 01", "0001 03")
+    if fault == "refcount":
+        before = before.replace("00000002", "00000003", 1)
+    if fault == "already-named":
+        before = socket_row("other", flags="00000000")
+    after = table(name)
+    if fault == "malformed":
+        after += "malformed\n"
+    return HEADER + before, after
+
+
+def install_transition(tmp_path, monkeypatch, fault=None, repeat=False):
+    auth = fixture(tmp_path, monkeypatch, "pid" if fault == "pid" else None)
+    before, after = transition_tables(auth["witness_transport"]["name"], fault)
+    original = t.p.cg._kernel_text
+    calls = []
+
+    def kernel(path, limit):
+        if path.endswith("/net/unix"):
+            calls.append(path)
+            return (
+                before if (len(calls) == 1 or repeat and len(calls) % 2 == 1) else after
+            )
+        return original(path, limit)
+
+    monkeypatch.setattr(t.p.cg, "_kernel_text", kernel)
+    if fault == "fd":
+        monkeypatch.setattr(t.os, "readlink", lambda path: "socket:[99999]")
+    return auth, before, after, calls
+
+
+def test_exact_startup_forward_transition_requires_fresh_complete_stable_sample(
+    tmp_path, monkeypatch
+):
+    auth, before, after, calls = install_transition(tmp_path, monkeypatch)
+    value = t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    assert len(calls) == 4
+    assert value["listener"] == dict(
+        inode="12345", fd="3", abstract_name=auth["witness_transport"]["name"]
+    )
+    prefix = "witness-initialize-initial-sample-0"
+    assert (tmp_path / (prefix + "-unix-before.raw")).read_text() == before
+    assert (tmp_path / (prefix + "-unix-after.raw")).read_text() == after
+    pending = json.loads((tmp_path / (prefix + "-listener.json")).read_bytes())
+    assert pending["startup_transition_pending"] == dict(inode="12345", fd="3")
+    first = json.loads((tmp_path / (prefix + ".json")).read_bytes())
+    assert (
+        first["after"] == first["before"]
+    )  # Final PID/start/unit fence WAS completed.
+    receipt = json.loads((tmp_path / "witness-initialize-initial.json").read_bytes())
+    assert [sample["listener"] for sample in receipt["samples"]] == [
+        None,
+        value["listener"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "replaced-inode",
+        "refcount",
+        "type",
+        "connected",
+        "already-named",
+        "malformed",
+        "fd",
+        "pid",
+    ],
+)
+def test_startup_transition_cannot_hide_bad_socket_or_final_identity_fence(
+    tmp_path, monkeypatch, fault
+):
+    auth, _, _, calls = install_transition(tmp_path, monkeypatch, fault)
+    with pytest.raises(AssertionError):
+        t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    assert len(calls) <= 2
+    assert not (tmp_path / "witness-initialize-initial-sample-1.json").exists()
+    if fault == "pid":
+        pending = json.loads(
+            (
+                tmp_path / "witness-initialize-initial-sample-0-listener.json"
+            ).read_bytes()
+        )
+        assert "startup_transition_pending" in pending
+        final = json.loads(
+            (tmp_path / "witness-initialize-initial-sample-0.json").read_bytes()
+        )
+        assert final["before"]["MainPID"] != final["after"]["MainPID"]
+
+
+@pytest.mark.parametrize(
+    "phase", ["initialize-before-go", "live-initial", "live-after-terminal"]
+)
+def test_later_phase_exact_forward_transition_remains_fatal(
+    tmp_path, monkeypatch, phase
+):
+    auth, _, _, calls = install_transition(tmp_path, monkeypatch)
+    with pytest.raises(AssertionError, match="listener changed"):
+        t.witness_binding(auth, [5, 20], tmp_path, phase, COOKIE)
+    assert len(calls) == 2
+    assert not (tmp_path / ("witness-" + phase + "-sample-1.json")).exists()
+
+
+def test_transition_pending_does_not_extend_original_two_second_deadline(
+    tmp_path, monkeypatch
+):
+    auth, _, _, calls = install_transition(tmp_path, monkeypatch)
+    ticks = iter(
+        [0, 3]
+    )  # Original deadline, AFTER full transition sample/final fences.
+    monkeypatch.setattr(t.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(t.time, "sleep", lambda seconds: pytest.fail("expired wait"))
+    with pytest.raises(AssertionError, match="exceeded two seconds"):
+        t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    assert len(calls) == 2
+
+
+def test_repeated_transition_pending_hits_existing_101_sample_cap(
+    tmp_path, monkeypatch
+):
+    auth, _, _, calls = install_transition(tmp_path, monkeypatch, repeat=True)
+    monkeypatch.setattr(t.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(t.time, "sleep", lambda seconds: None)
+    with pytest.raises(AssertionError, match="listener absent"):
+        t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    receipt = json.loads((tmp_path / "witness-initialize-initial.json").read_bytes())
+    assert len(receipt["samples"]) == 101 and len(calls) == 202
+    assert all(sample["listener"] is None for sample in receipt["samples"])
