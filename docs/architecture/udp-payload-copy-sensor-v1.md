@@ -185,3 +185,44 @@ expected_enrollment_sha256,expected_checkpoint_sha256,expected_plan_sha256,
 expected_report_sha256) uses existing six-path Root-sealed read-only pattern,
 registered nonroot reader/boot/final held-metadata/independent closes. It NEVER
 translates new layer into old queue schema or counts. Old evaluators reject it.
+
+## Implemented validation and explicitly open cases
+
+The new native/backend/facade/intake are additive. Backend slot-read failure AFTER
+safe owned-link teardown marks correlation loss and retains independently checked
+earlier events; unread slots are not invented. Unknown ownership or failed cleanup
+still refuses a new report. Existing published files are never reopened for writes.
+
+Actual offline Linux6.8.0-117 ARM64 integration:14 tests passed without skips:
+ordinary IOVEC, UBUF, later name-copyout EFAULT, inherited-socket receiver, PEEK,
+short buffer, TRUNC, payload EFAULT, no receiver read, socket-filter drop, wrong
+challenge, replaced socket, capability refusal and signed Root-sealed separate-UID
+collection (including wrong report-pin refusal). Name-copyout returns EFAULT14
+while the BPF payload-copy event is positive; successful_syscall_count stays null.
+The inherited socket's actual child TGID differs from locator provenance. No-read
+keeps copy count null even though the target's AFTER-detach control finds data.
+Control responses are labeled control_only; assertions use signed kernel events
+as the independent observation, never target success as the proof itself.
+
+The first integration run's14 test bodies passed but teardown failed because the
+ROOT TEST HARNESS lacked KILL for its separate-UID children. Retained failure
+and corrected rerun are separate evidence. Harness-only KILL belongs to the
+existing isolated setup profile; the sensor drops it, all other setup authority
+and ambient/inheritable capabilities before the capture API. No observer profile,
+expected result or production privilege was relaxed. Actual probe and integration
+are finite virtual observations, not production custody or whole-system safety.
+
+Parser/signature/FFI/held-reader tests are SYNTHETIC. They exercise strict field/
+type/domain/pin/credential/time/namespace rejection, loss and cleanup, opaque
+locator semantics and independent null safety counts. Fake map/iterator/lifecycle
+faults do not prove actual scheduler migration, kernel/discard iterator behavior,
+wrong real credential/PIDNS kernel branches, checksum corruption, GRO/GSO or
+reboot continuity. Those real controls remain OPEN and never receive fabricated
+positive/zero measurements. Nonzero-offset namespace creation was not exercised;
+strict refusal is parser-tested. No named application identity, successful syscall,
+processing/durability, observer-object disappearance, broad defense restoration,
+Pi/HIL, production activation or comparative efficacy is accepted by this slice.
+
+Mandatory actual-Linux CI explicitly includes the new suite and rejects skips;
+ordinary nonroot/platform suite skips are not actual-kernel acceptance. Final
+published head still requires complete CI, independent review and exact refs/tree.
