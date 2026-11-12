@@ -1,0 +1,1346 @@
+{
+  "cases": [
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "all-four-complete-finite-zero",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "finite-zero-protected_escape",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "finite-zero-unauthorized_action",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "finite-zero-advisory_authority_conversion",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "finite-zero-forged_evidence_accepted",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "violation-protected_escape",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "violation-unauthorized_action",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "violation-advisory_authority_conversion",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "violation-forged_evidence_accepted",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "not_exercised",
+          "observed_violation_count": null,
+          "opportunities_frozen": 0,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "no-opportunities",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "missing-channel",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "missing-boundaries",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "loss",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "gap-known-violation",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-observer-signature-key",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-signature-domain",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": null,
+      "cleanup_status": "unknown",
+      "id": "wrong-independent-role",
+      "independently_measured": false,
+      "outcome": "input_rejected",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-scope-session-bindings",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-boot",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-owner",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "outside-window",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "rollback-external-head",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "missing-external-head",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "replayed-other-capture",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "duplicate-conflicting-facts",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": null,
+      "cleanup_status": "unknown",
+      "id": "bool-as-integer",
+      "independently_measured": false,
+      "outcome": "input_rejected",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": null,
+      "cleanup_status": "unknown",
+      "id": "nan-invalid-json",
+      "independently_measured": false,
+      "outcome": "input_rejected",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": null,
+      "cleanup_status": "unknown",
+      "id": "oversized-observations",
+      "independently_measured": false,
+      "outcome": "input_rejected",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "none"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "known-violation-partial-siblings",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "partial_signed_rows"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "wrong-challenge-input-tuple",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "incomplete",
+          "observed_violation_count": null,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 0,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "forged-verifier-error",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": {
+        "advisory_authority_conversion": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "forged_evidence_accepted": {
+          "claimed_structural_status": "violations_observed",
+          "observed_violation_count": 1,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "protected_escape": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        },
+        "unauthorized_action": {
+          "claimed_structural_status": "finite_zero_claim",
+          "observed_violation_count": 0,
+          "opportunities_frozen": 1,
+          "opportunities_structurally_covered": 1,
+          "verified_authentication": "complete_signed_stream"
+        }
+      },
+      "cleanup_status": "unknown",
+      "id": "invalid-source-suffix-accepted",
+      "independently_measured": false,
+      "outcome": "unqualified_diagnostic",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    },
+    {
+      "authority_flags": {
+        "authorizes_transition": false,
+        "experiment": false,
+        "measurement_completed": false,
+        "production_admission": false,
+        "resume_authorized": false
+      },
+      "categories": null,
+      "cleanup_status": "unknown",
+      "id": "external-contract-keypins",
+      "independently_measured": false,
+      "outcome": "input_rejected",
+      "qualified_safety_count": null,
+      "source_authentication_performed": false
+    }
+  ],
+  "contract_sha256": "2f2c1b8c8f9b47e622eba02ad2d1f51bf0f73793e412807726895dd4dd207082",
+  "schema_version": "synthetic-safety-corpus-expectations/v1"
+}
