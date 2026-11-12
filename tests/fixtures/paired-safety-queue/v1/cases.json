@@ -1,0 +1,117 @@
+{
+  "cases": [
+    {
+      "evidence": "synthetic",
+      "id": "valid_four_channel_pair"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "valid_no_queue_event"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "bad_pair_keeps_main_positive"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_pair"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_external_pair_pin"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_main_hash"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_queue_contract_plan_report_hash"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_scope_boot_session"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_key"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_selected_id_or_category"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "tuple_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "predicate_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "window_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "challenge_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "all_main_channel_collision"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "all_main_capture_collision"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "bad_queue_signature_domain"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_queue_reference"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "different_opaque_main_reference_allowed"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "old_queue_restriction_unchanged"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "stale_report_wrong_scope"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "deep_duplicate_noncanonical"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "main_invalid_original_error"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "no_queue_delivery_safety_cast"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "pure_no_io_immutable"
+    },
+    {
+      "evidence": "actual_linux",
+      "id": "actual_queue_and_synthetic_main"
+    },
+    {
+      "evidence": "actual_linux",
+      "id": "actual_filter_negative_null"
+    },
+    {
+      "evidence": "actual_linux",
+      "id": "actual_sealed_uid_intake"
+    }
+  ],
+  "schema_version": "edge-paired-safety-queue-cases/v1"
+}
