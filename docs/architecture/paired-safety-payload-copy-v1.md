@@ -77,3 +77,22 @@ No installer/security/systemd/productservice/productionkeys/deployment, new caps
 old schema migration, missing-data fill/backfill/auto-resume. Application receipt,
 PIDNS/migration/checksum/unsupported iterators/reboot, object disappearance, broad
 restoration, key custody, Pi/HIL/production/whole safety/causal benefit stay open.
+
+## Implemented validation scope
+
+49 new SYNTHETIC real-signature cases passed. Offline Linux6.8.0-117 exact5-argument
+profile: all57 selected tests passed in3.96s without skips (49synthetic +8actual
+Linux). One actual signed kernel-copy capture is paired with explicitly SYNTHETIC
+other four-category main facts; its main protected-delivery observations are absent
+and count remains null while copy count is1. The other Linux cases exercise real
+Root-sealed files/UID/unsafe metadata over synthetic payloads, not real traffic.
+Registered reader accepts; producer/Root refuse; unsafe/missing optional metadata
+refuses only the new collection or yields the specified unknown diagnostic. Original
+bytes and independently collected standalone main positive remain unchanged.
+
+No original parser/evaluator/native acquisition/privilege changed. Same six-cap
+isolated Root setup, unchanged minimal sensor, exact CI PYTHONPATH=.:py, networknone,
+default seccomp/sourceRO. Actual local log SHA150b1bda9b94f0acbd2aea2f7f353184f78575e80977f0c25e1fb1ed8d2067b5
+and stopped-container profile are retained separately. No main synthetic positive
+is promoted to actual safety evidence. Final independent review and final-head
+complete hosted CI/ref checks remain required before conditional merge.
