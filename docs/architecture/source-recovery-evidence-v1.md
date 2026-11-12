@@ -105,3 +105,61 @@ reader and external hashes. Old intake formats are unchanged.
 
 See tests/fixtures/source-recovery/v1/cases.json. SYNTHETIC recipes and actual
 Linux cases are explicitly separated. No acceptance threshold is fitted afterward.
+
+## Wire/API clarification (same frozen acceptance scope)
+
+Source plan exact keys: schema_version=edge-source-proof-plan/v1,
+contract_sha256, trust_sha256, context, prefix_checkpoint, final_checkpoint.
+The scope policy_sha256 is the raw canonical trust-file SHA including LF;
+scope source_sha256 is the trusted Source prefix SHA, not a full-suffix validity
+requirement. Missing Source/checkpoint arguments are None and yield unknown.
+
+Recovery plan exact keys: schema_version=edge-observer-recovery-plan/v1,
+contract_sha256, queue_plan_sha256, queue_report_sha256, kernel_boot_id,
+kernel_release, observer_public_key, not_before_ns, deadline_ns, resources.
+The sample window is positive and at most60s. Each of eight resources is exactly
+{kind:link|program|map,id,identity_sha256}; IDs positive uint32, unique within kind.
+Identity SHA is canonical selected metadata without LF: link kind/id/type plus
+program_id/attach_type/target_object_id/target_btf_id; program kind/id/type/tag
+(exact8-bytehex)/load_time_ns; map kind/id/type/key_size/value_size/max_entries/
+map_flags/name_hex(exact16-bytehex). External Root enrollment must establish
+these were the scoped owned objects; hashing arbitrary IDs is not enrollment.
+
+Recovery report exact keys: schema_version=edge-observer-recovery-report/v1,
+plan_sha256, kernel_boot_id, kernel_release,
+observation_layer=observer_object_id_lookup, started_ns, finished_ns,
+context_stable, resources, signature. Each resource sample is exactly
+{kind,id,started_ns,finished_ns,state,identity_sha256,reason}. Closed state/reason
+pairs: absent/not_found; present/matching_residue; identity_reused/identity_differs;
+unknown/{metadata_failed,query_denied_or_failed,query_fd_close_failed}.
+Only present/reused carries an identity SHA. Contradictory signed assertions are
+invalid samples, never absence. Invalid siblings preserve admissible residue.
+Domain is b"azazel-edge:independent-observer-recovery:v1\x00"; sign canonical
+unsigned body without LF. External plan/report hashes include LF.
+All query brackets must be inside the report and enrolled post-run window.
+
+The current checker enforces Root+NNP with identical permitted/effective/bounding
+sets either empty or exactly BPF+PERFMON, no inherited/ambient capabilities.
+It never admits SYS_ADMIN or expands the sensor's boundary. Thus actual positive
+Linux6.8 inventory proof is unavailable to this version. A future privileged
+collector needs separate review/provisioning; synthetic acceptance of an enrolled
+report is not privileged collector validation. Failure to load the fixed library,
+wrong role/boot or inability to sign returns no report, never simulated evidence.
+
+Composition API evaluate_safety_proofs evaluates old safety evidence first;
+supplemental malformed bytes become unknown without suppressing those positives.
+The existing UDP queue contract admits one protected opportunity and no other
+category opportunities. Recovery composition deliberately retains that restriction;
+a general multi-channel recovery join is not implemented. Source/forgery proofs
+remain evaluable separately. Recovery binds an actually authenticated historical
+queue report; not_before_ns must be at least that report's finished_ns. This proves
+only after that observer capture, not after a larger defense experiment's end.
+
+Sealed supplement exact keys: schema_version=edge-safety-proof-enrollment/v1,
+enrollment_sha256, checkpoint_sha256, paths, sha256. The last two are exact maps of
+source_plan/trust/source/recovery_plan/recovery_report/queue_plan/queue_report to
+normalized absolute distinct paths and byte hashes, or matched None pairs.
+Reuse held-FD metadata/ancestor fences through final validation and close. Source
+file cap64MiB, trust/plan/recovery/supplement32KiB, queue report64KiB. Missing declared
+files or unsafe metadata refuse the whole intake; explicit None is unknown.
+Original four-file enrollment/checkpoint schemas and old diagnostics stay intact.
