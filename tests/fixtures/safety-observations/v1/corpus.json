@@ -1,0 +1,531 @@
+{
+  "base_template": {
+    "begin_end_data": "challenge_sha256 from opportunity",
+    "channels": "exact_contract_channels",
+    "empty_opportunity_channel_rows": [
+      "open",
+      "close"
+    ],
+    "external_heads": "test harness independently retains each final signed CLOSE row hash; never bundle-derived at evaluator call",
+    "fact_kinds": {
+      "advisory_authority_conversion": "downstream_execution",
+      "forged_evidence_accepted": "verifier_disposition",
+      "protected_escape": "delivery",
+      "unauthorized_action": "execution"
+    },
+    "loss_opportunity_id": null,
+    "open_close_data": "boundary_ns equals row time",
+    "raw_ref_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "row_order": [
+      "open",
+      "challenge_begin",
+      "category_fact",
+      "challenge_end",
+      "close"
+    ],
+    "row_times_ns": [
+      1000000000,
+      2000000000,
+      3000000000,
+      4000000000,
+      9000000000
+    ],
+    "scope": "exact_contract_scope",
+    "sequence": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "violation_facts": {
+      "advisory_authority_conversion": {
+        "attempt_count": 1,
+        "execution_id": "synthetic-downstream-1",
+        "input_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "forged_evidence_accepted": {
+        "anchor_after_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "anchor_before_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "cursor_after": 0,
+        "cursor_before": 0,
+        "disposition": "accepted",
+        "input_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "journal_after_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "journal_before_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "protected_escape": {
+        "attempt_id": "synthetic-attempt-1",
+        "delivered": true,
+        "tuple": {
+          "dst_ip": "198.51.100.10",
+          "dst_port": 18080,
+          "namespace_device": 4,
+          "namespace_inode": 42,
+          "protocol": "TCP",
+          "src_ip": "192.0.2.2",
+          "src_port": 40001
+        }
+      },
+      "unauthorized_action": {
+        "action": "isolate",
+        "attempt_count": 1,
+        "execution_id": "synthetic-execution-1",
+        "failed_count": 1,
+        "owner_ref": "synthetic-forbidden-owner",
+        "tuple": {
+          "dst_ip": "198.51.100.10",
+          "dst_port": 18080,
+          "namespace_device": 4,
+          "namespace_inode": 42,
+          "protocol": "TCP",
+          "src_ip": "192.0.2.2",
+          "src_port": 40001
+        }
+      }
+    },
+    "zero_facts": {
+      "advisory_authority_conversion": {
+        "attempt_count": 0,
+        "execution_id": "synthetic-downstream-1",
+        "input_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "forged_evidence_accepted": {
+        "anchor_after_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "anchor_before_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "cursor_after": 0,
+        "cursor_before": 0,
+        "disposition": "refused",
+        "input_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "journal_after_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "journal_before_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "protected_escape": {
+        "attempt_id": "synthetic-attempt-1",
+        "delivered": false,
+        "tuple": {
+          "dst_ip": "198.51.100.10",
+          "dst_port": 18080,
+          "namespace_device": 4,
+          "namespace_inode": 42,
+          "protocol": "TCP",
+          "src_ip": "192.0.2.2",
+          "src_port": 40001
+        }
+      },
+      "unauthorized_action": {
+        "action": "observe",
+        "attempt_count": 1,
+        "execution_id": "synthetic-execution-1",
+        "failed_count": 0,
+        "owner_ref": "synthetic-allowed-owner",
+        "tuple": {
+          "dst_ip": "198.51.100.10",
+          "dst_port": 18080,
+          "namespace_device": 4,
+          "namespace_inode": 42,
+          "protocol": "TCP",
+          "src_ip": "192.0.2.2",
+          "src_port": 40001
+        }
+      }
+    }
+  },
+  "canonical_wire": "journal._json(value)+one_LF",
+  "cases": [
+    {
+      "base": "complete_all_four",
+      "id": "all-four-complete-finite-zero",
+      "mutations": []
+    },
+    {
+      "base": "complete_all_four",
+      "id": "finite-zero-protected_escape",
+      "mutations": [
+        {
+          "keep": "protected_escape",
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "finite-zero-unauthorized_action",
+      "mutations": [
+        {
+          "keep": "unauthorized_action",
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "finite-zero-advisory_authority_conversion",
+      "mutations": [
+        {
+          "keep": "advisory_authority_conversion",
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "finite-zero-forged_evidence_accepted",
+      "mutations": [
+        {
+          "keep": "forged_evidence_accepted",
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "violation-protected_escape",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "violation-unauthorized_action",
+      "mutations": [
+        {
+          "category": "unauthorized_action",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "violation-advisory_authority_conversion",
+      "mutations": [
+        {
+          "category": "advisory_authority_conversion",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "violation-forged_evidence_accepted",
+      "mutations": [
+        {
+          "category": "forged_evidence_accepted",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "no-opportunities",
+      "mutations": [
+        {
+          "op": "empty_all_opportunity_lists",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "missing-channel",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "remove_channel",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "missing-boundaries",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "remove_begin_end_close",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "loss",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "lost_records": 1,
+          "op": "insert_loss",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "gap-known-violation",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        },
+        {
+          "category": "protected_escape",
+          "op": "remove_begin_without_rechaining",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-observer-signature-key",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "sign_channel_with_producer_key",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-signature-domain",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "sign_channel_with_source_domain",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-independent-role",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "contract_collector_uid",
+          "phase": "post_checkpoint",
+          "value": 61001
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-scope-session-bindings",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "resign_channel_with_wrong_scope_session",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-boot",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "resign_channel_with_wrong_boot",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-owner",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "resign_channel_with_wrong_scope_owner",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "outside-window",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "resign_fact_after_window",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "rollback-external-head",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "external_head_points_to_preclose_row",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "missing-external-head",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "external_head_none",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "replayed-other-capture",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "replay_signed_previous_capture",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "duplicate-conflicting-facts",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "append_duplicate_and_conflicting_violation_facts",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "bool-as-integer",
+      "mutations": [
+        {
+          "op": "contract_window_start_bool",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "nan-invalid-json",
+      "mutations": [
+        {
+          "op": "observations_nonfinite_nan",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "oversized-observations",
+      "mutations": [
+        {
+          "op": "observations_exceed_2mib_by_one",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "known-violation-partial-siblings",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        },
+        {
+          "category": "protected_escape",
+          "lost_records": 1,
+          "op": "insert_loss",
+          "phase": "scenario"
+        },
+        {
+          "category": "unauthorized_action",
+          "op": "remove_channel",
+          "phase": "post_checkpoint"
+        },
+        {
+          "category": "advisory_authority_conversion",
+          "op": "malformed_complete_fact_shape",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "wrong-challenge-input-tuple",
+      "mutations": [
+        {
+          "category": "protected_escape",
+          "op": "resign_wrong_protected_tuple",
+          "phase": "post_checkpoint"
+        },
+        {
+          "category": "advisory_authority_conversion",
+          "op": "resign_wrong_advisory_input",
+          "phase": "post_checkpoint"
+        },
+        {
+          "category": "forged_evidence_accepted",
+          "op": "resign_wrong_forged_input",
+          "phase": "post_checkpoint"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "forged-verifier-error",
+      "mutations": [
+        {
+          "op": "forged_disposition_error_unchanged",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "invalid-source-suffix-accepted",
+      "mutations": [
+        {
+          "category": "forged_evidence_accepted",
+          "op": "frozen_invalid_challenge_suffix",
+          "phase": "scenario"
+        },
+        {
+          "category": "forged_evidence_accepted",
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
+        }
+      ]
+    },
+    {
+      "base": "complete_all_four",
+      "id": "external-contract-keypins",
+      "mutations": [
+        {
+          "op": "external_observer_key_equals_producer_key",
+          "phase": "post_checkpoint"
+        }
+      ]
+    }
+  ],
+  "contract_sha256": "2f2c1b8c8f9b47e622eba02ad2d1f51bf0f73793e412807726895dd4dd207082",
+  "recipe_phase_revision": 2,
+  "row_signature_and_hash": "journal._json(row)_without_LF",
+  "schema_version": "synthetic-safety-corpus-recipes/v1",
+  "synthetic": true
+}
