@@ -52,3 +52,37 @@ PID namespace, scheduler migration, checksum/GRO/iterator faults, power/reboot,
 physical/Pi-HIL, production key independence, broad restoration, safety and
 comparative benefit remain unmeasured. No missing interval/backfill/zero/automatic
 resume or liveness check is introduced by this test-only slice.
+
+## Validation record and corrected harness setup
+
+First actual run:2 passed,2 failed BEFORE negative capture because execve reset
+split real/effective IDs to the real UID. The strict actual-credential guard caught
+this; those trials are FAILED setup, never successful credential negatives.
+Fixed Root receiver bootstrap establishes the exact split UID/GID AFTER interpreter
+exec, drops all capability sets/bounding to zero and fixes NNP BEFORE reading the
+SCM socket. No later exec occurs. This uses only existing isolated test bootstrap
+authority and changes no observer/product permission or expected result.
+
+Fresh actual Linux6.8.0-117 exact5-argument profile:4 cases passed without skips;
+each negative consumed64B on the unchanged socket while hooks were attached,
+with separately completed same-socket eligible positive control and null negative
+copy count. Control failure logs remain distinct from the fresh success. Root
+integration subsequently fixed the receiver child's explicit tests-module search
+path for CI's PYTHONPATH=.:py and sender's own NNP/capability guard; final exact-CI-
+environment test and final-head hosted CI remain required. No synthetic test or
+privileged parent status substitutes for actual child credential checks.
+
+Independent review also found that a null report alone could pass if the negative
+read occurred after the original window or during observation loss. The test now
+brackets the complete receiver command with the shared zero-offset monotonic clock
+and requires that bracket inside the signed start/original deadline/finish. Each
+positive event's three timestamps must lie inside that bracket. Any link loss,
+correlation loss, overflow or early bound makes this credential control FAIL,
+not a negative pass. Native loss counters being zero are only validity gates;
+they do not prove coverage, absence or a finite negative count. The report's
+negative copy count remains null. A fresh final run is required after this guard.
+
+Final guarded local run with exact CI PYTHONPATH=.:py:4 passed in10.79s, no skips.
+Independent review CLEAN after both child import/NNP and time/loss guard fixes.
+No product/native/observer source changed. Final-head complete hosted CI is still
+required, including all four actual cases with skip rejection.
