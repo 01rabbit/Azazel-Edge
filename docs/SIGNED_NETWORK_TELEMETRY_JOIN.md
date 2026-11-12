@@ -202,3 +202,9 @@ transition sample: a fresh complete stable sample is required within the
 unchanged two-second/101-sample bounds. Other drift, later phases and unknowns
 remain fatal. This test-helper correction does not turn the retained failed
 positive case into a success or change profiles, permissions or transport APIs.
+The pending candidate is retained only in the in-process sampler's private typed
+state. The immediately following complete sample must contain the same inode,
+FD and expected name as a stable listener; disappearance, replacement, FD change
+or another transition is fatal. JSON receipts are evidence, not candidate
+rehydration or runtime authority. Ordinary initial absence retains its existing
+bounded wait, without any deadline extension.

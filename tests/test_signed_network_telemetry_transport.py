@@ -531,10 +531,18 @@ def test_transition_pending_does_not_extend_original_two_second_deadline(
     assert len(calls) == 2
 
 
-def test_repeated_transition_pending_hits_existing_101_sample_cap(
-    tmp_path, monkeypatch
-):
-    auth, _, _, calls = install_transition(tmp_path, monkeypatch, repeat=True)
+def test_initial_absence_still_hits_existing_101_sample_cap(tmp_path, monkeypatch):
+    auth = fixture(tmp_path, monkeypatch, None)
+    calls = []
+    original = t.p.cg._kernel_text
+
+    def absent(path, limit):
+        if path.endswith("/net/unix"):
+            calls.append(path)
+            return HEADER
+        return original(path, limit)
+
+    monkeypatch.setattr(t.p.cg, "_kernel_text", absent)
     monkeypatch.setattr(t.time, "monotonic", lambda: 0)
     monkeypatch.setattr(t.time, "sleep", lambda seconds: None)
     with pytest.raises(AssertionError, match="listener absent"):
@@ -542,3 +550,60 @@ def test_repeated_transition_pending_hits_existing_101_sample_cap(
     receipt = json.loads((tmp_path / "witness-initialize-initial.json").read_bytes())
     assert len(receipt["samples"]) == 101 and len(calls) == 202
     assert all(sample["listener"] is None for sample in receipt["samples"])
+
+
+@pytest.mark.parametrize(
+    "fault", ["replacement", "disappearance", "not-stable", "fd-change"]
+)
+def test_next_complete_sample_must_hold_same_pending_listener_candidate(
+    tmp_path, monkeypatch, fault
+):
+    auth = fixture(tmp_path, monkeypatch, None)
+    name = auth["witness_transport"]["name"]
+    before, after = transition_tables(name)
+    original = t.p.cg._kernel_text
+    calls = []
+
+    def kernel(path, limit):
+        if not path.endswith("/net/unix"):
+            return original(path, limit)
+        calls.append(path)
+        if len(calls) == 1:
+            return before
+        if len(calls) == 2:
+            return after
+        if fault == "replacement":
+            return after.replace("12345", "99999")
+        if fault == "disappearance":
+            return HEADER
+        if fault == "not-stable":
+            return before if len(calls) % 2 else after
+        return after
+
+    monkeypatch.setattr(t.p.cg, "_kernel_text", kernel)
+    monkeypatch.setattr(
+        t.os,
+        "readlink",
+        lambda path: "socket:[99999]"
+        if fault == "replacement" and len(calls) >= 3
+        else "socket:[12345]",
+    )
+    monkeypatch.setattr(
+        t.os,
+        "scandir",
+        lambda path: nullcontext(
+            iter(
+                [
+                    SimpleNamespace(
+                        name="4" if fault == "fd-change" and len(calls) >= 3 else "3"
+                    )
+                ]
+            )
+        ),
+    )
+    with pytest.raises(AssertionError, match="pending startup listener"):
+        t.witness_binding(auth, [5, 20], tmp_path, "initialize-initial", COOKIE)
+    assert len(calls) == 4
+    assert not (tmp_path / "witness-initialize-initial-sample-2.json").exists()
+    receipt = json.loads((tmp_path / "witness-initialize-initial.json").read_bytes())
+    assert len(receipt["samples"]) == 2

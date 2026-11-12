@@ -1,5 +1,6 @@
 """Fixed Root witness metadata for the explicit lab transport, never admission."""
 
+from dataclasses import dataclass
 import hashlib
 import os
 import re
@@ -10,6 +11,13 @@ import signed_network_telemetry_contract as role
 from azazel_edge.outcome.input_transport import SCHEMA, validate_transport
 
 p, lab, g = material.preflight, material.preflight.lab, material.preflight.old.g
+
+
+@dataclass(frozen=True)
+class _StartupPending:
+    inode: str
+    fd: str
+    abstract_name: str
 
 
 def witness_command():
@@ -142,13 +150,15 @@ def _witness_sample(auth, namespace, output, phase, observed_namespace, index):
         evidence["label"] = label
         info = os.stat(f"/proc/{pid}/ns/net")
         evidence["namespace"] = dict(device=info.st_dev, inode=info.st_ino)
-        evidence["listener"] = _listener(
+        listener = _listener(
             pid,
             transport["name"],
             output,
             prefix,
             allow_startup_transition=phase == "initialize-initial",
         )
+        pending = listener if type(listener) is _StartupPending else None
+        evidence["listener"] = None if pending is not None else listener
         after = lab.unit_snapshot(g.WITNESS)
         evidence["after"] = after
         policy_after, file_after = p.read_regular(
@@ -189,7 +199,7 @@ def _witness_sample(auth, namespace, output, phase, observed_namespace, index):
             witness_transport=transport,
             namespace_observation=observed_namespace,
             listener=evidence["listener"],
-        )
+        ), pending
     finally:
         lab.save_json(output / (prefix + ".json"), evidence)
 
@@ -308,7 +318,9 @@ def _listener(pid, name, output, prefix, *, allow_startup_transition=False):
                 "startup listener FD changed or ambiguous",
             )
             evidence["startup_transition_pending"] = dict(inode=after_inode, fd=held[0])
-            return None  # Outer sample still MUST finish every unit/PID/start/ns fence.
+            return _StartupPending(
+                after_inode, held[0], name
+            )  # Final actor fences still mandatory.
         lab.need(after_inode == inode, "listener changed during sample")
         if inode is None:
             return None
@@ -329,12 +341,26 @@ def witness_binding(auth, namespace, output, phase, observed_namespace):
     """Only initial pre-Popen readiness may passively await an absent listener."""
     initial = phase == "initialize-initial"
     deadline, previous, receipt = time.monotonic() + 2, None, dict(samples=[])
+    candidate = None
     try:
         for index in range(101):
-            current = _witness_sample(
+            current, pending = _witness_sample(
                 auth, namespace, output, phase, observed_namespace, index
             )
             receipt["samples"].append(current)
+            if candidate is not None:
+                lab.need(
+                    pending is None
+                    and current["listener"]
+                    == dict(
+                        inode=candidate.inode,
+                        fd=candidate.fd,
+                        abstract_name=candidate.abstract_name,
+                    ),
+                    "pending startup listener disappeared, changed or was not stable",
+                )
+            if pending is not None:
+                candidate = pending
             stable = {key: value for key, value in current.items() if key != "listener"}
             lab.need(
                 previous is None or stable == previous,
