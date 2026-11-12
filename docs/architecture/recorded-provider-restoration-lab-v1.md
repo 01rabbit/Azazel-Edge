@@ -74,3 +74,19 @@ produce the new retained provenance/result record with all prior gates passing;
 required route cannot skip. No new local privileged environment is constructed.
 Independent review, appropriate regressions, finalhead fullCI/exactbase/head/tree
 are required before conditional merge; preserve candidate if any actual gate fails.
+
+### Explicit unused observer-key enrollment and export boundary
+
+The existing safety schema requires three distinct public role pins even when no
+observations/opportunities exist. Builder requires observer_public_key explicitly;
+Root driver supplies an existing PUBLIC frozen test observer key, distinct from
+the actual producer/witness public keys, and records unused_schema_key_no_observations.
+No observer private key, signing, generated facts or independence claim is introduced.
+This pin is schema-only enrollment and cannot qualify safety or source truth.
+
+Existing CI only exports minimized results. Export this slice's dedicated evidence
+files with an exact filename whitelist/hash manifest: PUBLIC original/derived trust,
+original signed Source, checkpoints/plans/three receipts/provenance/result only.
+Never export the provisioning bundle, private keys, arbitrary paths, directories
+or globs. Validate regular protected files and original hashes; preserve failed
+artifacts without interpreting them as passes. No new runtime permission/service.
