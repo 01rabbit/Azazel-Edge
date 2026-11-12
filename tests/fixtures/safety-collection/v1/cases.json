@@ -1,0 +1,196 @@
+{
+  "cases": [
+    {
+      "expected": "diagnostic",
+      "id": "complete",
+      "protected_escape_count": 0
+    },
+    {
+      "expected": "diagnostic",
+      "id": "violation",
+      "protected_escape_count": 1
+    },
+    {
+      "expected": "diagnostic",
+      "id": "null-head",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "diagnostic",
+      "id": "null-head-violation",
+      "protected_escape_count": 1
+    },
+    {
+      "expected": "diagnostic",
+      "id": "gap",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "diagnostic",
+      "id": "gap-violation",
+      "protected_escape_count": 1
+    },
+    {
+      "expected": "diagnostic",
+      "id": "missing-channel",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "diagnostic",
+      "id": "bad-signature",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "diagnostic",
+      "id": "wrong-head",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "unregistered",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-enrollment-pin",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-checkpoint-pin",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-contract-pin",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-scope",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-capture",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-reader",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "producer-as-reader",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "wrong-boot",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "missing-artifact",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "noncanonical",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "duplicate-key",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "unsafe-owner",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "unsafe-mode",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "unsafe-ancestor",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "symlink",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "hardlink",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "special-file",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "oversize",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "path-alias",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "replacement",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "inplace-change",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "growth",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "truncation",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "ancestor-replacement",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "close-failure",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "rejected",
+      "id": "boot-drift",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "os-boundary",
+      "id": "producer-write-denied",
+      "protected_escape_count": null
+    },
+    {
+      "expected": "os-boundary",
+      "id": "observer-write-denied",
+      "protected_escape_count": null
+    }
+  ],
+  "frozen_before_implementation": true,
+  "schema_version": "edge-safety-collection-cases/v1"
+}
