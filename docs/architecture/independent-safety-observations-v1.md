@@ -116,7 +116,8 @@ Whole result `status='unqualified_diagnostic'`; all transition, resume, experime
 measurement-completion and production-admission flags false. Original raw hashes
 and all validation reasons accompany the result; no ledger receipt is emitted.
 
-`complete_signed_stream` describes signatures, chain and open/close framing only;
+`complete_signed_stream` requires admissible context, data and time bindings as
+well as signatures, chain and open/close framing;
 missing or mismatched external heads still make coverage incomplete. It is not
 rollback resistance, source truth or observation qualification. Invalid global
 wire/contract/external pins raise `SafetyObservationInputError(ValueError)` and

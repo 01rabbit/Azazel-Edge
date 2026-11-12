@@ -51,3 +51,18 @@ premises are SYNTHETIC assertions. Signatures test byte binding only. These file
 prove no physical bypass protection, sensor truth, actual independence, Source
 authentication, cleanup, hardware/HIL coverage, runtime authority or admission.
 The current v2 qualified safety gate remains WITHHELD regardless of this corpus.
+
+## Explicit recipe-phase revision 2
+
+Each mutation now carries `phase`. The ONLY scenario operations are
+`empty_other_opportunity_lists`, `empty_all_opportunity_lists`,
+`replace_fact_with_violation`, `insert_loss`,
+`append_duplicate_and_conflicting_violation_facts`,
+`forged_disposition_error_unchanged`, and `frozen_invalid_challenge_suffix`.
+Construct those semantic observations, sign/rechain, and retain external heads
+FIRST. Apply every `post_checkpoint` mutation afterwards, including corruptions
+of submitted contract bytes; never repair, re-pin, or normalize checkpoints after
+a negative mutation. Only named `external_head*` operations change head arguments;
+the separately named external-key collision changes its key argument, not heads.
+Expected outcomes and all 33 cases are unchanged. This is an explicit metadata
+revision; the original corpus hash remains historical, not silently reused.

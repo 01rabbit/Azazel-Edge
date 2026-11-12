@@ -144,7 +144,8 @@
       "mutations": [
         {
           "keep": "protected_escape",
-          "op": "empty_other_opportunity_lists"
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
         }
       ]
     },
@@ -154,7 +155,8 @@
       "mutations": [
         {
           "keep": "unauthorized_action",
-          "op": "empty_other_opportunity_lists"
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
         }
       ]
     },
@@ -164,7 +166,8 @@
       "mutations": [
         {
           "keep": "advisory_authority_conversion",
-          "op": "empty_other_opportunity_lists"
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
         }
       ]
     },
@@ -174,7 +177,8 @@
       "mutations": [
         {
           "keep": "forged_evidence_accepted",
-          "op": "empty_other_opportunity_lists"
+          "op": "empty_other_opportunity_lists",
+          "phase": "scenario"
         }
       ]
     },
@@ -184,7 +188,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         }
       ]
     },
@@ -194,7 +199,8 @@
       "mutations": [
         {
           "category": "unauthorized_action",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         }
       ]
     },
@@ -204,7 +210,8 @@
       "mutations": [
         {
           "category": "advisory_authority_conversion",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         }
       ]
     },
@@ -214,7 +221,8 @@
       "mutations": [
         {
           "category": "forged_evidence_accepted",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         }
       ]
     },
@@ -223,7 +231,8 @@
       "id": "no-opportunities",
       "mutations": [
         {
-          "op": "empty_all_opportunity_lists"
+          "op": "empty_all_opportunity_lists",
+          "phase": "scenario"
         }
       ]
     },
@@ -233,7 +242,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "remove_channel"
+          "op": "remove_channel",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -243,7 +253,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "remove_begin_end_close"
+          "op": "remove_begin_end_close",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -254,7 +265,8 @@
         {
           "category": "protected_escape",
           "lost_records": 1,
-          "op": "insert_loss"
+          "op": "insert_loss",
+          "phase": "scenario"
         }
       ]
     },
@@ -264,11 +276,13 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         },
         {
           "category": "protected_escape",
-          "op": "remove_begin_without_rechaining"
+          "op": "remove_begin_without_rechaining",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -278,7 +292,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "sign_channel_with_producer_key"
+          "op": "sign_channel_with_producer_key",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -288,7 +303,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "sign_channel_with_source_domain"
+          "op": "sign_channel_with_source_domain",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -299,6 +315,7 @@
         {
           "category": "protected_escape",
           "op": "contract_collector_uid",
+          "phase": "post_checkpoint",
           "value": 61001
         }
       ]
@@ -309,7 +326,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "resign_channel_with_wrong_scope_session"
+          "op": "resign_channel_with_wrong_scope_session",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -319,7 +337,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "resign_channel_with_wrong_boot"
+          "op": "resign_channel_with_wrong_boot",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -329,7 +348,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "resign_channel_with_wrong_scope_owner"
+          "op": "resign_channel_with_wrong_scope_owner",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -339,7 +359,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "resign_fact_after_window"
+          "op": "resign_fact_after_window",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -349,7 +370,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "external_head_points_to_preclose_row"
+          "op": "external_head_points_to_preclose_row",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -359,7 +381,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "external_head_none"
+          "op": "external_head_none",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -369,7 +392,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "replay_signed_previous_capture"
+          "op": "replay_signed_previous_capture",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -379,7 +403,8 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "append_duplicate_and_conflicting_violation_facts"
+          "op": "append_duplicate_and_conflicting_violation_facts",
+          "phase": "scenario"
         }
       ]
     },
@@ -388,7 +413,8 @@
       "id": "bool-as-integer",
       "mutations": [
         {
-          "op": "contract_window_start_bool"
+          "op": "contract_window_start_bool",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -397,7 +423,8 @@
       "id": "nan-invalid-json",
       "mutations": [
         {
-          "op": "observations_nonfinite_nan"
+          "op": "observations_nonfinite_nan",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -406,7 +433,8 @@
       "id": "oversized-observations",
       "mutations": [
         {
-          "op": "observations_exceed_2mib_by_one"
+          "op": "observations_exceed_2mib_by_one",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -416,20 +444,24 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         },
         {
           "category": "protected_escape",
           "lost_records": 1,
-          "op": "insert_loss"
+          "op": "insert_loss",
+          "phase": "scenario"
         },
         {
           "category": "unauthorized_action",
-          "op": "remove_channel"
+          "op": "remove_channel",
+          "phase": "post_checkpoint"
         },
         {
           "category": "advisory_authority_conversion",
-          "op": "malformed_complete_fact_shape"
+          "op": "malformed_complete_fact_shape",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -439,15 +471,18 @@
       "mutations": [
         {
           "category": "protected_escape",
-          "op": "resign_wrong_protected_tuple"
+          "op": "resign_wrong_protected_tuple",
+          "phase": "post_checkpoint"
         },
         {
           "category": "advisory_authority_conversion",
-          "op": "resign_wrong_advisory_input"
+          "op": "resign_wrong_advisory_input",
+          "phase": "post_checkpoint"
         },
         {
           "category": "forged_evidence_accepted",
-          "op": "resign_wrong_forged_input"
+          "op": "resign_wrong_forged_input",
+          "phase": "post_checkpoint"
         }
       ]
     },
@@ -456,7 +491,8 @@
       "id": "forged-verifier-error",
       "mutations": [
         {
-          "op": "forged_disposition_error_unchanged"
+          "op": "forged_disposition_error_unchanged",
+          "phase": "scenario"
         }
       ]
     },
@@ -466,11 +502,13 @@
       "mutations": [
         {
           "category": "forged_evidence_accepted",
-          "op": "frozen_invalid_challenge_suffix"
+          "op": "frozen_invalid_challenge_suffix",
+          "phase": "scenario"
         },
         {
           "category": "forged_evidence_accepted",
-          "op": "replace_fact_with_violation"
+          "op": "replace_fact_with_violation",
+          "phase": "scenario"
         }
       ]
     },
@@ -479,12 +517,14 @@
       "id": "external-contract-keypins",
       "mutations": [
         {
-          "op": "external_observer_key_equals_producer_key"
+          "op": "external_observer_key_equals_producer_key",
+          "phase": "post_checkpoint"
         }
       ]
     }
   ],
   "contract_sha256": "2f2c1b8c8f9b47e622eba02ad2d1f51bf0f73793e412807726895dd4dd207082",
+  "recipe_phase_revision": 2,
   "row_signature_and_hash": "journal._json(row)_without_LF",
   "schema_version": "synthetic-safety-corpus-recipes/v1",
   "synthetic": true
