@@ -94,3 +94,10 @@ unknown pairing while preserving main. Caps32KiB pair plan/queue plan/enrollment
 5. Independent review, appropriate regression and final-head complete CI, exact
    base/head/tree before conditional merge; update existing400/393. Physical,
    production, application receipt and safety/efficacy gates remain open.
+
+## Identity namespace clarification
+
+Both active queue IDs must be disjoint from the COMBINED set of every main
+channel_id and capture_id, including cross-kind reuse. Identity namespaces remain
+explicit in data, but this conservative pairing profile admits no ambiguous reuse.
+Old main/queue parser identity rules are unchanged.
