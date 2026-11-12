@@ -73,3 +73,19 @@ Appropriate regression/independentreview/finalheadcompleteCI/exactrefs/tree befo
 conditionalmerge. No new actual environment is needed. Production origin/custody,
 continuous/all-network restoration, physical/Pi-HIL/safety/causal benefit,
 observerobject disappearance(noSYS_ADMIN), missing-data/backfill/resume stay open.
+
+## Candidate validation
+
+89 archive cases pass: the one byte-identical historical public ZIP replays its
+published diagnostic; all mutations/repacks are explicitly SYNTHETIC and separately
+repinned. Review found scalar/list JSON could escape as AttributeError; exact
+object checks and24 typed-object regressions close this error boundary. Root
+resource review moved the original validated policy's byte/record bounds BEFORE
+Source line indexing and rejects rawCR (canonical escaped JSON\\r stays valid),
+with LF-budget and bareCR preallocation regressions. No new Source is signed.
+
+Existing recorded-restoration63 cases also pass:152 combined relevant cases.
+Static/diff checks and independent review passed; no new environment or kernel
+capture was executed locally. Historical replay adds no current restoration,
+custody or safety acceptance. Final-head complete CI and exact refs/tree remain
+required before conditional merge.
