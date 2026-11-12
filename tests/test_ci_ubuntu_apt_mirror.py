@@ -151,3 +151,59 @@ def test_bootstrap_is_isolated_and_precedes_only_two_affected_jobs():
     for job in ("outcome-systemd", "service-objectives"):
         block = re.search(r"(?ms)^  " + job + r":\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
         assert block.index(command) < block.index("sudo apt-get update")
+
+@pytest.mark.parametrize('scheme', ['http', 'https'])
+@pytest.mark.parametrize('filename,prefix', [
+    ('apt-mirrors.txt', ''), ('sources.list', 'deb '),
+    ('ubuntu.sources', 'URIs: '),
+])
+def test_exact_previous_kernel_mirror_recovers_and_is_idempotent(scheme, filename, prefix):
+    assert mirror.TARGET == 'https://archive.ubuntu.com/ubuntu'
+    suffix = '\tpriority:1\n' if filename == 'apt-mirrors.txt' else ' noble main\n' if filename == 'sources.list' else '\n'
+    old = prefix + scheme + '://mirrors.edge.kernel.org/ubuntu/' + suffix
+    expected = prefix + 'https://archive.ubuntu.com/ubuntu/' + suffix
+    assert mirror.normalize(old, filename) == expected
+    assert mirror.normalize(expected, filename) == expected
+
+
+@pytest.mark.parametrize('uri', [
+    'https://mirrors.edge.kernel.org.attacker/ubuntu',
+    'https://attacker@mirrors.edge.kernel.org/ubuntu',
+    'https://mirrors.edge.kernel.org:443/ubuntu',
+    'https://mirrors.edge.kernel.org/ubuntu-extra',
+    'https://mirrors.edge.kernel.org/ubuntu?extra',
+    'https://mirrors.edge.kernel.org/ubuntu#fragment',
+])
+def test_previous_mirror_lookalikes_are_unmodified_in_all_active_formats(uri):
+    for filename, original in (
+        ('apt-mirrors.txt', uri + '\n'),
+        ('sources.list', 'deb ' + uri + ' noble main\n'),
+        ('ubuntu.sources', 'Types: deb\nURIs: ' + uri + '\nSuites: noble\n'),
+    ):
+        assert mirror.normalize(original, filename) == original
+
+
+def test_recovery_changes_only_active_uri_and_preserves_all_trust_configuration():
+    original = (
+        '# previous https://mirrors.edge.kernel.org/ubuntu\r\n'
+        'Types: deb deb-src\r\nURIs: https://mirrors.edge.kernel.org/ubuntu\r\n'
+        'Suites: noble noble-updates noble-backports noble-security\r\n'
+        'Components: main restricted universe multiverse\r\n'
+        'Architectures: amd64 arm64\r\n'
+        'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\r\n'
+        'Trusted: no\r\nAllow-Insecure: no\r\nAllow-Weak: no\r\n'
+        'Allow-Downgrade-To-Insecure: no\r\nCheck-Valid-Until: yes\r\n'
+        'Check-Date: yes\r\nValid-Until-Max: 604800\r\n'
+        '# TLS peer/host verification remains enabled\r\n'
+        'Description: https://mirrors.edge.kernel.org/ubuntu\r\n'
+        '\r\nTypes: deb\r\nURIs: https://unknown.example/ubuntu\r\n'
+        'Suites: noble\r\nSigned-By:\r\n -----BEGIN PGP PUBLIC KEY BLOCK-----\r\n'
+        ' Comment: https://mirrors.edge.kernel.org/ubuntu\r\n'
+        ' -----END PGP PUBLIC KEY BLOCK-----\r\n'
+    )
+    expected = original.replace(
+        'URIs: https://mirrors.edge.kernel.org/ubuntu\r\n',
+        'URIs: https://archive.ubuntu.com/ubuntu\r\n',
+    )
+    assert mirror.normalize(original, 'ubuntu.sources') == expected
+    assert mirror.normalize(expected, 'ubuntu.sources') == expected
