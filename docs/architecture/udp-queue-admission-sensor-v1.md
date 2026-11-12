@@ -84,6 +84,10 @@ all needed values while arguments are valid. Pending key includes opaque sk+skb
 pointers, processing pid_tgid and CPU; these pointers never leave the maps. On
 existing-key collision delete/invalidate instead of overwriting; count correlation
 loss. Exit uses only argument values for lookup plus return value; no dereference.
+Collision invalidation is capture-wide and sticky: after correlation loss, no
+later event may be promoted, including a third entry interleaved with old exits.
+Already published valid events remain lower bounds. Synthetic reference models
+exercise these schedules; they are not execution of the kernel BPF program.
 Return0 with a complete matching snapshot emits an event; negative return removes
 pending and increments rejection. Missing/unpaired/colliding/overflowing events
 are loss, never manufactured positives. Bound storage to16 events and pending64.
@@ -129,6 +133,9 @@ Join returns `{schema_version:'edge-udp-queue-collection/v1',status:
 registration must have empty channels and all four heads null. Cross-bind hashes,
 boot and reader identity across full operation; all final fences/close errors block
 return. No fallback to interface captures, application logs or synthetic reports.
+Target PID/start/UID are lifecycle context; target.fd is enrolled provenance, not
+an independently observed receiver-FD mapping. Actual admission is bound by the
+kernel socket inode/cookie/owner and namespace, never by the hook's current PID.
 
 ## Fixed acceptance stages
 
