@@ -90,3 +90,19 @@ original signed Source, checkpoints/plans/three receipts/provenance/result only.
 Never export the provisioning bundle, private keys, arbitrary paths, directories
 or globs. Validate regular protected files and original hashes; preserve failed
 artifacts without interpreting them as passes. No new runtime permission/service.
+
+## Candidate verification before actual gate
+
+Synthetic builder/constructor/query-executable guard tests passed. Root integration
+caught a keyword-only read_regular call mismatch and added an exact-signature
+constructor regression; executable PATH must resolve to the enrolled nft binary.
+Independent review caught isolated Python's missing sibling-module search path;
+the fixed child explicitly includes its own protected real_systemd directory.
+These are software checks, not actual Root query/provider acceptance. Export now
+marks any missing required artifact as an error, attempts all remaining files,
+retains a partial hash/error manifest and fails the new collection step.
+
+No local privileged environment or provider run was constructed for this slice.
+The existing provider-apparmor CI route must exercise original signed Source,
+three actual queries and the new diagnostic with all prior gates. Until that
+final-head actual gate passes, restoration remains unaccepted/unknown.
