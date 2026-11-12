@@ -186,6 +186,13 @@ def _source_scope(p, inputs):
         enforcement["trace_id"],
         normalized=native["normalized"],
     )
+    safety._need(
+        enforcement["selected_action"] == "throttle"
+        and native["defense"]["action"] == "throttle"
+        and flow._ip(enforcement["target"]) == scope["source_ip"]
+        and flow._ip(native["defense"]["target"]) == scope["source_ip"],
+        "producer action/target differs from owned flow",
+    )
     return result, scope
 
 

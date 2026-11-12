@@ -380,3 +380,33 @@ def test_invalid_global_enrollment_is_an_input_error(tmp_path, kind):
         value["receipts"]["extra"] = None
     with pytest.raises(RecordedNFTRestorationInputError):
         evaluate(value)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("selected_action", "block"),
+        ("defense_action", "block"),
+        ("enforcement_target", "10.91.1.99"),
+        ("defense_target", "10.91.1.99"),
+    ],
+)
+def test_signed_source_native_action_and_grounded_target_must_be_coherent(
+    tmp_path, field, value
+):
+    def mutate(native):
+        if field == "selected_action":
+            native["enforcement"]["selected_action"] = value
+        elif field == "defense_action":
+            native["defense"]["action"] = value
+        elif field == "enforcement_target":
+            native["enforcement"]["target"] = value
+        else:
+            native["defense"]["target"] = value
+
+    case = make_restoration_case(tmp_path, native_mutator=mutate)
+    result = evaluate(case)
+    assert result["status"] == "unknown"
+    assert result["source_owner_bound"] is False
+    assert all(phase["owner_rule_count"] is None for phase in result["phases"].values())
+    assert_no_authority(result)
