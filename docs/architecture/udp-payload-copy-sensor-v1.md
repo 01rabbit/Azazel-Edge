@@ -108,3 +108,80 @@ observer assertions, not hardware, custody, independent sensor truth or processi
 5. Independent review and exact final-head full CI/base/tree before conditional
    merge, update existing400/393. Mandatory Linux path cannot skip as pass.
    Hardware/production/processing/full safety and efficacy gates remain open.
+
+## Actual bounded feasibility and exact ABI/wire freeze
+
+Actual Linux6.8.0-117 offline3-hook attach/helper probe succeeded after bootstrap
+irreversibly dropped to permitted/effective/bounding BPF+PERFMON only,
+Inh/Amb0, NNP1, default seccomp, network none, zero time offsets. IOVEC/UBUF each
+produced one kernel event; PEEK/short/TRUNC/copyfault produced none. Later peer-name
+copyout EFAULT produced one kernel payload-copy event despite syscall failure.
+These are finite real probe observations, not signed-report/production acceptance.
+Probe result SHA83d3b19d93a0b1d7fa04793a5666cf984600f1cf2a60ecfae7f9b35574c9ea49;
+C SHAe2259af4b43205444e49576ca86c5fb5b5a58b89382792ed669c261951a65a4a.
+First attempt ran image's unprivileged default user and failed before target setup;
+corrected test bootstrap to Root then DROPPED privileges, never broadened observer.
+
+Native configuration152 bytes:8u64 socket_inode/socket_cookie/netns_cookie/
+netns_inode/started_ns/deadline_ns/pidns_device/pidns_inode;3u32 socket_uid/src_ip/
+dst_ip;2u16 ports;2u32 max_events/reserved;payload64. Event160:8u64 entered_ns/
+consumed_ns/exited_ns/socket_inode/socket_cookie/netns_cookie/netns_inode/
+receiver_start_boottime_ns;7u32 socket_uid/receiver_real_uid/receiver_effective_uid/
+receiver_tgid/receiver_tid/src_ip/dst_ip;2u16 ports;payload64. Pending key16:
+globalpid_tgid/skopaque; pending value event160. Stats48:6u64 entry_matches,
+consume_matches,accepted,rejected,correlation_loss,overflow. ConfigARRAY1,
+pendingHASH64,eventsARRAY16,statsARRAY1; expected programtypeTRACING26,
+attach24 entry/consume and25 exit. Exit+entry target same function, consume
+separate; source/sections/ABI/pins fixed. No BPF-global object query by ID.
+
+Public capture_udp_payload_copy(contract_raw,plan_raw,*,expected_contract_sha256,
+expected_plan_sha256,object_path,observer_private_key); pure
+evaluate_udp_payload_copy(contract_raw,plan_raw,report_raw,*,
+expected_contract_sha256,expected_plan_sha256). Errors UDPPayloadCopyError.
+New plan exact keys schema_version=edge-udp-payload-copy-plan/v1,
+contract_sha256,observation_layer,opportunity_id,kernel_release,btf_sha256,
+object_sha256,socket_identity,locator,receiver_pid_namespace,
+observer_time_namespace,challenge_payload_hex,max_duration_ns,max_events.
+socket_identity exact inode/cookie/uid/netns_cookie; locator exact pid/start_ticks/fd.
+All original locator fields remain data only; capture NEVER opens/reads target
+proc/socket descriptors or uses locator liveness as a process-identity claim.
+PIDNS exact device/inode; observer timeNS exact device/inode/monotonic_offset_ns/
+boottime_offset_ns with both offsets0. Require literal IPv4UDP127.0.0.1 tuple,
+exact64-byte challenge, approved ELF/BTF/kernel and bounded original window.
+Target reference SHA hashes canonicalNO-LF {observation_layer,protected_tuple,
+socket_identity,locator,receiver_pid_namespace,observer_time_namespace}.
+
+Report exact keys schema_version=edge-udp-payload-copy-report/v1,
+contract_sha256,plan_sha256,observation_layer,kernel_release,btf_sha256,
+object_sha256,kernel_boot_id,namespace,receiver_pid_namespace,
+observer_time_namespace,capture_id,started_ns,finished_ns,events,counters,
+partial_reasons,signature. namespace exact device/inode (socket networknamespace).
+Each event exact entered_ns,consumed_ns,exited_ns,socket_inode,socket_cookie,
+netns_cookie,netns_inode,receiver_start_boottime_ns,socket_uid,receiver_real_uid,
+receiver_effective_uid,receiver_tgid,receiver_tid,src_ip,dst_ip,src_port,dst_port,
+payload_hex. IPv4 strings canonical; namespace IDs and raw start_ns positive;
+identities/credentials/payload/tuple match fixed profile, receiver IDs OBSERVED.
+Every entered<=consumed<=exited inside original absolute kernel deadline.
+Counters exact six native names, uint64. Reasons closed timeout,event_bound,
+correlation_loss,event_overflow,observer_link_lost. No complete/zero flag.
+CanonicalJSON+LF, existing bounded parser/signature helpers; domain above signs
+canonical unsigned bodyNO-LF. Contract128KiB, plan32KiB, report64KiB, <=16events.
+
+Capture verifies self Root/NNP/capabilities/environment before/after, protected
+Root-sealed object via existing held-FD read, no runtime compiler/fetch. Native
+backend _capture_events(configuration,object_raw) uses fixed own maps/threehooks,
+safe cached-link checks/teardown and final own-map reads only; root+NNP role fixed.
+Opaque internal key globalpid_tgid/sk is never exported. Calling UID fields are
+initial-user-namespace real/effective IDs, compared to socketowner UID. Receiver
+PID namespace is exact active namespace; raw leader start_ns has no tick conversion.
+
+New evaluate result edge-udp-payload-copy-evaluation/v1 contains observation_layer,
+protocol_payload_copy_observed_count1-or-null, successful_syscall_count=null,
+application_delivery_count=null,qualified_safety_count=null,
+independently_measured=false, unchanged safety_evaluation with emptychannels and
+all old safety countsnull. No production/transition/resume/measurement authority.
+New collect_udp_payload_copy(enrollment_path,plan_path,report_path,*,
+expected_enrollment_sha256,expected_checkpoint_sha256,expected_plan_sha256,
+expected_report_sha256) uses existing six-path Root-sealed read-only pattern,
+registered nonroot reader/boot/final held-metadata/independent closes. It NEVER
+translates new layer into old queue schema or counts. Old evaluators reject it.
