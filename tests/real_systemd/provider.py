@@ -381,6 +381,13 @@ def exercise():
     try:
         g.wait_for(reachable)
         assert connect(OTHER, 22) == "REAL"
+        import provider_restoration
+        restoration = provider_restoration.Recorder(
+            g, EDGE,
+            # Existing PUBLIC test key, unused schema role: no facts/signing.
+            "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        )
+        restoration.query("baseline")
         alert(900001, OTHER, 1)
         alert(900002, SOURCE, 2)
         for sid in [900001, 900002]:
@@ -455,6 +462,7 @@ def exercise():
         ).stdout
         assert "mark=" + str(redirect["ct_mark"]) in tracked
         assert rules("input") == [] and foreign() == canary
+        restoration.query("applied")
         g.record(
             "provider-signed-apply-independent-flow-readback-and-local-packet-control",
             actions=[task["action"] for task in active],
@@ -529,6 +537,7 @@ def exercise():
             and event["postcondition"]["verified"] is True
             for event in release
         ), release
+        restoration.query("released")
         assert (
             next(event for event in release if event["action"] == "redirect")[
                 "postcondition"
@@ -576,6 +585,7 @@ def exercise():
         listener.wait(timeout=5)
         listener.stderr.close()
     g.stop()
+    restoration.finish()  # Original FIRST closed Source, before any restart.
     before = g.source()
     alert(900004, OTHER, 2)
     g.systemctl("start", g.UNIT)

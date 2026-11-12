@@ -125,6 +125,7 @@ jobs:
           sudo chown -R root:root /opt/edge400-src
           sudo chmod -R go-w /opt/edge400-src
           git rev-parse HEAD | sudo tee /opt/edge400-src/SOURCE_REVISION >/dev/null
+          sudo chmod 644 /opt/edge400-src/SOURCE_REVISION
           # Hosted image tool directories can be runner-owned/group-writable.
           # Commission this disposable job's exact binary ancestors as root;
           # production preflight must continue to reject unprotected parents.
@@ -161,6 +162,129 @@ jobs:
             sudo cat /var/lib/edge400-systemd-lab/results.jsonl > outcome-systemd-results.jsonl
           fi
           sudo journalctl -u azazel-edge-core.service -u edge400-lab-witness.service --no-pager -n 160
+      - name: Retain exact public provider-restoration artifacts
+        if: always() && matrix.flavor == 'provider-apparmor'
+        run: |
+          # Fixed public allowlist only: never the bundle, private keys or lab tree.
+          sudo /usr/bin/python3 -I - <<'PY'
+          import hashlib, json, os, stat
+          names = (
+              'original-policy.json', 'derived-policy.json',
+              'source-prefix.jsonl', 'source-final.jsonl',
+              'prefix-checkpoint.json', 'final-checkpoint.json',
+              'baseline-launch.json', 'baseline-child.raw', 'baseline-child-stderr.raw', 'baseline-receipt.json',
+              'applied-launch.json', 'applied-child.raw', 'applied-child-stderr.raw', 'applied-receipt.json',
+              'released-launch.json', 'released-child.raw', 'released-child-stderr.raw', 'released-receipt.json',
+              'enrollment.json', 'contract.json', 'source-plan.json',
+              'restoration-plan.json', 'provenance.json', 'result.json',
+          )
+          source = '/var/lib/edge400-systemd-lab/provider-restoration'
+          destination = 'provider-restoration-artifacts'
+          def metadata(info):
+              return tuple(getattr(info, key) for key in (
+                  'st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+          try:
+              parent = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+          except FileNotFoundError as error:
+              raise RuntimeError('required provider restoration artifact directory missing') from error
+          manifest, errors = {}, []
+          try:
+              directory = os.fstat(parent)
+              if directory.st_uid != 0 or directory.st_gid != 0 or directory.st_mode & 0o022:
+                  raise RuntimeError('unsafe provider artifact directory')
+              os.mkdir(destination, 0o755)
+              os.chmod(destination, 0o755)  # Explicit public output, independent of umask.
+              for name in names:
+                  fd = None
+                  try:
+                      try:
+                          fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                      except FileNotFoundError:
+                          errors.append({'name': name, 'error': 'required original artifact missing'})
+                          continue  # Retain every available original, then fail with partial manifest.
+                      before = os.fstat(fd)
+                      if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                              or before.st_gid != 0 or before.st_nlink != 1
+                              or before.st_mode & 0o222 or not 0 <= before.st_size <= 64 * 1024 * 1024):
+                          raise RuntimeError('unsafe provider artifact: ' + name)
+                      raw = bytearray()
+                      while len(raw) <= before.st_size:
+                          chunk = os.read(fd, min(1024 * 1024, before.st_size + 1 - len(raw)))
+                          if not chunk:
+                              break
+                          raw.extend(chunk)
+                      after = os.fstat(fd)
+                      path = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                      if (len(raw) != before.st_size or metadata(before) != metadata(after)
+                              or metadata(before) != metadata(path)):
+                          raise RuntimeError('provider artifact changed: ' + name)
+                      target = os.open(destination + '/' + name,
+                                       os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+                      try:
+                          view = memoryview(raw)
+                          while view:
+                              written = os.write(target, view)
+                              if written <= 0:
+                                  raise RuntimeError('short public artifact write')
+                              view = view[written:]
+                          os.fchmod(target, 0o644)
+                          os.fsync(target)
+                      finally:
+                          os.close(target)
+                      manifest[name] = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
+                  except Exception as error:
+                      errors.append({'name': name, 'error': type(error).__name__ + ': ' + str(error)})
+                  finally:
+                      if fd is not None:
+                          try:
+                              os.close(fd)
+                          except OSError as error:
+                              errors.append({'name': name, 'error': 'close: ' + str(error)})
+              with open(destination + '/collection-hashes.json', 'x') as output:
+                  json.dump({'schema_version': 'edge-provider-artifact-copy/v1',
+                             'files': manifest, 'errors': errors},
+                            output, sort_keys=True, separators=(',', ':'))
+                  output.write('\n')
+                  output.flush()
+                  os.fchmod(output.fileno(), 0o644)
+                  os.fsync(output.fileno())
+              if errors:
+                  raise RuntimeError('public provider artifact collection failed; retained partial manifest')
+          finally:
+              os.close(parent)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.flavor == 'provider-apparmor'
+        with:
+          name: outcome-provider-restoration-public
+          path: |
+            provider-restoration-artifacts/original-policy.json
+            provider-restoration-artifacts/derived-policy.json
+            provider-restoration-artifacts/source-prefix.jsonl
+            provider-restoration-artifacts/source-final.jsonl
+            provider-restoration-artifacts/prefix-checkpoint.json
+            provider-restoration-artifacts/final-checkpoint.json
+            provider-restoration-artifacts/baseline-launch.json
+            provider-restoration-artifacts/baseline-child.raw
+            provider-restoration-artifacts/baseline-child-stderr.raw
+            provider-restoration-artifacts/baseline-receipt.json
+            provider-restoration-artifacts/applied-launch.json
+            provider-restoration-artifacts/applied-child.raw
+            provider-restoration-artifacts/applied-child-stderr.raw
+            provider-restoration-artifacts/applied-receipt.json
+            provider-restoration-artifacts/released-launch.json
+            provider-restoration-artifacts/released-child.raw
+            provider-restoration-artifacts/released-child-stderr.raw
+            provider-restoration-artifacts/released-receipt.json
+            provider-restoration-artifacts/enrollment.json
+            provider-restoration-artifacts/contract.json
+            provider-restoration-artifacts/source-plan.json
+            provider-restoration-artifacts/restoration-plan.json
+            provider-restoration-artifacts/provenance.json
+            provider-restoration-artifacts/result.json
+            provider-restoration-artifacts/collection-hashes.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
