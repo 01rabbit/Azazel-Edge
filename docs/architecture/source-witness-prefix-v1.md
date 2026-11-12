@@ -93,3 +93,38 @@ This is lab key separation, not production key-custody acceptance.
    no filesystem, network, private-key, runtime or witness-client action.
 5. Complete final-head CI and independent review; exact base/head/tree before
    conditional merge and update existing #400/#393. Stop new work at Nov13 08:00JST.
+
+## Wire and composition clarification
+
+Witness plan exact keys: schema_version, contract_sha256, source_plan_sha256,
+anchor_checkpoint. Witness enrollment exact keys: schema_version
+(edge-source-witness-enrollment/v1), enrollment_sha256, supplement_sha256,
+plan_path, plan_sha256, anchors_path, anchors_sha256. The latter path/hash pairs
+are matched None when deliberately absent; otherwise normalized distinct absolute
+physical paths and external byte SHAs. Plan/enrollment caps32KiB, anchors8MiB.
+
+Pure composition evaluate_witnessed_safety_proofs(contract_raw, observations_raw,
+*, proof_arguments, witness_plan_raw=None, expected_witness_plan_sha256=None,
+anchors_raw=None) nests unchanged #590 base_evaluation and a separate source_witness
+under edge-witnessed-safety-proof-diagnostic/v1. Source-plan/global bindings are
+verified by the internally computed base, and actual Source prefix signatures are
+independently reverified for the anchor boundary table. No caller-supplied approval
+flags replace raw evidence. This bounded offline prefix recheck does not verify
+or consume the unselected Source suffix.
+
+collect_witnessed_safety_proofs(enrollment_path, supplement_path,
+witness_supplement_path, *, expected_enrollment_sha256,
+expected_checkpoint_sha256, expected_supplement_sha256,
+expected_witness_supplement_sha256) returns edge-witnessed-safety-proof-collection/v1,
+nesting unchanged base_collection plus source_witness. Re-hold every original
+base and Source supplement artifact through final checks; exact bytes must match
+base provenance and independently pinned enrollment/checkpoint/supplement.
+Unsafe declared artifact metadata or close failure refuses intake without repair.
+
+Real Linux fixture initializes the existing observer scope with EMPTY Source,
+then the separate producer appends signed session_prepare. The observer records
+only an explicit missed CONTROL cursor via the existing API, never submitting
+that preparation to the Outcome collector. Existing Root witness persists real
+anchors. Empty-input initialization and authentication guards remain unchanged.
+These are actual durable signatures and UID separation over synthetic lifecycle
+payloads, not native defense-execution facts or production key custody.
