@@ -47,3 +47,22 @@ no unseen duplicate observer, outage coverage, continuity/restart, application
 receipt, broad restoration, Pi/HIL/production/whole safety or comparative efficacy.
 Direct-ID disappearance remains unmeasured without SYS_ADMIN, which is prohibited.
 No missing-data fill, zero conversion, backfill or automatic resumption.
+
+## Finite actual validation
+
+Offline Linux6.8.0-117, exactBTF-selected5-argument build: all5 controls passed
+in4.79s without skips, exact CI PYTHONPATH=.:py, networknone/defaultseccomp/sourceRO.
+Native source6bd07505ba17f4d8d62211532b964c67849839a721847d242baa3c87352a9eb3
+is unchanged. Before-first loss produced no event and null copy count without any
+traffic. Each after-positive entry/consume/exit/reuse fault retained one signed
+matching event inside the real receive-command bracket and original window.
+All observed exactly3 original attachments, selected lost-link disconnect1/destroy1,
+other own-link destroy1, explicit observer_link_lost and no correlation/overflow
+loss. The reused own /dev/null FD survived capture, then was explicitly closed by
+the test. Cleanup call counts are wrapper control facts, not global detach proof.
+
+Raw local log SHA73865491561efc2292a7853a51361982106d7c39058a177bcc7e0696229b2d06
+and stopped-container profile are retained separately. These are finite virtual
+fault-injection controls, not production outage/recovery or object disappearance.
+Final independent review, final-head complete hosted CI and exact refs/tree remain
+required before merge; mandatory actual CI rejects skips.
