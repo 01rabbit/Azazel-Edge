@@ -82,6 +82,7 @@ def open_parent(path, *, trusted_owner=None):
         ):
             raise OutcomeJournalError(
                 "authentication ancestor is writable by another role"
+                f" (uid={info.st_uid}, trusted={trusted_owner}, mode={info.st_mode:o})"
             )
 
     try:
@@ -119,7 +120,12 @@ def read_regular(path, *, owner, max_bytes, mode=None, missing=False):
             or (mode is not None and stat.S_IMODE(info.st_mode) != mode)
             or info.st_size > max_bytes
         ):
-            raise OutcomeJournalError("unsafe or oversized authentication file")
+            raise OutcomeJournalError(
+                "unsafe or oversized authentication file"
+                f" (uid={info.st_uid}, owner={owner}, mode={info.st_mode:o},"
+                f" requested_mode={mode}, links={info.st_nlink},"
+                f" size={info.st_size}, limit={max_bytes})"
+            )
         fd = os.open(
             name,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
