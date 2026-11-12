@@ -1,0 +1,1 @@
+Frozen before implementation. Source signatures use ephemeral or disclosed TEST-ONLY keys. Synthetic reports are parser/crypto evidence only. Actual Linux permission-denial is a verified limitation, not successful recovery. Privileged positive teardown remains unmeasured.
