@@ -111,3 +111,19 @@ needs its already-authorized environment/provenance, not weakened admission.
 3. Read-only intake and actual UID/file tests, no actual NFT-restoration claim.
 4. Final independent review and complete exact-head CI/base/tree before merge.
    Update existing400/393 with actual evidence class and remaining gates.
+
+## Sealed-intake wire clarification
+
+collect_recorded_nft_restoration(enrollment_path, *, expected_enrollment_sha256)
+accepts only edge-recorded-nft-enrollment/v1 with exact keys schema_version,
+observer_uid,kernel_boot_id,paths,sha256. The last maps have exact keys plan,
+contract,source_plan,trust,source,baseline,applied,released. Plan/contract required;
+other deliberately missing slots are matched None pairs and evaluate unknown.
+Paths normalized distinct absolute physical paths (including enrollment), raw
+hashes64lowerhex. Enrolled observer UID must match actual nonroot reader AND
+Source contract owner observer UID; boot must match actual kernel/contract/plan.
+Caps: enrollment/plan/source_plan/trust32KiB, contract128KiB, source64MiB, each
+original receipt8MiB. All original held descriptors/paths/ancestor fences remain
+through final verification, all independent closes attempted. No root query,
+private key or production endpoint access. This is actual filesystem intake of
+recorded assertions, not independent current-kernel NFT observation.
