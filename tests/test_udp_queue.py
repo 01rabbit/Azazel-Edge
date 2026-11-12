@@ -498,6 +498,17 @@ def test_native_libbpf_destroy_nonzero_never_retries_freed_pointer(
 
     backend = object.__new__(real._Libbpf)
     backend.lib = Library()
+    # Explicit SYNTHETIC kernel link metadata for this pre-existing detach test.
+    backend.link_identity = lambda link, program, attach: dict(
+        fd=link + 1000,
+        type=2,
+        link_id=link,
+        prog_id=program,
+        attach_type=attach,
+        target_obj_id=1,
+        target_btf_id=99,
+    )
+    backend.check_link = lambda identity: "retained"
     monkeypatch.setattr(real, "_Libbpf", lambda: backend)
     monkeypatch.setattr(real, "_role", lambda: None)
     ticks = iter([3_000_000_000] * 3 + [4_000_000_000])

@@ -3,6 +3,7 @@
 import ctypes as C
 import errno
 import os
+import re
 import socket
 import struct
 import sys
@@ -186,6 +187,10 @@ class _Libbpf:
             "bpf_program__expected_attach_type": ([ptr], integer),
             "bpf_program__attach": ([ptr], ptr),
             "bpf_link__destroy": ([ptr], integer),
+            "bpf_link__disconnect": ([ptr], None),
+            "bpf_link__fd": ([ptr], integer),
+            "bpf_program__fd": ([ptr], integer),
+            "bpf_obj_get_info_by_fd": ([integer, ptr, ptr], integer),
             "bpf_object__next_map": ([ptr, ptr], ptr),
             "bpf_map__name": ([ptr], C.c_char_p),
             "bpf_map__type": ([ptr], integer),
@@ -251,6 +256,166 @@ class _Libbpf:
         )
         return maps, programs
 
+    def _object_info(self, fd):
+        # Query BEFORE any proc open: an EBADF must not be hidden by FD reuse.
+        raw = C.create_string_buffer(64)
+        length = C.c_uint32(64)
+        C.set_errno(0)
+        result = self.lib.bpf_obj_get_info_by_fd(fd, raw, C.byref(length))
+        if result != 0:
+            error = C.get_errno()
+            if error in (errno.EBADF, getattr(errno, "EBADFD", 77), errno.EINVAL):
+                raise OSError(error, "cached BPF object query failed")
+            raise UDPQueueBPFError("BPF object identity unavailable")
+        _need(28 <= length.value <= 64, "BPF object identity truncated")
+        return raw.raw
+
+    def _link_fields(self, fd):
+        _need(type(fd) is int and fd >= 0, "invalid cached link FD")
+        raw = self._object_info(fd)
+        kind, link_id, program_id, _, attach, target, btf = struct.unpack_from(
+            "=7I", raw
+        )
+        required = {
+            "link_type",
+            "link_id",
+            "prog_id",
+            "attach_type",
+            "target_obj_id",
+            "target_btf_id",
+        }
+        fields = {}
+        try:
+            lines = (
+                _proc_bytes(f"/proc/self/fdinfo/{fd}", 8192)
+                .decode("ascii")
+                .splitlines()
+            )
+        except OSError as exc:
+            # A proc read's EBADF/EBADFD is not the cached-link syscall result.
+            raise UDPQueueBPFError("link fdinfo unavailable") from exc
+        for line in lines:
+            key, separator, value = line.partition(":")
+            if separator and key in required:
+                _need(key not in fields, "duplicate link fdinfo field")
+                fields[key] = value.strip()
+        if "link_type" not in fields or fields["link_type"] != "tracing":
+            raise OSError(errno.EINVAL, "cached FD is a foreign object")
+        _need(set(fields) == required, "link fdinfo incomplete")
+        for name, value in fields.items():
+            if name != "link_type":
+                _need(
+                    value.isascii() and value.isdecimal() and str(int(value)) == value,
+                    "invalid link fdinfo integer",
+                )
+        expected = {
+            "link_id": link_id,
+            "prog_id": program_id,
+            "attach_type": attach,
+            "target_obj_id": target,
+            "target_btf_id": btf,
+        }
+        _need(
+            all(int(fields[key]) == value for key, value in expected.items()),
+            "link fdinfo/kernel identity differs",
+        )
+        return dict(fd=fd, type=kind, **expected)
+
+    def link_identity(self, link, program, expected_attach):
+        # The libbpf pointer remains owned; its FD is acquired exactly ONCE.
+        fd = self.lib.bpf_link__fd(link)
+        identity = self._link_fields(fd)
+        program_fd = self.lib.bpf_program__fd(program)
+        _need(program_fd >= 0, "owned program FD unavailable")
+        program_type, program_id = struct.unpack_from(
+            "=2I", self._object_info(program_fd)
+        )
+        _need(
+            expected_attach in (24, 25)
+            and identity["type"] == 2
+            and identity["link_id"] > 0
+            and identity["prog_id"] == program_id > 0
+            and program_type == 26
+            and identity["attach_type"] == expected_attach
+            and identity["target_btf_id"] > 0,
+            "initial tracing identity differs",
+        )
+        return identity
+
+    def _foreign_fd(self, fd):
+        # EINVAL alone is ambiguous: require actual complete foreign fdinfo.
+        try:
+            fields = {}
+            for line in (
+                _proc_bytes(f"/proc/self/fdinfo/{fd}", 8192)
+                .decode("ascii")
+                .splitlines()
+            ):
+                key, separator, value = line.partition(":")
+                _need(separator and key not in fields, "malformed foreign fdinfo")
+                fields[key] = value.strip()
+            _need(
+                {"pos", "flags", "mnt_id", "ino"} <= set(fields),
+                "foreign fdinfo incomplete",
+            )
+            for key in ("pos", "mnt_id", "ino"):
+                value = fields[key]
+                _need(
+                    value.isascii() and value.isdecimal() and str(int(value)) == value,
+                    "foreign fdinfo integer",
+                )
+            _need(
+                int(fields["mnt_id"]) > 0
+                and int(fields["ino"]) > 0
+                and re.fullmatch(r"[0-7]+", fields["flags"]) is not None,
+                "foreign fdinfo basics",
+            )
+            nontracing = {
+                "raw_tracepoint",
+                "cgroup",
+                "iter",
+                "netns",
+                "xdp",
+                "perf_event",
+                "kprobe_multi",
+                "struct_ops",
+                "netfilter",
+                "tcx",
+                "uprobe_multi",
+                "netkit",
+            }
+            if fields.get("link_type") in nontracing:
+                return True
+            tracing_fields = {
+                "link_type",
+                "link_id",
+                "prog_id",
+                "attach_type",
+                "target_obj_id",
+                "target_btf_id",
+            }
+            return not (set(fields) & tracing_fields)
+        except Exception:
+            return False
+
+    def check_link(self, identity):
+        try:
+            current = self._link_fields(identity["fd"])
+            if current == identity:
+                return "retained"
+            if any(current[field] != identity[field] for field in ("type", "link_id")):
+                return "lost"
+            # Same kernel link object may still be live with changed metadata.
+            return "unknown"
+        except OSError as exc:
+            if exc.errno in (errno.EBADF, getattr(errno, "EBADFD", 77)):
+                return "lost"
+            if exc.errno == errno.EINVAL and self._foreign_fd(identity["fd"]):
+                return "lost"
+            return "unknown"
+        except Exception:
+            return "unknown"
+
     def lookup(self, fd, key, value):
         _need(
             self.lib.bpf_map_lookup_elem(fd, C.byref(key), C.byref(value)) == 0,
@@ -280,11 +445,35 @@ def _event(value):
     return result
 
 
+def _link_state(backend, identity):
+    if identity is None:
+        return "unknown"
+    try:
+        state = backend.check_link(identity)
+        return state if state in ("retained", "lost", "unknown") else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _release_link(backend, link, identity):
+    state = _link_state(backend, identity)
+    if state != "retained":
+        # Pointer is STILL owned; only its cached FD may have been lost/reused.
+        # Disconnect skips the stale FD close, destroy frees the pointer once.
+        backend.lib.bpf_link__disconnect(link)
+    result = backend.lib.bpf_link__destroy(link)
+    _need(result == 0, "fixed program detach failed")
+    _need(state != "unknown", "link ownership unknown during cleanup")
+    return state
+
+
 def _capture_events(configuration, object_raw):
     """Capture only fixed target-matching events; no target socket API is invoked."""
     backend = None
     obj = None
     links = {}
+    identities = {}
+    observer_link_lost = False
     failure = None
     result = None
     close_errors = []
@@ -332,7 +521,22 @@ def _capture_events(configuration, object_raw):
             links[name] = backend.pointer(
                 backend.lib.bpf_program__attach(programs[name]), "fixed program attach"
             )
+            identities[name] = backend.link_identity(
+                links[name], programs[name], _PROGRAMS[name][2]
+            )
+        _need(
+            all(
+                identities["queue_entry"][field] == identities["queue_exit"][field]
+                for field in ("target_obj_id", "target_btf_id")
+            ),
+            "tracing links target different functions",
+        )
         while True:
+            if any(
+                _link_state(backend, identities[name]) != "retained" for name in links
+            ):
+                observer_link_lost = True
+                break
             remaining = configuration["deadline_ns"] - time.monotonic_ns()
             if remaining <= 0:
                 break
@@ -341,10 +545,8 @@ def _capture_events(configuration, object_raw):
         for name in ("queue_entry", "queue_exit"):
             # libbpf frees the link even if detach returns an error.
             link = links.pop(name)
-            _need(
-                backend.lib.bpf_link__destroy(link) == 0,
-                "fixed program detach failed",
-            )
+            if _release_link(backend, link, identities.get(name)) == "lost":
+                observer_link_lost = True
         finished = time.monotonic_ns()
         counters = backend.lookup(fds["stats"], zero, Counters())
         counts = {name: getattr(counters, name) for name, _ in Counters._fields_}
@@ -395,7 +597,7 @@ def _capture_events(configuration, object_raw):
                 captured.append(row)
             else:
                 counts["correlation_loss"] += 1
-        reasons = ["timeout"]
+        reasons = ["observer_link_lost"] if observer_link_lost else ["timeout"]
         if counts["accepted"] >= configuration["max_events"]:
             reasons.append("event_bound")
         if counts["correlation_loss"]:
@@ -417,8 +619,7 @@ def _capture_events(configuration, object_raw):
             for name in ("queue_entry", "queue_exit"):
                 if name in links:
                     try:
-                        if backend.lib.bpf_link__destroy(links.pop(name)) != 0:
-                            close_errors.append("link detach")
+                        _release_link(backend, links.pop(name), identities.get(name))
                     except BaseException:
                         close_errors.append("link detach")
             if obj is not None:

@@ -21,6 +21,7 @@ REASONS = {
     "correlation_loss",
     "event_overflow",
     "target_lifecycle_changed",
+    "observer_link_lost",
 }
 
 
