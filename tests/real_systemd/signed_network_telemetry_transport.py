@@ -1,5 +1,6 @@
 """Fixed Root witness metadata for the explicit lab transport, never admission."""
 
+from dataclasses import dataclass
 import hashlib
 import os
 import re
@@ -10,6 +11,13 @@ import signed_network_telemetry_contract as role
 from azazel_edge.outcome.input_transport import SCHEMA, validate_transport
 
 p, lab, g = material.preflight, material.preflight.lab, material.preflight.old.g
+
+
+@dataclass(frozen=True)
+class _StartupPending:
+    inode: str
+    fd: str
+    abstract_name: str
 
 
 def witness_command():
@@ -142,7 +150,15 @@ def _witness_sample(auth, namespace, output, phase, observed_namespace, index):
         evidence["label"] = label
         info = os.stat(f"/proc/{pid}/ns/net")
         evidence["namespace"] = dict(device=info.st_dev, inode=info.st_ino)
-        evidence["listener"] = _listener(pid, transport["name"], output, prefix)
+        listener = _listener(
+            pid,
+            transport["name"],
+            output,
+            prefix,
+            allow_startup_transition=phase == "initialize-initial",
+        )
+        pending = listener if type(listener) is _StartupPending else None
+        evidence["listener"] = None if pending is not None else listener
         after = lab.unit_snapshot(g.WITNESS)
         evidence["after"] = after
         policy_after, file_after = p.read_regular(
@@ -183,7 +199,7 @@ def _witness_sample(auth, namespace, output, phase, observed_namespace, index):
             witness_transport=transport,
             namespace_observation=observed_namespace,
             listener=evidence["listener"],
-        )
+        ), pending
     finally:
         lab.save_json(output / (prefix + ".json"), evidence)
 
@@ -229,7 +245,26 @@ def _listener_row(raw, name):
     return listeners[0] if listeners else None
 
 
-def _listener(pid, name, output, prefix):
+def _startup_forward(before, after, name, inode):
+    """Already syntax-validated tables: exactly unnamed→named LISTEN, same row."""
+
+    def rows(raw):
+        return [line.split(maxsplit=7) for line in raw.splitlines()[1:]]
+
+    old = [row for row in rows(before) if row[6] == inode]
+    new = [row for row in rows(after) if row[6] == inode]
+    return (
+        len(old) == len(new) == 1
+        and len(old[0]) == 7
+        and len(new[0]) == 8
+        and old[0][2:6] == ["00000000", "00000000", "0001", "01"]
+        and new[0][2:6] == ["00000000", "00010000", "0001", "01"]
+        and new[0][7] == "@" + name
+        and old[0][:3] == new[0][:3]
+    )
+
+
+def _listener(pid, name, output, prefix, *, allow_startup_transition=False):
     evidence = dict(pid=pid, links=[], names=[])
     try:
         raw = p.cg._kernel_text(f"/proc/{pid}/net/unix", 256 * 1024)
@@ -265,9 +300,28 @@ def _listener(pid, name, output, prefix):
         )
         raw_after = p.cg._kernel_text(f"/proc/{pid}/net/unix", 256 * 1024)
         lab.save(output / (prefix + "-unix-after.raw"), raw_after.encode("ascii"))
-        lab.need(
-            _listener_row(raw_after, name) == inode, "listener changed during sample"
-        )
+        after_inode = _listener_row(raw_after, name)
+        if inode is None and after_inode is not None and allow_startup_transition:
+            lab.need(
+                _startup_forward(raw, raw_after, name, after_inode),
+                "not an exact startup listener transition",
+            )
+            held = [
+                row["fd"]
+                for row in evidence["links"]
+                if row["target"] == f"socket:[{after_inode}]"
+            ]
+            lab.need(
+                len(held) == 1
+                and os.readlink(f"/proc/{pid}/fd/{held[0]}")
+                == f"socket:[{after_inode}]",
+                "startup listener FD changed or ambiguous",
+            )
+            evidence["startup_transition_pending"] = dict(inode=after_inode, fd=held[0])
+            return _StartupPending(
+                after_inode, held[0], name
+            )  # Final actor fences still mandatory.
+        lab.need(after_inode == inode, "listener changed during sample")
         if inode is None:
             return None
         fd = matched[0]
@@ -287,12 +341,26 @@ def witness_binding(auth, namespace, output, phase, observed_namespace):
     """Only initial pre-Popen readiness may passively await an absent listener."""
     initial = phase == "initialize-initial"
     deadline, previous, receipt = time.monotonic() + 2, None, dict(samples=[])
+    candidate = None
     try:
         for index in range(101):
-            current = _witness_sample(
+            current, pending = _witness_sample(
                 auth, namespace, output, phase, observed_namespace, index
             )
             receipt["samples"].append(current)
+            if candidate is not None:
+                lab.need(
+                    pending is None
+                    and current["listener"]
+                    == dict(
+                        inode=candidate.inode,
+                        fd=candidate.fd,
+                        abstract_name=candidate.abstract_name,
+                    ),
+                    "pending startup listener disappeared, changed or was not stable",
+                )
+            if pending is not None:
+                candidate = pending
             stable = {key: value for key, value in current.items() if key != "listener"}
             lab.need(
                 previous is None or stable == previous,
