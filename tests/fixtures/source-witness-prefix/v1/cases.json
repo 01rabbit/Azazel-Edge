@@ -1,0 +1,101 @@
+{
+  "cases": [
+    {
+      "evidence": "synthetic",
+      "id": "valid_pinned_prefix"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "bad_source_suffix_preserves_prefix"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "bad_anchor_suffix_preserves_prefix"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_source"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "empty_source"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_anchor"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "missing_checkpoint"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "old_log_vs_new_pin"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_witness_key_domain"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "wrong_policy_digest"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "counter_gap_bool_duplicate_reorder"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "prev_fork"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_tip_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_nonboundary"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_wrong_boot_session"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "invalid_genesis"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "journal_identity_progression"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "source_progression"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "noncanonical_oversize_deep"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "checkpoint_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "optional_failure_preserves_positive"
+    },
+    {
+      "evidence": "synthetic",
+      "id": "pure_no_io"
+    },
+    {
+      "evidence": "actual_linux",
+      "id": "actual_witness_prefix_and_denials"
+    },
+    {
+      "evidence": "actual_linux",
+      "id": "actual_sealed_reader"
+    }
+  ],
+  "schema_version": "edge-source-witness-prefix-cases/v1"
+}
