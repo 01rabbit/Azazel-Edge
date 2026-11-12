@@ -1,0 +1,105 @@
+{
+  "cases": [
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "bounded_three_hook_attach_probe"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "normal_iovec_copy"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "normal_ubuf_copy"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "peek_not_copy_claim"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "short_buffer_or_trunc"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "payload_copy_fault"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "later_header_fault_still_payload_copy"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "no_receiver_read"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "socket_filter_drop"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "wrong_challenge"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "wrong_socket_cookie"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "wrong_calling_ruid_euid"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "wrong_pid_namespace"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "kernel_or_discard_iterator"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "same_socket_other_receiver_observed"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "cpu_migration_no_cpu_key"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "entry_consume_exit_deadline"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "duplicate_collision_sticky_loss"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "overflow_preserves_earlier"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "link_loss_no_reattach"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "locator_pid_not_named_receiver"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "time_namespace_nonzero_refused"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "signed_layer_not_old_queue"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "missing_invalid_not_zero"
+    },
+    {
+      "evidence": "synthetic_or_actual_explicit_in_test",
+      "id": "real_sealed_uid_intake"
+    }
+  ],
+  "schema_version": "edge-udp-payload-copy-cases/v1"
+}
