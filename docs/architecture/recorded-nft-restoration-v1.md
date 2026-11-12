@@ -127,3 +127,13 @@ original receipt8MiB. All original held descriptors/paths/ancestor fences remain
 through final verification, all independent closes attempted. No root query,
 private key or production endpoint access. This is actual filesystem intake of
 recorded assertions, not independent current-kernel NFT observation.
+
+## Source action coherence clarification
+
+Producer signature/live-protocol shape validation alone does not guarantee native
+action/target coherence. Before any owner count, require enforcement.selected_action
+and defense.action both exactly throttle, and both enforcement.target/defense.target
+to be literal IPs canonically equal the grounded flow_scope.source_ip. Re-signed
+contradictory action/target inputs stay source_owner_bound=false and every owner
+sample count null; valid signatures cannot substitute for this consistency check.
+This binds recorded statements only and still proves no actual execution.
