@@ -1,0 +1,150 @@
+{
+  "cases": [
+    {
+      "evidence": "synthetic",
+      "expected": "full_and_terminal",
+      "id": "source_closed"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "full_no_terminal",
+      "id": "source_open"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_auth",
+      "id": "source_empty"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_auth",
+      "id": "source_missing"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "prefix_only",
+      "id": "source_bad_suffix"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_bad_signature"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_rewind"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_wrong_boot"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_wrong_session"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_wrong_registration"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_full_auth",
+      "id": "source_checkpoint_mismatch"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "input_error",
+      "id": "source_wrong_trust_pin"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "independent_positive_retained",
+      "id": "source_bad_suffix_positive"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "full_auth",
+      "id": "source_finite_float"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "sampled_absence_only",
+      "id": "recovery_all_absent"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "residue_retained",
+      "id": "recovery_residue"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_id_reuse"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_denied"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_missing"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_bad_signature"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_wrong_boot_scope_time"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_missing_resource"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "unknown",
+      "id": "recovery_close_failed"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "independent_positive_retained",
+      "id": "recovery_denied_positive"
+    },
+    {
+      "evidence": "synthetic",
+      "expected": "no_io_or_authority",
+      "id": "readonly_pure"
+    },
+    {
+      "evidence": "actual_linux",
+      "expected": "unknown_no_capability_expansion",
+      "id": "actual_bpf_perfmon_denied"
+    },
+    {
+      "evidence": "actual_linux",
+      "expected": "unknown",
+      "id": "actual_no_caps_denied"
+    },
+    {
+      "evidence": "actual_linux",
+      "expected": "nonroot_readonly_bound",
+      "id": "actual_sealed_intake"
+    },
+    {
+      "evidence": "actual_linux",
+      "expected": "refused_no_writes",
+      "id": "actual_unsafe_artifact"
+    }
+  ],
+  "schema_version": "edge-source-recovery-test-cases/v1"
+}
