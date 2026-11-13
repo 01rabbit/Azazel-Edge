@@ -167,8 +167,12 @@ inodes and same original endpoint filesystem incarnation bind request/response.
 Statistics96: twelve u64 selected_entries,pending_inserted,successful_copies,
 emitted,copy_failure,unsupported,read_failure,identity_failure,correlation_loss,
 overflow,inflight,unmatched_exit. These are diagnostic counters, not safety counts.
-Exactly four maps flags0: config ARRAY(key4,value64,max1), pending HASH(key8,
-value376,max2), events ARRAY(key4,value376,max16), stats ARRAY(key4,value96,max1).
+Exactly five maps: config ARRAY(key4,value64,max1,flags0), pending HASH(key8,
+value376,max2,flags0), events HASH(key4,value376,max16,flags0), stats ARRAY(key4,
+value96,max1,flags0), zero_template ARRAY(key4,value376,max1,flags128
+BPF_F_RDONLY_PROG). Event insertions are immutable BPF_NOEXIST; no post-publication
+lookup/modification. The template stays kernel-initialized zero and is never
+updated from userspace or used as observed evidence.
 Pending key is kernel pid_tgid, not CPU; NOEXIST/no overwrite. Collision/insertion
 loss is sticky and prevents mispaired publication. Ignore unrelated tasks at exit;
 eligible unmatched exits are unknown. Delete only owned pending; record remaining
@@ -299,3 +303,22 @@ before after-samples, not invented whole-role-lifetime observation. Later worker
 or cleanup faults withhold completeness without erasing earlier verified chunks
 or independent original changes. Actual daemon reply JSON is strict original
 unsorted serialization, not reserialized/canonicalized evidence.
+
+### Pre-collection allocation/publication amendment
+
+Product dry compilation refused the512-byte BPF stack limit before load/actors.
+A scoped initializer did not resolve it; both dry failures are retained. No
+product observations exist. The independently reviewed five-map design above is
+frozen before collection, replacing the earlier unobserved four-map proposal.
+A separate read-only zero template initializes OWNED pending viaNOEXIST; fill only
+that new pending map value. Every required read must succeed; any failure deletes
+or poisons that pending before exit. Balance inflight and mark delete/collision
+failures sticky unknown. This allocation is not missing-evidence fill.
+
+Successful completed pending values publish through events HASH NOEXIST; RCU
+publication exposes an initialized immutable row. Never use published rows as
+scratch/allocation templates. Scan all16keys, treat genuine ENOENT as vacancy
+(no fabricated zero row or loss), distinguish real lookup errors, retain each
+original index once. Counters distinguish successful copies from successful
+publication/overflow. Remaining pending after detach is unknown. Extra observer
+storage is bounded; no new capability/target right or performance/Pi claim.
