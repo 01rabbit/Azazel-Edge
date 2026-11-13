@@ -123,3 +123,21 @@ pre_stop_binding=same_file_prefix. The general prefix-preserved gate means this
 explicit binding was checked, not that a missing file was read as empty evidence.
 This supports the first admission-only summary creating its audit at shutdown
 without claiming missing traffic or unknown counters are zero.
+
+### Original bytes in imported records
+
+Both present pre-stop metadata and finalization carry bounded original raw_utf8,
+strict UTF-8 roundtripped directly from the original file bytes. Observed-absent
+pre-stop raw_utf8 is null. Revalidation MUST re-encode, enforce16MiB per snapshot
+and32MiB total raw budget, recompute actual SHA/size, strictly parse and typed-
+compare the retained records/counts, then check exact original byte prefix (or
+explicit observed-absence creation binding). Never infer original bytes through
+canonical reserialization, or accept an unrelated well-shaped hash beside rows.
+Failed/unattempted final audit fields remain null, not []/0/false masquerading as
+measurement; preserve pre-stop data and failed final-attempt diagnostics separately.
+
+This adds bounded evidence serialization/memory after load and exit, not on the
+control path. Row/line/depth bounds still apply. Pi memory/CPU/storage-wear and
+physical persistence are unmeasured; no resource acceptance is inferred from the
+bounds or host tests. Existing record consumers cannot silently discard this proof
+and retain fresh finalized status.
