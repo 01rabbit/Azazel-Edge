@@ -170,3 +170,21 @@ is repaired or causally explained. Small profiles do not establish full objectiv
 Pi/HIL, durability, resource, production, independent kernel restoration, or
 whole-system safety acceptance. Final-head CI and independent review remain merge
 gates.
+
+## Additional frozen condition: actual writer-start warm-up boundary
+
+Full final-head SO11 CI run43344219754 failed the unchanged offered-load gate:
+the first SO03 nominal sample began593989ns before actual writer-start+3000ms.
+The parent previously waited3000ms immediately after Thread.start(), which can
+precede the writer thread recording its actual start. All six final-audit
+consistency gates passed; this failure must remain recorded, not retried away.
+
+Before further implementation, freeze this correction: keep WARMUP_MS=3000,
+98%,1.2x, writer pacing/rate, sample count and sample intervals unchanged. Begin
+sampling only after the actual writer-start timestamp plus the same3000ms on
+CLOCK_MONOTONIC. Startup/readiness waiting must be bounded; missing readiness,
+early writer exit, writer error or timeout cannot satisfy the offered-load gate.
+Do not move or widen recorded windows, change sample timestamps, discard the
+early sample, or repair this failed record. Deterministic tests must cover delayed
+writer startup, exact warm-up boundary and missing/failed readiness; actual new
+final-head CI and independent review are required after the correction.
