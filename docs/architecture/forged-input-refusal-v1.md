@@ -83,3 +83,76 @@ safety counts null. Original measurements stay immutable.
 6. Independent code review, appropriate regression tests, complete final-head CI
    and exact live base/head/tree are merge gates. Update existing#400/#393; no
    duplicate issue. No deadline/automation is inherited from prior work.
+
+## Frozen wire clarification before implementation
+
+Pure API: `verify_forged_input_refusal(plan_raw, *, expected_plan_sha256,
+trust_raw, before, after, stdout_raw, stderr_raw)`. `before` and `after` each
+have exactly `source`, `journal`, `anchors`, values original bytes or None.
+Before Source is the full poisoned Source (authentic nonempty prefix plus ONE
+otherwise eligible next frame with an invalid 64-byte Ed25519 signature), NOT
+the earlier prefix alone. Its externally retained Source checkpoint selects only
+that authentic prefix. After Source must match the entire poisoned before bytes.
+
+Plan uses canonical journal `_json` plus ONE LF; its external SHA includes LF.
+Exact keys: `schema_version` (`edge-forged-input-refusal-plan/v1`), `capture_id`,
+`kernel_boot_id`, `expected_trust_sha256`, `expected_context`,
+`expected_source_checkpoint`, `expected_anchor_checkpoint`, `samples`, `worker`.
+Context/checkpoints reuse the public witnessed-Source-prefix API unchanged;
+Source checkpoint is nonempty and anchor checkpoint selects the complete baseline
+anchor log. Boot is a canonical UUID and matches context.boot_ref without hyphens.
+`samples` has exactly `before`, `after`, each exactly the three artifact names.
+A sample descriptor is None only for unavailable original bytes; otherwise exact
+`{sha256,read_started_ns,read_finished_ns,identity}`. Identity exact keys are
+`device,inode,uid,gid,mode,nlink,size,mtime_ns,ctime_ns` (mode permission bits).
+All integer fields are exact ints, never bool. Positive device/inode, nlink1,
+nonnegative size/times; Source0644 producer UID, journal0600 consumer UID,
+anchors0600 witness UID. Original gid is retained, not inferred from uid.
+Before sample read end <= worker start; after sample read start >= worker exit;
+all intervals nondecreasing. Equality requires identical full original metadata
+and bytes; identities here are original runtime metadata, not exported-copy IDs.
+
+Worker exact keys: `pid,uid,code_sha256,started_ns,exited_ns,returncode,forced,
+error,stdout_sha256,stderr_sha256`. UID is the policy consumer/observer UID;
+code hash is an externally enrolled Root assertion, not authentication of code
+execution by the pure verifier. Required refusal stdout is EMPTY; original
+stderr ends with the exact complete traceback line
+`azazel_edge.outcome.journal.OutcomeJournalError: authentication signature invalid\n`.
+Require normal nonzero returncode, forced=false, error=null. Silence, exit alone,
+other exception, timeout, kill, partial traceback or stdout success is unknown.
+There is no caller-provided refusal/success flag. Actual worker uses unchanged
+runtime authentication before journal reopen; test control is a separate scope.
+
+Bounds: plan/trust/enrollment32KiB each, each original artifact1MiB with at most
+4097 LF-delimited rows and no bare CR, each stdout/stderr64KiB. Journal proof
+checks canonical hash chain, header input authentication/context, closed baseline,
+and the last typed cursor matching the authentic Source prefix; separately bind
+EVERY witness journal assertion to an exact journal byte boundary and runtime
+journal identity. Report this as `journal_cursor_structurally_verified`, NEVER
+full journal semantic verification (`full_journal_semantics_verified=false`).
+No reuse of a read-write journal instance is permitted for offline verification.
+
+Intake: `collect_forged_input_refusal(enrollment_path, *,
+expected_enrollment_sha256, expected_plan_sha256)`. Enrollment canonical plus LF,
+exact `{schema_version:'edge-forged-input-refusal-enrollment/v1',plan_sha256,
+reader_uid,kernel_boot_id,paths}`. Reader is actual nonroot uid, distinct from
+producer AND consumer AND Root; initial actual Linux reader65533. Paths exact
+`plan,trust,before_source,before_journal,before_anchors,after_source,after_journal,
+after_anchors,stdout,stderr`. Missing artifact descriptor requires corresponding
+path None; all present paths, including enrollment, are distinct physical absolute
+paths with existing protected Root ancestors. Files Root0444/single link, held
+through pure verification and all final metadata fences; close errors block return.
+Actual kernel boot and reader UID checked before and after; no key or live endpoint
+read. Enrollment externally pins plan, plan independently pins every artifact.
+
+Return schema `edge-forged-input-refusal-diagnostic/v1`, status
+`recorded_refusal_consistent` or `unknown`, nullable `sampled_state_unchanged`,
+`observed_persistent_change`, per-artifact `changes`, `invalid_signature_verified`,
+`baseline_witness_verified`, `journal_cursor_structurally_verified`, reasons,
+`full_journal_semantics_verified=false`, qualified_safety_count=null and all five
+existing authority flags false. A validated bound artifact's positive change
+survives missing/invalid siblings or worker evidence; unknown is never zero.
+Intake wrapper `edge-forged-input-refusal-collection/v1` retains diagnostic under
+`evaluation`, enrollment/plan hashes and reader/boot provenance, all flags false.
+Sealed equality is not cross-file atomicity against Root, absence of transient
+writes, actual execution authentication, cleanup proof, sensor truth or admission.
