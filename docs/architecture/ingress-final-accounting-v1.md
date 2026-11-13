@@ -141,3 +141,32 @@ control path. Row/line/depth bounds still apply. Pi memory/CPU/storage-wear and
 physical persistence are unmeasured; no resource acceptance is inferred from the
 bounds or host tests. Existing record consumers cannot silently discard this proof
 and retain fresh finalized status.
+
+## Implementation validation (2026-11-13)
+
+Targeted Python regressions: 140 passed (95 final-audit negatives/lifecycle and
+45 SO11); Linux SO03/runtime regressions: 130 passed. Host Rust: 202 passed with
+three existing Linux-only tests ignored on macOS; Linux CI must exercise its
+applicable tests. Two actual host-Core file tests passed, covering the quiet final
+tail and unsafe audit-path write refusal. Synthetic parser tests are separate
+from these actual process/file observations.
+
+A fresh offline Linux run used an unprivileged UID, no capabilities, no network,
+and read-only source/binary mounts. All six small-profile role/level combinations
+passed unchanged accounting checks after confirmed graceful exit0. Examined/written
+non-alert counts were SO03 8596/8596 and10348/10348, SO04-start17588/17588
+and21128/21128, SO0712440/12440 and14760/14760 at100% and120% respectively.
+Nominal runs observed pre-stop absence followed by a genuine final shutdown row;
+overload runs had already reported all counters and emitted no fake empty marker.
+Original full JSONL: 158310 bytes, SHA256
+`fe1a3842b46a8486c313ff925b79e1d001f3ab564672d9f0a8f10106ef4f82f9`.
+
+Limitations retained: an earlier Linux run's full export failed (only its compact
+result survived); the distinct successful run above retained complete evidence.
+An earlier macOS matrix had unavailable SO04/SO07 starts, which remain failed/
+unknown, not zero; a minimal host regression environment lacked PyYAML. The
+complete-dependency Linux regression above passed. No historical 468-line deficit
+is repaired or causally explained. Small profiles do not establish full objective,
+Pi/HIL, durability, resource, production, independent kernel restoration, or
+whole-system safety acceptance. Final-head CI and independent review remain merge
+gates.

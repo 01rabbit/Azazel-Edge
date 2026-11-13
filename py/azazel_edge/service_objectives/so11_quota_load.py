@@ -79,6 +79,8 @@ from .record import (
     utc_now,
 )
 
+from .ingress_final_audit import FinalAudit, bounded_stop, finalization_problems
+
 OBJECTIVE_ID = "SO-11"
 TITLE = "Hostile load -- SO-03, SO-04 (start) and SO-07 pass rules at 100% and 120% of the declared ingress quota"
 DEFAULT_CORE_BIN = REPO_ROOT / "rust" / "azazel-edge-core" / "target" / "release" / "azazel-edge-core"
@@ -172,6 +174,8 @@ class QuotaLoad(threading.Thread):
                     data = memoryview(b"".join(chunk))
                     while data:
                         n = os.write(fd, data)
+                        if n <= 0:
+                            raise OSError("load writer made no write progress")
                         data = data[n:]
                     self.written_bytes += sum(len(c) for c in chunk)
                 if chunk or stopping:
@@ -183,10 +187,13 @@ class QuotaLoad(threading.Thread):
                 if stopping:
                     break
                 self.stop.wait(0.01)
-        except OSError as exc:
-            self.error = f"{exc.__class__.__name__}"
+        except Exception as exc:
+            self.error = f"{exc.__class__.__name__}: {exc}"
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError as exc:
+                self.error = (self.error + "; " if self.error else "") + f"writer close {exc.__class__.__name__}"
 
 
 def read_audit(work: Path) -> Tuple[List[Dict[str, Any]], bool]:
@@ -198,7 +205,7 @@ def read_audit(work: Path) -> Tuple[List[Dict[str, Any]], bool]:
 @contextmanager
 def applied(
     eve: Path, work: Path, factor: float, quota: Mapping[str, Any], out: Dict[str, Any],
-    *, core_started: bool, core_alive: Callable[[], bool],
+    *, core_started: bool, core_alive: Callable[[], bool], final_audit: FinalAudit,
 ) -> Iterator[QuotaLoad]:
     """Offer ``factor`` x the quota to the core reading ``eve`` for the body of the block.
 
@@ -215,25 +222,33 @@ def applied(
     finally:
         load.stop.set()
         load.join(timeout=10)
+        joined = not load.is_alive()
+        joined_ns = time.monotonic_ns() if joined else None
+        if not joined:
+            load.error = load.error or "writer join timeout"
         time.sleep(int(quota["audit_interval_ms"]) / 1000.0 + 0.5)
-        out.update(observation(load, work, factor, core_started=core_started, core_alive_at_load_end=bool(core_alive())))
+        final_audit.before_stop(work, writer_joined=joined, writer_joined_ns=joined_ns)
+        out.update(observation(load, work, factor, core_started=core_started, core_alive_at_load_end=bool(core_alive()),
+                               pre_stop=final_audit.pre.metadata))
 
 
 def observation(
     load: Optional[QuotaLoad], work: Path, factor: float, *, core_started: bool = False, core_alive_at_load_end: bool = False,
+    pre_stop: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The part's ``quota_load`` block: what was offered, and what the core recorded."""
 
     decl = load_ingress_quotas()
     quota = decl["quotas"].get(SO11_INGRESS) or {}
-    audit, rotated = read_audit(work)
+    audit, rotated = (None, None) if pre_stop is not None or load is None else read_audit(work)
     window = dict(load.window) if load is not None else {}
     return {
+        **({"ingress_audit_pre_stop": dict(pre_stop)} if pre_stop is not None else {}),
         "core_started": bool(core_started),
         "core_alive_at_load_end": bool(core_alive_at_load_end),
         # What the harness read from the core's audit file, kept beside the
         # summaries so a summary removed from or added to the list shows.
-        "ingress_audit_records_read": len(audit),
+        "ingress_audit_records_read": len(audit) if audit is not None else None,
         "ingress": SO11_INGRESS,
         "quota_path": decl["path"],
         "quota_sha256": decl["sha256"],
@@ -274,7 +289,7 @@ def _offered_problems(samples: Sequence[Mapping[str, Any]], obs: Mapping[str, An
         problems.append(f"load_factor {obs.get('load_factor')!r} is not the part's {factor}")
     if obs.get("warmup_ms") != WARMUP_MS:
         problems.append(f"warmup_ms is not {WARMUP_MS}")
-    if obs.get("writer_error"):
+    if obs.get("writer_error", "missing") is not None:
         problems.append(f"writer error {obs.get('writer_error')}")
     rate = float(quota["value"]) * factor
     start, end = obs.get("window_start_monotonic_ns"), obs.get("window_end_monotonic_ns")
@@ -330,6 +345,13 @@ def quota_load_problems(samples: Sequence[Mapping[str, Any]], quota_load: Any, f
     if quota_load.get("core_alive_at_load_end") is not True:
         out["core_ran_through_load"].append("the core was not running when the load ended")
     out["ingress_load_offered_at_level"] = _offered_problems(list(samples), quota_load, factor, quota, decl)
+    final_errors = finalization_problems(quota_load)
+    if final_errors:
+        out["core_ingress_audit_consistent"] += final_errors
+        out["alerts_never_shed"].append("final ingress audit is unverified")
+        if factor > 1.0:
+            out[SO11_OVERLOAD_PREREQUISITE].append("final ingress accounting/shedding is unverified")
+        return out
     audit = quota_load.get("ingress_audit")
     if not isinstance(audit, list):
         audit = []
@@ -342,6 +364,8 @@ def quota_load_problems(samples: Sequence[Mapping[str, Any]], quota_load: Any, f
     written = quota_load.get("written") if isinstance(quota_load.get("written"), dict) else {}
     written_total = sum(v for v in written.values() if _int(v))
     examined = sum(int(r["examined"]) - int(r["alerts_admitted"]) for r in shed)
+    if written_total > 0 and (not shed or examined <= 0):
+        out["core_ingress_audit_consistent"].append("positive written load has no observed non-alert accounting rows/counts")
     if shed and examined > written_total:
         out["core_ingress_audit_consistent"].append(f"the core counts {examined} non-alert lines examined; only {written_total} were written")
     if factor > 1.0 and shed and examined < (1.0 - EXAMINED_TOLERANCE) * written_total:
@@ -391,17 +415,19 @@ def _so03(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[in
     from . import so03_alert_queue
 
     obs: Dict[str, Any] = {}
+    final_audit = FinalAudit(obs)
 
     def during_core(work: Path, eve: Path, alive: Callable[[], bool]):  # type: ignore[no-untyped-def]
         # Entered only once the core has started (so03_alert_queue._run_core).
-        return applied(eve, work, factor, quota, obs, core_started=True, core_alive=alive)
+        return applied(eve, work, factor, quota, obs, core_started=True, core_alive=alive, final_audit=final_audit)
 
-    kwargs: Dict[str, Any] = {"core_bin": core, "seed": seed, "during_core": during_core}
+    kwargs: Dict[str, Any] = {"core_bin": core, "seed": seed, "during_core": during_core,
+                              "after_core": lambda work, stop: final_audit.finish(work, stop)}
     if samples is not None:
         kwargs["samples"] = samples
     record = so03_alert_queue.run(**kwargs)
     part = record["parts"][0]
-    return {"samples": part["samples"], "prerequisites": part["prerequisites"], "quota_load": obs or observation(None, Path("/nonexistent"), factor), "notes": record.get("notes", [])[:2]}
+    return {"samples": part["samples"], "prerequisites": part["prerequisites"], "quota_load": obs or observation(None, Path("/nonexistent"), factor), "notes": record.get("notes", [])[:2], "diagnostics": final_audit.diagnostics}
 
 
 def _standalone_core(core: Path, work: Path) -> Tuple[subprocess.Popen, Path, Any]:
@@ -421,13 +447,8 @@ def _standalone_core(core: Path, work: Path) -> Tuple[subprocess.Popen, Path, An
     return proc, eve, err
 
 
-def _stop(proc: subprocess.Popen) -> None:
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=10)
+def _stop(proc: subprocess.Popen) -> Dict[str, Any]:
+    return bounded_stop(proc)
 
 
 def _wait_started(proc: subprocess.Popen, stderr_path: Path) -> bool:
@@ -443,6 +464,7 @@ def _so07(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[in
     from . import so07_audit_ordering
 
     obs: Dict[str, Any] = {}
+    final_audit = FinalAudit(obs)
     started = False
     rows: List[Dict[str, Any]] = []
     prereqs: List[Dict[str, Any]] = []
@@ -452,17 +474,17 @@ def _so07(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[in
         try:
             started = _wait_started(proc, work / "core.stderr")
             if started:
-                with applied(eve, work, factor, quota, obs, core_started=True, core_alive=lambda: proc.poll() is None):
+                with applied(eve, work, factor, quota, obs, core_started=True, core_alive=lambda: proc.poll() is None, final_audit=final_audit):
                     record = so07_audit_ordering.run(seed=seed, kinds=kinds)
                 part = record["parts"][0]
                 rows, prereqs = part["samples"], part["prerequisites"]
             started = started and proc.poll() is None
         finally:
-            _stop(proc)
+            final_audit.finish(work, _stop(proc))
             err.close()
     if not started:
         obs = obs or observation(None, Path("/nonexistent"), factor)
-    return {"samples": rows, "prerequisites": prereqs, "quota_load": obs, "core_started": started}
+    return {"samples": rows, "prerequisites": prereqs, "quota_load": obs, "core_started": started, "diagnostics": final_audit.diagnostics}
 
 
 def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optional[int], leases_per_type: int = SO04_LEASES_PER_TYPE) -> Dict[str, Any]:
@@ -472,6 +494,7 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
 
     rng = random.Random(seed)
     obs: Dict[str, Any] = {}
+    final_audit = FinalAudit(obs)
     prereqs: List[Dict[str, Any]] = []
     samples: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="so11-so04-") as tmp:
@@ -497,7 +520,7 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
             leases.append(lease)
         ledger.write_text(json.dumps({
             "schema_version": so04.LEDGER_SCHEMA,
-            "tasks": [{k: v for k, v in l.items() if not k.startswith("_")} for l in leases],
+            "tasks": [{k: v for k, v in lease.items() if not k.startswith("_")} for lease in leases],
         }), encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if not k.startswith("AZAZEL_")}
         env.update({
@@ -509,7 +532,7 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
             "AZAZEL_REDIRECT_POLICY_PATH": str(REPO_ROOT / "config" / "redirect_policy.yaml"),
         })
         chain = so04.rollback_audit_path(ledger)
-        tail = so04._Tail(events, chain, {l["task_id"] for l in leases})
+        tail = so04._Tail(events, chain, {lease["task_id"] for lease in leases})
         tail.start()
         stderr_path = work / "core.stderr"
         with stderr_path.open("w", encoding="utf-8") as err_fh:
@@ -517,15 +540,15 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
             try:
                 # The load starts once the core has started, as for SO-03 and SO-07.
                 core_started = _wait_started(proc, stderr_path)
-                with applied(eve, work, factor, quota, obs, core_started=core_started, core_alive=lambda: proc.poll() is None):
-                    deadline = max(l["due_epoch"] for l in leases) + SO04_TAIL_SLACK_S
+                with applied(eve, work, factor, quota, obs, core_started=core_started, core_alive=lambda: proc.poll() is None, final_audit=final_audit):
+                    deadline = max(lease["due_epoch"] for lease in leases) + SO04_TAIL_SLACK_S
                     while time.time() < deadline and not tail.done() and proc.poll() is None:
                         time.sleep(0.01)
                 tail.stop.set()
                 tail.join(timeout=5)
                 exited_early = proc.poll()
             finally:
-                _stop(proc)
+                final_audit.finish(work, _stop(proc))
         drift_ns = (time.time_ns() - time.monotonic_ns()) - offset0
         stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
         raw = so04.build_samples(leases, tail.starts, tail.outcomes, offset0)
@@ -542,7 +565,7 @@ def _so04_start(core: Path, factor: float, quota: Mapping[str, Any], seed: Optio
             ),
             prerequisite("no_release_record_before_expiry", not early, "none" if not early else f"{len(early)} start record(s) observed before the declared expiry"),
         ] + record_prereqs
-    return {"samples": samples, "prerequisites": prereqs, "quota_load": obs, "monotonic_leases": monotonic}
+    return {"samples": samples, "prerequisites": prereqs, "quota_load": obs, "monotonic_leases": monotonic, "diagnostics": final_audit.diagnostics}
 
 
 # ------------------------------------------------------------------ the record

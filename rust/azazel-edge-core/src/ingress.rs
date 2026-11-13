@@ -517,8 +517,9 @@ impl IngressReader {
     /// The summaries of the last interval, written once when the process
     /// stops (Edge#414 SO-11): whatever is pending is emitted now, without
     /// waiting for the audit interval, in the same shape with `interval_end`
-    /// `"shutdown"`. Each kind is emitted only when there is something to
-    /// report, as on every interval. A second call, and any later
+    /// `"shutdown"`. Unlike periodic shed-driven reporting, an examined or
+    /// admitted final tail is also reported with its actual zero-shed counters.
+    /// An empty/already-reported interval emits nothing. A second call, and any later
     /// `audit_records`, returns nothing, so the last interval is never
     /// written twice. It counts and reports only; nothing it does changes
     /// what was read, shed or decided.
@@ -533,7 +534,10 @@ impl IngressReader {
     fn summaries(&mut self, now: Instant, now_epoch: f64, at_shutdown: bool) -> Vec<Value> {
         let interval_end = if at_shutdown { "shutdown" } else { "audit_interval" };
         let mut out = Vec::new();
-        if self.pending.shed_side_nonzero() && (at_shutdown || self.interval_elapsed(self.last_shed_emit, now)) {
+        // Periodic reporting remains shed-driven. At shutdown, also account
+        // for actual examined/admitted work in an otherwise quiet final tail.
+        let final_accounting = at_shutdown && (self.pending.examined > 0 || self.pending.admitted > 0);
+        if (self.pending.shed_side_nonzero() || final_accounting) && (at_shutdown || self.interval_elapsed(self.last_shed_emit, now)) {
             let mut by_type = serde_json::Map::new();
             let mut cumulative = serde_json::Map::new();
             for c in SHED_CLASSES {
@@ -1156,6 +1160,104 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_accounts_admitted_only_work_without_periodic_chatter() {
+        let path = temp_path("shutdown-admitted-only");
+        write_lines(&path, &mixed(100));
+        let mut r = IngressReader::new(0, open_limits());
+        let now = Instant::now();
+        let mut seen = Vec::new();
+        let report = r.poll(&path, now, |value| seen.push(sig(value)));
+        assert_eq!(report.examined, 100);
+        assert_eq!(report.admitted, 100);
+        assert_eq!(report.alerts_admitted, 20);
+        assert_eq!(report.shed_total(), 0);
+        assert_eq!(seen, (0..100).collect::<Vec<_>>());
+        assert_eq!(r.offset, fs::metadata(&path).unwrap().len());
+        assert!(r.audit_records(now + Duration::from_secs(2), 3.0).is_empty());
+        let rows = r.shutdown_records(now + Duration::from_secs(3), 4.0);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0]["ingress_shed"];
+        assert_eq!(row["interval_end"], "shutdown");
+        assert_eq!(row["examined"], 100);
+        assert_eq!(row["admitted"], 100);
+        assert_eq!(row["alerts_admitted"], 20);
+        assert_eq!(row["shed_total"], 0);
+        assert_eq!(row["cumulative_shed_total"], 0);
+        assert_eq!(row["shed_by_reason"]["non_alert_rate"], 0);
+        assert_eq!(row["shed_by_reason"]["backlog"], 0);
+        assert!(row["shed_by_type"].as_object().unwrap().values().all(|n| n.as_u64() == Some(0)));
+        assert!(r.shutdown_records(now + Duration::from_secs(4), 5.0).is_empty());
+        assert!(r.audit_records(now + Duration::from_secs(5), 6.0).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_accounts_pressure_then_quiet_tail_from_actual_polls() {
+        let path = temp_path("shutdown-pressure-quiet-tail");
+        // HTTP is the existing Other class (no reserved flow/dns/stats tokens),
+        // so a 500-token bucket admits exactly 500 then the quiet 468-line tail.
+        write_lines(&path, &(0..2000).map(|n| line("http", n)).collect::<Vec<_>>());
+        let mut r = IngressReader::new(0, IngressLimits {
+            non_alert_burst: 500, non_alert_per_sec: 2500, ..open_limits()
+        });
+        let now = Instant::now();
+        let mut seen = Vec::new();
+        let first = r.poll(&path, now, |value| seen.push(sig(value)));
+        assert_eq!((first.examined, first.admitted, first.shed_total()), (2000, 500, 1500));
+        let periodic = r.audit_records(now, 1.0);
+        assert_eq!(periodic.len(), 1);
+        write_lines(&path, &(2000..2468).map(|n| line("http", n)).collect::<Vec<_>>());
+        let tail = r.poll(&path, now + Duration::from_secs(1), |value| seen.push(sig(value)));
+        assert_eq!((tail.examined, tail.admitted, tail.shed_total()), (468, 468, 0));
+        assert!(r.audit_records(now + Duration::from_secs(2), 3.0).is_empty());
+        let final_rows = r.shutdown_records(now + Duration::from_secs(3), 4.0);
+        assert_eq!(final_rows.len(), 1, "at most one added shed/accounting row");
+        let final_row = &final_rows[0]["ingress_shed"];
+        assert_eq!(final_row["examined"], 468);
+        assert_eq!(final_row["admitted"], 468);
+        assert_eq!(final_row["shed_total"], 0);
+        assert_eq!(final_row["cumulative_shed_total"], 1500);
+        assert_eq!(periodic[0]["ingress_shed"]["examined"].as_u64().unwrap()
+                   + final_row["examined"].as_u64().unwrap(), 2468);
+        assert_eq!(shed_keys(&periodic[0]), shed_keys(&final_rows[0]));
+        let expected: Vec<u64> = (0..500).chain(2000..2468).collect();
+        assert_eq!(seen, expected, "read/admit/callback decisions unchanged by summary emission");
+        assert_eq!(r.offset, fs::metadata(&path).unwrap().len());
+        assert!(r.shutdown_records(now + Duration::from_secs(4), 5.0).is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_accounting_row_uses_existing_rotation_and_write_refusal() {
+        let path = temp_path("shutdown-bounded-row-input");
+        write_lines(&path, &mixed(100));
+        let mut reader = IngressReader::new(0, open_limits());
+        let now = Instant::now();
+        reader.poll(&path, now, |_| {});
+        let rows = reader.shutdown_records(now, 1.0);
+        assert_eq!(rows.len(), 1);
+        let directory = temp_path("shutdown-bounded-audit");
+        fs::create_dir_all(&directory).unwrap();
+        let audit = directory.join("audit.jsonl");
+        let original = json!({"prior_test_record": true});
+        append_audit_record(&audit, &original, 1).unwrap();
+        let before = fs::read(&audit).unwrap();
+        append_audit_record(&audit, &rows[0], 1).unwrap();
+        assert_eq!(fs::read(directory.join("audit.jsonl.1")).unwrap(), before);
+        let raw = fs::read_to_string(&audit).unwrap();
+        assert_eq!(raw.lines().count(), 1);
+        assert_eq!(raw.trim_end(), serde_json::to_string(&rows[0]).unwrap());
+        assert!(raw.len() < 4096, "one existing bounded-schema row, no unbounded growth");
+        assert!(reader.shutdown_records(now, 1.1).is_empty());
+        let invalid = directory.join("directory-not-file");
+        fs::create_dir(&invalid).unwrap();
+        assert!(append_audit_record(&invalid, &rows[0], 1 << 20).is_err());
+        assert!(invalid.is_dir(), "no repair or invented persisted row on write error");
+        let _ = fs::remove_dir_all(&directory);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn shutdown_writes_the_rest_of_an_interval_once_in_the_same_shape() {
         let path = temp_path("shutdown");
         write_lines(&path, &mixed(2000));
@@ -1231,12 +1333,12 @@ mod tests {
 
     #[test]
     fn shutdown_with_nothing_pending_writes_nothing() {
-        // Nothing shed at all.
+        // A genuinely empty poll is not pending accounting work.
         let path = temp_path("shutdown-quiet");
-        write_lines(&path, &mixed(100));
+        write_lines(&path, &[]);
         let mut r = IngressReader::new(0, IngressLimits::DECLARED);
         let t0 = Instant::now();
-        assert_eq!(r.poll(&path, t0, |_| {}).shed_total(), 0);
+        assert_eq!(r.poll(&path, t0, |_| {}).examined, 0);
         assert!(r.shutdown_records(t0, 1.0).is_empty());
         let _ = fs::remove_file(&path);
         // Shedding already summarised, and an empty interval since.
@@ -1261,8 +1363,13 @@ mod tests {
         r.poll(&path, t0 + Duration::from_millis(100), |_| {});
         assert!(r.audit_records(t0 + Duration::from_millis(100), 1.1).is_empty());
         let last = r.shutdown_records(t0 + Duration::from_millis(150), 1.15);
-        assert_eq!(last.len(), 1);
-        let rec = &last[0]["ingress_alert_backlog"];
+        assert_eq!(last.len(), 2, "one added accounting row, existing backlog row preserved");
+        let accounting = &last[0]["ingress_shed"];
+        assert_eq!(accounting["examined"], 200);
+        assert_eq!(accounting["admitted"], 200);
+        assert_eq!(accounting["alerts_admitted"], 200);
+        assert_eq!(accounting["shed_total"], 0);
+        let rec = &last[1]["ingress_alert_backlog"];
         assert_eq!(rec["interval_end"], "shutdown");
         assert_eq!(rec["alerts_admitted"], 100);
         assert_eq!(rec["alerts_shed"], 0);

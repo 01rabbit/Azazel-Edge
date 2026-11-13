@@ -50,11 +50,15 @@ def _quota_block():
 
 
 def _summary(shed: int, cumulative: int, *, alerts_shed: int = 0, examined: int = 3000):
-    return {"ingress_shed": {
+    return {"source": "core_ingress", "pipeline": "rust_ingress_v1", "ingress_shed": {
+        "schema": "azazel-edge/ingress-shed/v1", "polls": 1,
+        "max_backlog_bytes": 0, "max_shed_level": 0, "truncation_resets": 0,
+        "file_replacements": 0, "unread_bytes_lost": 0, "cumulative_resets": 0,
+        "cumulative_shed_by_type": {"flow": cumulative, "dns": 0, "stats": 0, "other": 0, "unparseable": 0},
         "emitted_epoch": 1.0, "shed_total": shed, "admitted": examined - shed, "alerts_admitted": 0, "examined": examined,
         "oversized_lines_skipped": 0, "oversized_possible_alerts": 0, "cumulative_shed_total": cumulative,
         "cumulative_oversized_lines_skipped": 0, "alerts_shed": alerts_shed,
-        "shed_by_type": {"flow": shed}, "shed_by_reason": {"non_alert_rate": shed, "backlog": 0},
+        "shed_by_type": {"flow": shed, "dns": 0, "stats": 0, "other": 0, "unparseable": 0}, "shed_by_reason": {"non_alert_rate": shed, "backlog": 0},
         "quota": _quota_block(), "interval_end": "audit_interval",
     }}
 
@@ -70,7 +74,20 @@ def _obs(factor: float, *, seconds: float = 60.0):
         audit = [_summary(500, 500, examined=total // 2), _summary(500, 1000, examined=total - total // 2)]
     else:
         audit = [_summary(10, 10, examined=total // 3)]
+    raw_audit = b"".join(json.dumps(row, sort_keys=True, separators=(",", ":")).encode()+b"\n" for row in audit)
+    import hashlib
+    audit_hash = hashlib.sha256(raw_audit).hexdigest()
+    pre = dict(disposition="read", records=copy.deepcopy(audit), records_read=len(audit),
+               raw_sha256=audit_hash, raw_bytes=len(raw_audit), raw_utf8=raw_audit.decode("utf-8"), file_identity=dict(device=1, inode=2),
+               read_started_ns=end+2, read_ended_ns=end+3, rotated=False, error=None)
+    final = dict(profile="so11-post-exit-ingress/v1", writer_joined=True, writer_joined_ns=end+1,
+                 stop=dict(requested=True, forced=False, returncode=0, exit_confirmed=True,
+                           error=None, requested_ns=end+4, exited_ns=end+5),
+                 read_started_ns=end+6, read_ended_ns=end+7, raw_sha256=audit_hash,
+                 raw_bytes=len(raw_audit), raw_utf8=raw_audit.decode("utf-8"), file_identity=dict(device=1, inode=2), pre_stop_prefix_preserved=True,
+                 pre_stop_binding="same_file_prefix", error=None)
     return {
+        "ingress_audit_pre_stop": pre, "ingress_audit_finalization": final,
         "core_started": True, "core_alive_at_load_end": True, "ingress_audit_records_read": len(audit),
         "ingress": "core_eve_reader", "quota_path": decl["path"], "quota_sha256": decl["sha256"],
         "quota_value": QUOTA["value"], "quota_status": QUOTA["status"], "quota_hardware_class": QUOTA["hardware_class"],
@@ -475,3 +492,31 @@ def test_real_core_so03_under_120pct(rust_core_bin):
     assert all(rec.so03_end_observed(s) for s in samples)
     problems = so11.quota_load_problems(samples, taken["quota_load"], 1.2)
     assert not any(problems.values()), problems
+
+
+def test_failed_stop_stderr_diagnostic_is_private_and_excluded_from_record(tmp_path):
+    import hashlib
+    import time
+    from azazel_edge.service_objectives.ingress_final_audit import FinalAudit
+    marker = 'SYNTHETIC_PRIVATE_DIAGNOSTIC_198.51.100.77'
+    raw = (marker+'\n').encode()
+    (tmp_path/'core.stderr').write_bytes(raw)
+    out = dict(writer_error=None, window_end_monotonic_ns=time.monotonic_ns())
+    audit = FinalAudit(out)
+    audit.before_stop(tmp_path, writer_joined=True, writer_joined_ns=time.monotonic_ns())
+    audit.finish(tmp_path, dict(requested=False, forced=False, returncode=3,
+        exit_confirmed=True, error='core failed before stop',
+        requested_ns=time.monotonic_ns(), exited_ns=time.monotonic_ns()))
+    diagnostic = audit.diagnostics['core_stderr']
+    assert diagnostic['sha256']==hashlib.sha256(raw).hexdigest()
+    assert diagnostic['bytes']==diagnostic['file_bytes']==len(raw)
+    assert diagnostic['truncated'] is False and marker in diagnostic['text_prefix']
+    assert out['ingress_audit'] is None
+    assert marker not in json.dumps(out)
+    name='so04_start_at_120pct_of_quota'
+    taken=_taken(name)
+    taken['diagnostics']=audit.diagnostics
+    part=so11.build_so11_part(name,taken)
+    assert 'diagnostics' not in part and marker not in json.dumps(part)
+    record=_record({name:taken})
+    assert marker not in json.dumps(record)

@@ -488,9 +488,10 @@ def _sample(
 # (so11_quota_load) uses it to offer the declared ingress quota's load to the
 # same core; SO-03 itself passes none.
 DuringCore = Callable[[Path, Path, Callable[[], bool]], ContextManager[Any]]
+AfterCore = Callable[[Path, Mapping[str, Any]], None]
 
 
-def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, info: Dict[str, Any], during_core: Optional[DuringCore] = None) -> List[Dict[str, Any]]:  # type: ignore[no-untyped-def]
+def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, info: Dict[str, Any], during_core: Optional[DuringCore] = None, after_core: Optional[AfterCore] = None) -> List[Dict[str, Any]]:  # type: ignore[no-untyped-def]
     rows: List[Dict[str, Any]] = []
     eve = work / "eve.json"
     eve.write_text("", encoding="utf-8")
@@ -507,12 +508,16 @@ def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, inf
                         rows.append(take(i, eve))
         finally:
             info["core_exited_before_harness_stopped_it"] = proc.poll()
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+            if after_core is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=10)
+            else:
+                from .ingress_final_audit import bounded_stop
+                after_core(work, bounded_stop(proc))
     stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
     m = re.search(r"defense_enforce=(\w+), defense_dry_run=(\w+)", stderr_text)
     info["core_reported_enforce"] = f"enforce={m.group(1)} dry_run={m.group(2)}" if m else None
@@ -521,7 +526,7 @@ def _run_core(core: Path, work: Path, socket_path: Path, samples: int, take, inf
 
 def _measure(
     core: Path, samples: int, rng: random.Random, synced: List[tuple], work: Path, info: Dict[str, Any],
-    during_core: Optional[DuringCore] = None,
+    during_core: Optional[DuringCore] = None, after_core: Optional[AfterCore] = None,
 ) -> List[Dict[str, Any]]:
     """Start the agent service and the core, take the samples, stop both."""
 
@@ -564,7 +569,8 @@ def _measure(
             def take(i: int, eve: Path) -> Dict[str, Any]:
                 return _sample(i, rng, eve, chain_path, queue_path, synced, relayed, relayed_cv)
 
-            rows = _run_core(core, work, socket_path, samples, take, info, during_core)
+            rows = _run_core(core, work, socket_path, samples, take, info, during_core,
+                             **({"after_core": after_core} if after_core is not None else {}))
         finally:
             relay = agent.CORE_P0_RELAY
             recorder = agent.CORE_RECORDER
@@ -589,7 +595,7 @@ def _measure(
 
 def run(
     *, core_bin: Optional[Path] = None, samples: int = REQUIRED_SAMPLES, seed: Optional[int] = None,
-    during_core: Optional[DuringCore] = None,
+    during_core: Optional[DuringCore] = None, after_core: Optional[AfterCore] = None,
 ) -> Dict[str, Any]:
     from azazel_edge.notify.p0_alert import P0_RULE, QUEUE_SCHEMA
 
@@ -603,7 +609,8 @@ def run(
     info: Dict[str, Any] = {}
     if version is not None:
         with tempfile.TemporaryDirectory(prefix="so03-") as tmp, _watch_fsync() as synced:
-            rows = _measure(core, samples, rng, synced, Path(tmp).resolve(), info, during_core)
+            rows = _measure(core, samples, rng, synced, Path(tmp).resolve(), info, during_core,
+                            **({"after_core": after_core} if after_core is not None else {}))
     try:
         full_queue = _full_queue_enqueue_latency()
     except Exception as exc:  # diagnostic only; never part of the verdict
