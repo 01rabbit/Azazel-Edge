@@ -270,3 +270,23 @@ Independent precollection code/wire review, one actual five-case matrix under
 existing profile, appropriate regressions, final-head complete CI (five actual
 cases/no skips), externally pinned fresh public original replay and exact base/
 head/tree are merge gates. Keep #400/#393 open for all unmeasured categories.
+
+### Explicit fixture-only accepted-socket lifetime
+
+The unchanged real handle_client closes its accepted descriptor on return. To
+observe reciprocal socket-file identities while the client receives the queued
+reply, the isolated SERVER HARNESS may hold os.dup of its OWN already accepted
+file before invoking the unchanged handler. This grants no connection permission,
+creates no new connection/proxy/observer FD and changes no guard/return value.
+The duplicate is kept only until the client completes; ALL holds/listener/server
+close before the independent after-samples. Record this control-only premise.
+
+This affects fixture EOF/lifetime and does NOT prove the unmodified production
+close path or availability of peer-file identity after last close. In an unheld
+or missing-peer environment, record unknown/read failure, never cached/backfilled
+peer identity. Synthetic missing-peer negatives must preserve prior known copies
+and state samples. No new actual race scenario is inferred from this fixture.
+
+Eligible raw chunks must still satisfy the frozen linear/USER-destination/native
+profile. Retaining partial MESSAGE chunks (nonzero consumed/skip or no complete LF)
+does not allow unsupported nonlinear rows to masquerade as published native facts.
