@@ -159,3 +159,38 @@ Intake wrapper `edge-forged-input-refusal-collection/v1` retains diagnostic unde
 `evaluation`, enrollment/plan hashes and reader/boot provenance, all flags false.
 Sealed equality is not cross-file atomicity against Root, absence of transient
 writes, actual execution authentication, cleanup proof, sensor truth or admission.
+
+## Validation record before final CI
+
+49 synthetic parser/real-test-crypto/unit cases passed;112 existing Source proof/
+witness regressions passed. These are software tests, not actual refusal facts.
+Two actual offline Linux scopes used the existing UID1000 producer,65534 consumer,
+Root witness/controller and a distinct65533 sealed-artifact reader. The fixture
+used only the existing setup capabilities CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER,
+NNP and network-none; no SYS_ADMIN, BPF, NET_ADMIN, new privilege or host service.
+Source code was mounted read-only. The genuine lifecycle payloads are lab data,
+not native defense-execution facts.
+
+The invalid-signature scope produced an actual uncaught authentication signature
+exception and normal nonzero exit. Independent samples retained identical Source,
+journal and anchor bytes AND the enrolled original identities/metadata. Genuine
+prefix/witness, closed journal chain and selected cursor were reverified. Reader
+65533 succeeded; Root/producer/consumer readers and unsafe sealed material were
+refused; original sealed samples remained unchanged. A separate valid-next-frame
+control advanced the authenticated cursor through existing recover_input's explicit
+missed-backlog path. This proves the acceptance path, not Outcome or app processing.
+
+Initial actual run: invalid case passed; valid control failed because its test
+worker redundantly read after recover_input had already consumed the restart tail.
+Only that test control was corrected and rerun successfully. No product guard,
+runtime authentication or failed evidence was changed; the negative worker/code
+hash and original public bytes remain unchanged. Independent review is clean.
+
+The public export contains exactly11 original public files and one manifest;
+no keys or whole private fixture. Externally retained manifest SHA256
+`46532b40a747d0b10519adc8d50cdaf1e686332fed46c086c5ce6b20e825e9c2`
+binds every file's original size/hash. Pure offline replay with the final session-
+binding guard reproduces the original published result exactly, with no fresh
+process or observation. Existing valid observations are not rerun as substitutes.
+Final-head CI additionally retains a fresh public export, must execute the actual
+Linux cases without skips, and remains required before conditional merge.
