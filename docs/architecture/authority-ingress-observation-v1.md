@@ -172,3 +172,21 @@ Public per-case manifest pins originals/diagnostic/control-only facts; absent
 samples explicitNone, no keys/objects/private state. Final case index lists all
 six complete/missing; availability is not acceptance. Freeze public allowlist
 before first actual product run.
+
+## Public export layout fixed before actual product collection
+
+Fresh Root0755 public root; six fixed case directories0755. Files0444,
+single-link. Per-case exact eight manifest slots: plan.json,probe.json,
+sot_before.raw,sot_after.raw,audit_before.raw,audit_after.raw,control.json,
+diagnostic.json. manifest.json pins each present slot SHA256/byte length; permitted
+unavailable probe/sample slots useNone and the corresponding file MUST be absent.
+Actual empty audit files are present zero-byte originals with real SHA256, never
+None. control.json contains explicit control_only fixture/process/role facts;
+never used as independent proof of effect or kernel connection. No object, BTF,
+private key, arbitrary log, enrolled private path or target tree export.
+Root case-index.json written ONCE after fixture finalization lists exactsixcases,
+state complete|missing and manifest_sha256|None. Complete means artifact availability,
+not successful verdict. Partial export precedes verdict assertions; a failed case
+retains published originals. Upper whitelist55paths; prescribed complete six-case
+run has54files because missing_readback/sot_after.raw is intentionally absent.
+Do not synthesize absent cases or fuse different runs into a success inventory.
