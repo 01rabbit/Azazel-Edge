@@ -218,3 +218,14 @@ bpf_ktime_get_ns (MONOTONIC). Their ordering MUST NOT be compared: suspend chang
 the offset, and zero time-namespace offsets do not eliminate it. No inferred clock
 offset or translated timestamps are introduced. Synthetic data may represent a
 no-suspend profile but cannot turn cross-clock ordering into an acceptance gate.
+
+Pre-collection build gate: inspect actual running-kernel BTF raw FUNC_PROTO BEFORE
+compilation/load and require exactly one unix_stream_connect FUNC pointing to
+(socket*,sockaddr*,signed32int,signed32int)->signed32int. Resolve only explicit
+BTF typedef/qualifier wrappers with bounded, acyclic references; require exact
+socket/sockaddr STRUCT pointees and int type. Missing/extra/reordered/changed args,
+ambiguous symbols, malformed references or different return refuse the build.
+This protects the fixed fexit ctx[4] return-slot assumption; CO-RE relocation alone
+does not establish it. The checked build and kernel/Root remain external trust
+premises, not remote kernel or object/source attestation. No alternate hook or
+permission fallback. Synthetic prototype tests are not actual kernel evidence.
