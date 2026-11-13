@@ -229,3 +229,22 @@ This protects the fixed fexit ctx[4] return-slot assumption; CO-RE relocation al
 does not establish it. The checked build and kernel/Root remain external trust
 premises, not remote kernel or object/source attestation. No alternate hook or
 permission fallback. Synthetic prototype tests are not actual kernel evidence.
+
+## Pre-PR validation scope
+
+Frozen implementation55ebd255cdcd08f862ab22815a57b8df64c755da ran ONE actual ARM
+Linux matrix:6passed/23.27seconds, no skips or retries. Positive exercised unchanged
+real handle_client and SoT writer, negative actual kernel EACCES, unrelated pathname
+was absent (ENOENT, not a second listener), own link was actually closed after a
+captured positive. Missing-readback case intentionally withholds an already read
+SoT sample from evaluator/export input; it tests missing-input composition, NOT a
+natural OS read failure. It preserves the actual audit change and kernel connection,
+without reconstructing or publishing the withheld sample as available evidence.
+Kernel acquisition, application effect and injected availability controls remain
+separate. Original immutable public inventory retained for independent replay.
+
+Pure/intake suite65tests passed before the final clock-domain correction; the two
+affected clock/conflict tests passed after it. Final FFI suite66tests passed,
+including25 prototype negatives. A separate real unchanged writer contract test
+checks the existing audit shape; synthetic kernel receipts remain synthetic.
+Final-head complete CI and independent exact-tree/artifact review remain required.
