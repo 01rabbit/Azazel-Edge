@@ -78,3 +78,29 @@ wear/physical durability remain unmeasured. Independent review, targeted Rust an
 Python regressions, final-head complete CI and exact base/head/tree are required
 before conditional merge. Any gate failure is recorded, never skipped/retried until
 pass or relaxed. Update existing #400/#393; create no duplicate issue.
+
+## Frozen collector profile details
+
+Use a shared strict helper ingress_final_audit.py and optional SO03 after_core
+callback (defaultNone), invoked only after its owned Core stop inside work lifetime.
+New quota_load fields:
+- ingress_audit_pre_stop: original records/records_read/raw_sha256/raw_bytes/
+  file_identity/read_started_ns/read_ended_ns/rotated/error.
+- ingress_audit_finalization: profile=so11-post-exit-ingress/v1,writer_joined,
+  stop={requested,forced,returncode,exit_confirmed,error,requested_ns,exited_ns},
+  read_started_ns/read_ended_ns/raw_sha256/raw_bytes/pre_stop_prefix_preserved/error.
+The exact profile/types, ordered writer/stop/exit/read facts, raw row/count/prefix
+consistency and errors are mandatory in fresh SO11 build AND independent record
+revalidation. Legacy missing metadata is not silently finalized. Preserve original
+load_end core-alive fact; stopping afterward cannot turn it into an early-exit pass.
+
+Final original audit can contain zero or one ingress_shed shutdown row and an
+existing distinct alert-backlog shutdown row. If no counters remained after a
+periodic summary, empty shutdown still emits none: finalization proves post-exit
+collection ordering/bytes, NOT complete coverage or zero unseen pending work.
+Absent shutdown row alone must never fabricate zero counters or defeat the
+unchanged98% test. If shutdown rows exist, they form a terminal suffix with no
+repeated kind or subsequent periodic row. Missing final read/exit/error/prefix
+proof remains unknown. This avoids requiring a fabricated empty marker and keeps
+periodic/empty behavior unchanged. All actual emitted counters remain additive
+without duplicated earlier snapshots.
