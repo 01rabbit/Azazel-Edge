@@ -1583,6 +1583,8 @@ def validate_record(record: Any, *, expect_commit: Optional[str] = None) -> List
         if objective in QUOTA_LOAD_OBJECTIVES:
             # The load prerequisites are what the part's quota_load and samples
             # show against the quota in this tree, never what the record declares.
+            # This also requires the fresh post-exit ingress finalization profile;
+            # a legacy observation or caller completion flag cannot replace it.
             from .so11_quota_load import quota_load_prerequisites
 
             load_observed = quota_load_prerequisites(dict_samples, part.get("quota_load"), float(spec["load_factor"]))

@@ -2741,6 +2741,64 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn admitted_final_interval(dir: &std::path::Path) -> (Config, IngressReader) {
+        fs::create_dir_all(dir).unwrap();
+        let eve = dir.join("eve.json");
+        let body: String = (0..50).map(|n| format!("{{\"event_type\":\"flow\",\"n\":{}}}\n", n)).collect();
+        fs::write(&eve, body).unwrap();
+        let mut cfg = sample_cfg();
+        cfg.eve_path = eve.to_string_lossy().into_owned();
+        cfg.normalized_log_path = dir.join("normalized-events.jsonl").to_string_lossy().into_owned();
+        cfg.event_stdout = StdoutMode::Off;
+        let mut reader = IngressReader::new(0, IngressLimits::DECLARED);
+        let report = poll_iteration(&cfg, &mut reader);
+        assert_eq!((report.examined, report.admitted, report.shed_total()), (50, 50, 0));
+        assert!(audit_lines(&cfg).is_empty(), "periodic admission-only reporting stays silent");
+        (cfg, reader)
+    }
+
+    #[test]
+    fn shutdown_persists_actual_admission_only_final_interval_once() {
+        let dir = std::env::temp_dir().join(format!("azazel-shutdown-admitted-file-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (cfg, mut reader) = admitted_final_interval(&dir);
+        let mut forwarded = Vec::new();
+        assert_eq!(shutdown_ingress(&cfg, &mut reader, &mut |r| forwarded.push(r.clone())), 1);
+        let raw = fs::read_to_string(ingress_audit_log_path(&cfg)).unwrap();
+        assert_eq!(raw.lines().count(), 1);
+        assert!(raw.len() < 4096, "one bounded existing-schema row");
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(raw.trim_end(), serde_json::to_string(&forwarded[0]).unwrap());
+        let row = &forwarded[0]["ingress_shed"];
+        assert_eq!(row["examined"], 50);
+        assert_eq!(row["admitted"], 50);
+        assert_eq!(row["shed_total"], 0);
+        assert_eq!(row["cumulative_shed_total"], 0);
+        assert_eq!(row["interval_end"], "shutdown");
+        assert_eq!(shutdown_ingress(&cfg, &mut reader, &mut |_| panic!("duplicate forward")), 0);
+        assert!(reader.audit_records(Instant::now(), 99.0).is_empty());
+        assert_eq!(fs::read_to_string(ingress_audit_log_path(&cfg)).unwrap(), raw);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_generated_accounting_row_does_not_claim_failed_file_persistence() {
+        let dir = std::env::temp_dir().join(format!("azazel-shutdown-admitted-write-failure-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (cfg, mut reader) = admitted_final_interval(&dir);
+        let audit = ingress_audit_log_path(&cfg);
+        fs::create_dir(&audit).unwrap(); // Existing append API refuses this path.
+        let mut forwarded = Vec::new();
+        // Return/forward is generation, NOT a persistence acknowledgement. The
+        // unchanged writer emits its error on stderr; final readers must refuse.
+        assert_eq!(shutdown_ingress(&cfg, &mut reader, &mut |r| forwarded.push(r.clone())), 1);
+        assert_eq!(forwarded.len(), 1);
+        assert!(fs::read_to_string(&audit).is_err());
+        assert!(std::path::Path::new(&audit).is_dir());
+        assert_eq!(shutdown_ingress(&cfg, &mut reader, &mut |_| panic!("retried after write failure")), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn shutdown_with_an_empty_last_interval_writes_nothing() {
         let dir = std::env::temp_dir().join(format!("azazel-shutdown-empty-{}", std::process::id()));

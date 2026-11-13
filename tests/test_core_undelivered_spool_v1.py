@@ -98,16 +98,44 @@ def _accounted(state: dict) -> int:
     return state.get("spooled_total", 0) + state.get("lost_total", 0) + state.get("unconfirmed_at_stop_total", 0)
 
 
-def _spooled_sids(core: Core) -> list:
-    sids = []
+def _spooled_records(core: Core) -> list:
+    records = []
     for name in (core.spool.name + ".1", core.spool.name):
         path = core.spool.with_name(name)
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                record = json.loads(line)
-                if "normalized" in record:
-                    sids.append(record["normalized"]["sid"])
-    return sids
+            records.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    return records
+
+
+def _partition(records, *, allow_stats=False):
+    decisions, audits, stats = [], [], []
+    for record in records:
+        if "normalized" in record:
+            decisions.append(record)
+        elif record.get("schema") == "azazel-edge/forward-stats/v1":
+            assert allow_stats, "forward statistics must never enter the event spool"
+            assert set(record) == {"schema", "dropped", "failed", "sent", "since"}
+            assert all(type(record[key]) is int and record[key] >= 0
+                       for key in ("dropped", "failed", "sent", "since"))
+            stats.append(record)
+        else:
+            assert record.get("schema") == "azazel-edge/ingress-shed/v1", record
+            assert record["interval_end"] == "shutdown", record
+            audits.append(record)
+    return decisions, audits, stats
+
+
+def _shutdown_audit(core: Core, examined: int):
+    rows = [json.loads(line) for line in
+            (core.eve.parent / "log" / "ingress-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1, rows
+    assert rows[0]["source"] == "core_ingress"
+    assert rows[0]["pipeline"] == "rust_ingress_v1"
+    audit = rows[0]["ingress_shed"]
+    assert audit["interval_end"] == "shutdown"
+    assert audit["examined"] == audit["admitted"] == audit["alerts_admitted"] == examined
+    assert audit["shed_total"] == audit["alerts_shed"] == 0
+    return audit
 
 
 def test_observe_only_decisions_survive_an_intake_outage_restarts_and_a_kill(tmp_path, rust_core_bin):
@@ -121,9 +149,13 @@ def test_observe_only_decisions_survive_an_intake_outage_restarts_and_a_kill(tmp
         core.stop()
     state = core.read_state()
     assert state["clean_shutdown"] is True and state["runs"] == 1 and state["unclean_stops"] == 0
-    assert _accounted(state) == 3000, state
-    sids = _spooled_sids(core)
-    assert len(sids) == state["spooled_total"] == len(set(sids))
+    audit = _shutdown_audit(core, 3000)
+    assert _accounted(state) == 3000 + 1, state
+    decisions, audits, _ = _partition(_spooled_records(core))
+    sids = [record["normalized"]["sid"] for record in decisions]
+    assert audits == [audit]
+    assert len(sids) + len(audits) == state["spooled_total"]
+    assert len(sids) == len(set(sids))
     assert set(sids) <= {9_800_000 + n for n in range(3000)}
     assert state["first_undelivered_epoch"] <= state["last_undelivered_epoch"]
     assert not (tmp_path / "log" / "normalized-events.jsonl").exists()
@@ -162,7 +194,7 @@ def test_observe_only_decisions_survive_an_intake_outage_restarts_and_a_kill(tmp
                     while chunk := conn.recv(65536):
                         data += chunk
                     conn.close()
-                    got.extend(l for l in data.decode().splitlines() if '"normalized"' in l)
+                    got.extend(line for line in data.decode().splitlines() if '"normalized"' in line)
             except OSError:
                 pass
 
@@ -186,7 +218,15 @@ def test_the_spool_is_bounded_and_counts_what_its_cap_drops(tmp_path, rust_core_
     finally:
         core.stop()
     state = core.read_state()
-    kept = len(_spooled_sids(core))
+    audit = _shutdown_audit(core, 600)
+    kept_records = _spooled_records(core)
+    decisions, audits, _ = _partition(kept_records)
+    sids = [record["normalized"]["sid"] for record in decisions]
+    assert len(sids) == len(set(sids))
+    assert set(sids) <= {9_800_000 + n for n in range(600)}
+    assert audits == [audit]
+    assert _accounted(state) == 600 + 1, state
+    kept = len(kept_records)
     assert state["rotated_out_total"] > 0, state
     # Every spooled line is either in the two kept segments or counted out.
     assert kept + state["rotated_out_total"] == state["spooled_total"], (kept, state)
@@ -210,7 +250,7 @@ def test_a_wedged_intake_at_shutdown_leaves_every_decision_delivered_spooled_or_
         time.sleep(4)
     finally:
         core.stop()
-    delivered = 0
+    delivered_records = []
     listener.setblocking(False)
     while True:
         try:
@@ -224,11 +264,25 @@ def test_a_wedged_intake_at_shutdown_leaves_every_decision_delivered_spooled_or_
                 data += chunk
         except OSError:
             pass
-        delivered += sum(1 for l in data.decode().splitlines() if '"normalized"' in l)
+        delivered_records.extend(json.loads(line) for line in data.decode().splitlines())
         conn.close()
     listener.close()
     state = core.read_state()
-    assert delivered + _accounted(state) == 60, (delivered, state)
+    audit = _shutdown_audit(core, 60)
+    delivered_decisions, delivered_audits, delivered_stats = _partition(delivered_records, allow_stats=True)
+    spooled_decisions, spooled_audits, _ = _partition(_spooled_records(core))
+    sids = [record["normalized"]["sid"] for record in delivered_decisions + spooled_decisions]
+    assert len(sids) == len(set(sids))
+    assert set(sids) <= {9_800_000 + n for n in range(60)}
+    assert len(delivered_audits + spooled_audits) <= 1
+    assert all(row == audit for row in delivered_audits + spooled_audits)
+    # Generic counters do not identify the type of a lost/unconfirmed line.
+    # Conserve all 60 decisions AND the independently observed generated audit.
+    # Forward::Stats uses a separate, non-accounted delivery path; its exact
+    # closed shape is checked above rather than treating it as a decision.
+    assert len(delivered_records) == len(delivered_decisions) + len(delivered_audits) + len(delivered_stats)
+    delivered_events = len(delivered_decisions) + len(delivered_audits)
+    assert delivered_events + _accounted(state) == 60 + 1, (delivered_records, state)
     # Lines still on their way at the stop (queued, or blocked mid-delivery)
     # are counted once, as unconfirmed, not silently dropped.
     assert state["unconfirmed_at_stop_total"] > 0, state
@@ -255,6 +309,9 @@ def test_an_unwritable_spool_directory_never_stops_the_core(tmp_path, rust_core_
             core.stop()
         err = core.proc.stderr.read()
         assert "undelivered spool unavailable" in err, err[-500:]
-        assert "20 undelivered decision(s) not kept" in err, err[-800:]
+        _shutdown_audit(core, 20)
+        # Legacy stderr calls every forwarded record a decision: 20 actual
+        # normalized decisions plus the distinct generated shutdown audit.
+        assert "21 undelivered decision(s) not kept" in err, err[-800:]
     finally:
         os.chmod(state_dir, 0o700)
