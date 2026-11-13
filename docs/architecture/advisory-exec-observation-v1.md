@@ -216,3 +216,30 @@ weaker fallback or capability expansion. Dedicated ARM CI's disposable OUTER
 driver creates an empty network namespace before tests; this is harness setup,
 not observer authority. Observer drops to exact BPF/PERFMON+NNP and actorcap0 as
 before. No production networking/service or confinement configuration changes.
+
+## Frozen post-test corrections and scope clarification
+
+First actual product batch retained8passes/1failed link_loss test. The test cached
+a stats map FD before object load, yielding-1, and injected no valid after-event
+fault. Its report honestly stayed uncalibrated/unknown. Original eight public
+cases and explicit missing ninth index remain immutable. Fix only that test hook
+to resolve the map FD AFTERload, and publish available raw capture before verdict
+assertions so future failed controls retain evidence. Index complete describes
+artifact availability, never a passing test. Rerun only that failed actual case.
+
+Focused synthetic FFI regressions independently exposed two implementation guards:
+after a successful kernel identity query, /proc/fdinfo read errors9/77 must mean
+unknown rather than proven lost; disconnect/destroy must preserve any foreign FD.
+Capture must take a bounded exact-dict snapshot BEFORE validation/loading/alllater
+reads, preventing caller mutation from shrinking the captured-event budget after
+the original config was loaded. Retain these failing tests, apply only the guards
+and rerun appropriate affected tests. No permissions/ABI/governance change.
+
+Pre-GO full thread/child inventory is NOT independently observed in this slice.
+The fixed single-thread test worker/code hash is an external harness premise;
+calibration TID==TGID is not a census. Historical diagnostic value
+single_task_window_consistent means only internally consistent calibrated target
+samples, not complete process-tree/window coverage. Absence ALWAYS remains null;
+unseen pre-existing tasks, direct file/network/netlink/IPC authority and native
+executor isolation stay unmeasured. Do not relabel original results or add a
+success flag. Any actual creation attempt still forces unknown consistency.
