@@ -359,6 +359,8 @@ def test_so03_optional_after_core_runs_after_wait_inside_work_lifetime(
 
 
 def test_applied_joins_writer_before_pre_stop_snapshot(monkeypatch, tmp_path):
+    import threading
+
     events = []
     out = {}
     capture = f.FinalAudit(out)
@@ -366,10 +368,17 @@ def test_applied_joins_writer_before_pre_stop_snapshot(monkeypatch, tmp_path):
     class Load:
         def __init__(self, *a):
             self.stop = SimpleNamespace(
-                wait=lambda *a: None, set=lambda: events.append("stop")
+                wait=lambda *a: None,
+                set=lambda: events.append("stop"),
+                is_set=lambda: False,
             )
             self.error = None
-            self.window = {}
+            self.ready = threading.Event()
+            self.ready.set()
+            self.alive = True
+            self.window = {
+                "window_start_monotonic_ns": time.monotonic_ns() - 3_000_000_000
+            }
             self.written = {}
             self.written_bytes = 0
 
@@ -378,9 +387,10 @@ def test_applied_joins_writer_before_pre_stop_snapshot(monkeypatch, tmp_path):
 
         def join(self, **kw):
             events.append("join")
+            self.alive = False
 
         def is_alive(self):
-            return False
+            return self.alive
 
     monkeypatch.setattr(so11, "QuotaLoad", Load)
     monkeypatch.setattr(

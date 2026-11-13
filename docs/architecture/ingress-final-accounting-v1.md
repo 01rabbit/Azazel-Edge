@@ -188,3 +188,10 @@ Do not move or widen recorded windows, change sample timestamps, discard the
 early sample, or repair this failed record. Deterministic tests must cover delayed
 writer startup, exact warm-up boundary and missing/failed readiness; actual new
 final-head CI and independent review are required after the correction.
+
+Correction validation: 158 affected synthetic tests passed (the original140 plus
+18 delayed-start/readiness/boundary tests); three real-Core cases were deliberately
+not repeated locally because new final-head CI must exercise actual processes.
+Independent review of the correction is clean. The small Linux six-case evidence
+above belongs to the preceding implementation before this warm-up correction;
+its bytes remain immutable and are not represented as a new-head execution.

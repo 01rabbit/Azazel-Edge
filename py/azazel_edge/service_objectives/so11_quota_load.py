@@ -141,6 +141,7 @@ class QuotaLoad(threading.Thread):
         self.eve = eve
         self.rate = float(rate_per_s)
         self.stop = threading.Event()
+        self.ready = threading.Event()
         self.written = {k: 0 for k in NON_ALERT_KINDS}
         self.written_bytes = 0
         self.window: Dict[str, Optional[int]] = {}
@@ -149,18 +150,20 @@ class QuotaLoad(threading.Thread):
     def run(self) -> None:
         try:
             fd = os.open(str(self.eve), os.O_WRONLY | os.O_APPEND | os.O_CLOEXEC)
-        except OSError as exc:
+        except Exception as exc:
             self.error = f"{exc.__class__.__name__}"
+            self.ready.set()
             return
-        share = self.rate / len(NON_ALERT_KINDS)
-        t0 = time.monotonic()
-        self.window = {
-            "window_start_monotonic_ns": time.monotonic_ns(),
-            "window_start_boottime_ns": _boottime_ns(),
-            "window_end_monotonic_ns": None,
-            "window_end_boottime_ns": None,
-        }
         try:
+            share = self.rate / len(NON_ALERT_KINDS)
+            t0 = time.monotonic()
+            self.window = {
+                "window_start_monotonic_ns": time.monotonic_ns(),
+                "window_start_boottime_ns": _boottime_ns(),
+                "window_end_monotonic_ns": None,
+                "window_end_boottime_ns": None,
+            }
+            self.ready.set()
             while True:
                 stopping = self.stop.is_set()
                 elapsed = time.monotonic() - t0
@@ -194,6 +197,28 @@ class QuotaLoad(threading.Thread):
                 os.close(fd)
             except OSError as exc:
                 self.error = (self.error + "; " if self.error else "") + f"writer close {exc.__class__.__name__}"
+            self.ready.set()  # Also wake a failed startup; error/alive checks refuse it.
+
+
+def _wait_warmup(load: QuotaLoad) -> None:
+    """Wait from the writer's actual timestamp, never from Thread.start()."""
+    def fail(reason: str) -> None:
+        load.error = load.error or reason
+        raise RuntimeError(reason)
+
+    if not load.ready.wait(START_WAIT_S):
+        fail("load writer readiness timeout")
+    start = load.window.get("window_start_monotonic_ns")
+    if type(start) is not int or start < 0 or start > time.monotonic_ns():
+        fail("load writer start timestamp unavailable")
+    deadline = start + WARMUP_MS * 1_000_000
+    while True:
+        if load.error is not None or not load.is_alive() or load.stop.is_set():
+            fail("load writer failed or stopped during warm-up")
+        now = time.monotonic_ns()
+        if now >= deadline:
+            return
+        load.stop.wait((deadline - now) / 1_000_000_000)
 
 
 def read_audit(work: Path) -> Tuple[List[Dict[str, Any]], bool]:
@@ -217,7 +242,7 @@ def applied(
     load = QuotaLoad(eve, float(quota["value"]) * factor)
     load.start()
     try:
-        load.stop.wait(WARMUP_MS / 1000.0)
+        _wait_warmup(load)
         yield load
     finally:
         load.stop.set()
