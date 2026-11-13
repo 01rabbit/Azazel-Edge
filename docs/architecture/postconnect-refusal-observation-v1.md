@@ -322,3 +322,28 @@ scratch/allocation templates. Scan all16keys, treat genuine ENOENT as vacancy
 original index once. Counters distinguish successful copies from successful
 publication/overflow. Remaining pending after detach is unknown. Extra observer
 storage is bounded; no new capability/target right or performance/Pi claim.
+
+## Preserved first product matrix and normalized library correction
+
+Frozen5e663b6 ran one actual five-case batch:4failed/1passed under that harness.
+Four cases retained two exact kernel copies, expected actual responses and
+readbacks, but coverage stayed unknown due acquisition_error. Loss injection
+stopped before GO. Original indexd64527398d59054b3941a30adf7a366ccf8057773448b1429ca77de5454ff933
+and36available public files remain immutable; the unavailable case is explicitly
+missing. No all-pass, repaired inventory or retroactive qualification is claimed.
+
+Concrete binding defect: libbpf's documented API returns normalized negative errno,
+not raw syscall -1+ambienterrno. The scoped correction accepts ONLY rc0 as row and
+rc==-ENOENT as vacant/end for event lookup and owned pending enumeration. ALL other
+returns, including raw-1 with errnoENOENT, remain acquisition errors. Reset errno
+before each query for diagnostic hygiene; it never controls normalized return
+classification. No legacy-ABI fallback or permission change.
+
+Before a fresh matrix, assert probe.partial_reasons EXACT[] in every nonfault case,
+including missing_after_sot. That deliberate sample omission cannot mask an
+unrelated collection error. Planned observer loss requires exactly the known
+observer_link_lost reason, retained matching copies and actual own-exit-link fault;
+other acquisition/cleanup errors fail the test. Pure evaluation still preserves
+known facts and unknowns on all errors. Native bytes, event wire and target/role
+permissions are unchanged. A fresh reviewed five-case batch is required because
+the corrected collection binding affects every case; do not combine runs.
