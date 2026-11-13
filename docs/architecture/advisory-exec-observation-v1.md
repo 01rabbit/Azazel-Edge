@@ -195,3 +195,16 @@ are externally registered challenge premises, not natural-language classifiers.
 Pure verification binds original complete input SHA and checks actual governance
 semantics; it must not execute command-looking text to classify it. Test invoker
 output is data, not a real model response or native execution fact.
+
+Public layout fixed before acquisition: EDGE_ADVISORY_EXEC_PUBLIC_DIR is fresh0755,
+nine fixed case directories0755, files0444. Each has plan.json,probe.json,
+actor-control.json,diagnostic.json,manifest.json. Four governance cases additionally
+have governance.raw/audit.raw. Five sensor controls OMIT those two files; their
+manifest slots are None, matching plan None hashes/intake None paths, never empty
+measured files. Manifest has exact six filename keys (all except manifest itself),
+values SHA/size or the two permitted None. Actor-control is explicitly control_only,
+not independent exec evidence. A final ONCE-written case-index.json has exactnine
+case keys, complete/missing artifact state and manifest hash/None; complete is not
+coverage or safety. No overwrite/repair of original captured files. CI fixed64-path
+upper allowlist yields54 actual files for a complete nine-case bundle. No private
+fixtures/keys or native object exported; source/object hashes remain Root premises.
