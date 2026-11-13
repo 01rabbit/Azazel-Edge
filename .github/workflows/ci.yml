@@ -78,9 +78,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev linux-tools-common linux-tools-generic
           # Ubuntu's /usr/sbin wrapper requires an exact running-kernel package.
           # Raw BTF dumping uses the installed tool directly, not that wrapper.
-          bpftool_bin="$(python3 -c 'import glob; paths=sorted(glob.glob("/usr/lib/linux-tools/**/bpftool", recursive=True)); assert paths; print(paths[-1])')"
-          test -n "$bpftool_bin"
-          test -x "$bpftool_bin"
+          bpftool_bin="$(rg --files --follow /usr/lib/linux-tools -g bpftool | sort -V | tail -n 1)"
+          test -n "$bpftool_bin" && test -x "$bpftool_bin"
           dirname "$bpftool_bin" >> "$GITHUB_PATH"
 
       - name: Authenticated input and actual UDP queue observation with separate UIDs
