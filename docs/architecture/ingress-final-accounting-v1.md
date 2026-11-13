@@ -195,3 +195,22 @@ not repeated locally because new final-head CI must exercise actual processes.
 Independent review of the correction is clean. The small Linux six-case evidence
 above belongs to the preceding implementation before this warm-up correction;
 its bytes remain immutable and are not represented as a new-head execution.
+
+## Additional frozen integration expectation: existing forwarding/spool path
+
+Original PR CI43344116074 completed with21420 Python passes and five failures:
+one old test expected no row after100 admitted lines; four spool tests assumed
+all forwarded records were normalized decisions. Existing shutdown forwarding
+also forwards ingress audit rows, so the new single accounting row contributes
+one generic forwarded/spooled/lost/unconfirmed record. It is not a new decision.
+
+Freeze before adapting those tests: preserve the existing forwarding, spool,
+capacity, drop and durability behavior. An empty input must still emit nothing;
+actual admission-only input must emit exactly one truthful shutdown summary.
+Require exact normalized-decision identities/counts and exactly one separate
+actual ingress summary, with all-record accounting conserving both. Rotation and
+wedged-delivery tests must count both types without tolerances or permitting any
+decision loss to disappear. Generic legacy spool counters/stderr wording do not
+prove decision-only counts; an extra audit record cannot substitute for a missing
+decision. No production change is authorized or needed for these test expectations.
+Keep original failures and require new final-head full CI after test adaptation.
