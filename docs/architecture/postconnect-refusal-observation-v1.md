@@ -91,3 +91,18 @@ index<validatedchunk. Every required byte must succeed; no fill, fragment stitch
 or observation-layer/privilege substitution. Independent review and a new scratch
 freeze precede any third actual attempt. The observer still only reads kernel data;
 entry snapshots are bounded readbacks, not atomic hostile-Root/kernel attestation.
+
+The third scratch material was independently reviewed before its actual attempt:
+constant-byte reads are one entry snapshot, not fragment reconstruction. The
+probe does not establish generic metadata-read fault safety; product code must
+check required kernel-read return values explicitly where zero is a valid value.
+No native/product wire or runtime profile is accepted merely from this review.
+
+Literal five-case corpus tests/fixtures/postconnect-refusal/v1/cases.json is fixed
+before product implementation: actual valid hostname patch; devices_not_list;
+invalid_allowed_networks; observer_loss_after_refusal (after both complete copy
+facts); missing_after_sot (explicit submitted-input omission on positive patch).
+All use the same EXISTING Root transport permissions, never a newly admitted
+advisory role. Internal Python branch and authorization-refusal verification stay
+None. The future product may recognize a message only from one bounded complete
+frame-copy record; segmented or truncated copies stay unknown, never stitched.
