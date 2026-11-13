@@ -121,7 +121,10 @@ stderr ends with the exact complete traceback line
 Require normal nonzero returncode, forced=false, error=null. Silence, exit alone,
 other exception, timeout, kill, partial traceback or stdout success is unknown.
 There is no caller-provided refusal/success flag. Actual worker uses unchanged
-runtime authentication before journal reopen; test control is a separate scope.
+runtime authentication before recovery/session mutation; test control is a separate scope.
+The existing reopen path opens, locks, loads and fsyncs the journal before the
+Source snapshot is verified. No pre-open refusal or absence of fsync is claimed;
+constructor failure closes descriptors without appending a new session.
 
 Bounds: plan/trust/enrollment32KiB each, each original artifact1MiB with at most
 4097 LF-delimited rows and no bare CR, each stdout/stderr64KiB. Journal proof
