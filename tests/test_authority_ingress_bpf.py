@@ -545,9 +545,9 @@ def test_identical_distinct_map_slots_preserved_once_across_snapshot_retry(
         os.close(fd)
 
 
-def prototype():
+def prototype(profile="sockaddr_direct"):
     """SYNTHETIC minimal bpftool graph, not a kernel availability claim."""
-    return dict(
+    result = dict(
         types=[
             dict(
                 id=1,
@@ -575,8 +575,80 @@ def prototype():
                 ],
             ),
             dict(id=7, kind="FUNC", name="unix_stream_connect", type_id=6),
+            dict(
+                id=8,
+                kind="INT",
+                name="short unsigned int",
+                size=2,
+                nr_bits=16,
+                bits_offset=0,
+                encoding="(none)",
+            ),
+            dict(
+                id=9,
+                kind="INT",
+                name="char",
+                size=1,
+                nr_bits=8,
+                bits_offset=0,
+                encoding="(none)",
+            ),
+            dict(id=10, kind="ARRAY", type_id=9, index_type_id=1, nr_elems=14),
+            dict(id=11, kind="ARRAY", type_id=9, index_type_id=1, nr_elems=108),
+            dict(
+                id=12,
+                kind="STRUCT",
+                name="sockaddr_un",
+                size=110,
+                vlen=2,
+                members=[
+                    dict(name="sun_family", type_id=8, bits_offset=0),
+                    dict(name="sun_path", type_id=11, bits_offset=16),
+                ],
+            ),
+            dict(id=13, kind="ARRAY", type_id=9, index_type_id=1, nr_elems=0),
+            dict(
+                id=14,
+                kind="UNION",
+                name="(anon)",
+                size=14,
+                vlen=2,
+                members=[
+                    dict(name="sa_data_min", type_id=10, bits_offset=0),
+                    dict(name="(anon)", type_id=15, bits_offset=0),
+                ],
+            ),
+            dict(
+                id=15,
+                kind="STRUCT",
+                name="(anon)",
+                size=0,
+                vlen=2,
+                members=[
+                    dict(name="__empty_sa_data", type_id=16, bits_offset=0),
+                    dict(name="sa_data", type_id=13, bits_offset=0),
+                ],
+            ),
+            dict(id=16, kind="STRUCT", name="(anon)", size=0, vlen=0, members=[]),
         ]
     )
+    address = result["types"][3]
+    address.update(
+        size=16,
+        vlen=2,
+        members=[
+            dict(name="sa_family", type_id=8, bits_offset=0),
+            dict(name="sa_data", type_id=10, bits_offset=16),
+        ],
+    )
+    if profile == "sockaddr_unsized":
+        address.update(name="sockaddr_unsized", size=2)
+        address["members"][1]["type_id"] = 13
+    elif profile == "sockaddr_flex_union":
+        address["members"][1].update(name="(anon)", type_id=14)
+    else:
+        assert profile == "sockaddr_direct"
+    return result
 
 
 def test_fixed_kernel_prototype_accepts_exact_graph_and_qualified_pointers():
@@ -589,8 +661,8 @@ def test_fixed_kernel_prototype_accepts_exact_graph_and_qualified_pointers():
         and proof["prototype_id"] == 6
         and proof["arguments"] == 4
     )
-    value["types"].append(dict(id=8, kind="CONST", type_id=4))
-    value["types"][4]["type_id"] = 8
+    value["types"].append(dict(id=100, kind="CONST", type_id=4))
+    value["types"][4]["type_id"] = 100
     assert b.validate_kernel_prototype(json.dumps(value).encode())["arguments"] == 4
 
 
@@ -625,9 +697,9 @@ def test_fixed_kernel_prototype_rejects_changed_or_ambiguous_graph(fault):
     rows = value["types"]
     proto = rows[5]
     if fault == "missing":
-        rows.pop()
+        rows.pop(6)
     elif fault == "duplicate_function":
-        rows.append(dict(rows[6], id=8))
+        rows.append(dict(rows[6], id=100))
     elif fault == "extra_argument":
         proto["params"].append(dict(name="new_arg", type_id=1))
         proto["vlen"] = 5
@@ -682,3 +754,191 @@ def test_fixed_kernel_prototype_rejects_changed_or_ambiguous_graph(fault):
 def test_fixed_kernel_prototype_rejects_bad_wire(raw):
     with pytest.raises(b.AuthorityIngressBPFError):
         b.validate_kernel_prototype(raw)
+
+
+@pytest.mark.parametrize(
+    "profile", ["sockaddr_direct", "sockaddr_flex_union", "sockaddr_unsized"]
+)
+@pytest.mark.parametrize("encoding", ["(none)", "SIGNED", "CHAR"])
+def test_explicit_address_profiles_and_known_char_representations(profile, encoding):
+    import json
+
+    value = prototype(profile)
+    value["types"][8]["encoding"] = encoding
+    proof = b.validate_kernel_prototype(json.dumps(value).encode())
+    assert proof["address_profile"] == profile
+
+
+def test_only_exact_empty_anonymous_spelling_is_an_alternative():
+    import json
+
+    value = prototype("sockaddr_flex_union")
+    for row in value["types"]:
+        if row.get("name") == "(anon)":
+            row["name"] = ""
+        for member in row.get("members", []):
+            if member["name"] == "(anon)":
+                member["name"] = ""
+    assert (
+        b.validate_kernel_prototype(json.dumps(value).encode())["address_profile"]
+        == "sockaddr_flex_union"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "size",
+        "extra_member",
+        "missing_member",
+        "wrong_member",
+        "offset",
+        "bool_offset",
+        "bitfield",
+        "bool_bitfield",
+        "signed_family",
+        "bool_family",
+        "wide_family",
+        "char_bool",
+        "char_unknown",
+        "char_name",
+        "char_wide",
+        "char_offset",
+        "array_count",
+        "array_bool",
+        "array_element",
+        "unknown_address",
+        "unix_missing",
+        "unix_duplicate",
+        "unix_size",
+        "unix_offset",
+        "unix_member",
+        "unix_array",
+        "union_size",
+        "union_name",
+        "union_member",
+        "union_offset",
+        "union_min_count",
+        "nested_size",
+        "nested_name",
+        "nested_member",
+        "nested_offset",
+        "flex_count",
+        "empty_size",
+        "empty_members",
+        "empty_name",
+        "nested_cycle",
+    ],
+)
+def test_address_layout_profiles_never_flatten_or_guess(fault):
+    import json
+
+    value = prototype(
+        "sockaddr_flex_union"
+        if fault.startswith(("union", "nested", "flex", "empty"))
+        else "sockaddr_direct"
+    )
+    rows = {row["id"]: row for row in value["types"]}
+    address = rows[4]
+    if fault == "size":
+        address["size"] = 15
+    elif fault == "extra_member":
+        address["members"].append(dict(address["members"][0]))
+        address["vlen"] = 3
+    elif fault == "missing_member":
+        address["members"].pop()
+        address["vlen"] = 1
+    elif fault == "wrong_member":
+        address["members"][1]["name"] = "different"
+    elif fault == "offset":
+        address["members"][1]["bits_offset"] = 8
+    elif fault == "bool_offset":
+        address["members"][0]["bits_offset"] = False
+    elif fault == "bitfield":
+        address["members"][0]["bitfield_size"] = 1
+    elif fault == "bool_bitfield":
+        address["members"][0]["bitfield_size"] = False
+    elif fault == "signed_family":
+        rows[8]["encoding"] = "SIGNED"
+    elif fault == "bool_family":
+        rows[8]["encoding"] = "BOOL"
+    elif fault == "wide_family":
+        rows[8]["size"] = 4
+    elif fault == "char_bool":
+        rows[9]["encoding"] = "BOOL"
+    elif fault == "char_unknown":
+        rows[9]["encoding"] = "UNKNOWN"
+    elif fault == "char_name":
+        rows[9]["name"] = "unsigned char"
+    elif fault == "char_wide":
+        rows[9].update(size=2, nr_bits=16)
+    elif fault == "char_offset":
+        rows[9]["bits_offset"] = 1
+    elif fault == "array_count":
+        rows[10]["nr_elems"] = 13
+    elif fault == "array_bool":
+        rows[10]["nr_elems"] = True
+    elif fault == "array_element":
+        rows[10]["type_id"] = 8
+    elif fault == "unknown_address":
+        address["name"] = "sockaddr_storage"
+    elif fault == "unix_missing":
+        value["types"].remove(rows[12])
+    elif fault == "unix_duplicate":
+        value["types"].append(dict(rows[12], id=100))
+    elif fault == "unix_size":
+        rows[12]["size"] = 112
+    elif fault == "unix_offset":
+        rows[12]["members"][1]["bits_offset"] = 32
+    elif fault == "unix_member":
+        rows[12]["members"][1]["name"] = "sa_data"
+    elif fault == "unix_array":
+        rows[11]["nr_elems"] = 107
+    elif fault == "union_size":
+        rows[14]["size"] = 16
+    elif fault == "union_name":
+        rows[14]["name"] = "named_union"
+    elif fault == "union_member":
+        rows[14]["members"][0]["name"] = "sa_data"
+    elif fault == "union_offset":
+        rows[14]["members"][1]["bits_offset"] = 16
+    elif fault == "union_min_count":
+        rows[10]["nr_elems"] = 0
+    elif fault == "nested_size":
+        rows[15]["size"] = 1
+    elif fault == "nested_name":
+        rows[15]["name"] = "named_struct"
+    elif fault == "nested_member":
+        rows[15]["members"][0]["name"] = "wrong_marker"
+    elif fault == "nested_offset":
+        rows[15]["members"][1]["bits_offset"] = 8
+    elif fault == "flex_count":
+        rows[13]["nr_elems"] = 1
+    elif fault == "empty_size":
+        rows[16]["size"] = 1
+    elif fault == "empty_members":
+        rows[16].update(vlen=1, members=[dict(name="extra", type_id=8, bits_offset=0)])
+    elif fault == "empty_name":
+        rows[16]["name"] = "named_empty"
+    elif fault == "nested_cycle":
+        rows[14]["members"][1]["type_id"] = 14
+    with pytest.raises(b.AuthorityIngressBPFError):
+        b.validate_kernel_prototype(json.dumps(value).encode())
+
+
+@pytest.mark.parametrize("fault", ["size", "members", "flex", "family_offset"])
+def test_unsized_profile_has_exact_layout_not_name_only(fault):
+    import json
+
+    value = prototype("sockaddr_unsized")
+    rows = {r["id"]: r for r in value["types"]}
+    if fault == "size":
+        rows[4]["size"] = 16
+    elif fault == "members":
+        rows[4]["members"][1]["name"] = "sa_data_min"
+    elif fault == "flex":
+        rows[13]["nr_elems"] = 14
+    elif fault == "family_offset":
+        rows[4]["members"][0]["bits_offset"] = 16
+    with pytest.raises(b.AuthorityIngressBPFError):
+        b.validate_kernel_prototype(json.dumps(value).encode())

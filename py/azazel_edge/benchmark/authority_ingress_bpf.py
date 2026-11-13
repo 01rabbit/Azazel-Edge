@@ -392,10 +392,122 @@ def validate_kernel_prototype(raw):
             row = resolve(key)
             _need(row["kind"] == "PTR", "prototype pointer required")
             target = resolve(row.get("type_id"))
+            actual = target.get("name")
+            label = actual[:64] if type(actual) is str else "<unnamed>"
             _need(
-                target["kind"] == "STRUCT" and target.get("name") == name,
-                "prototype pointee differs",
+                target["kind"] == "STRUCT" and actual == name,
+                "prototype pointee differs: expected " + name + ", found " + label,
             )
+            return target
+
+        anonymous = ("", "(anon)")
+
+        def layout(row, kind, size, names, offsets):
+            members = row.get("members")
+            _need(
+                row["kind"] == kind
+                and type(row.get("size")) is int
+                and row["size"] == size
+                and type(row.get("vlen")) is int
+                and row["vlen"] == len(names)
+                and type(members) is list
+                and len(members) == len(names),
+                "fixed address layout size/count differs",
+            )
+            for member, name, offset in zip(members, names, offsets):
+                _need(
+                    type(member) is dict
+                    and set(member)
+                    <= {"name", "type_id", "bits_offset", "bitfield_size"}
+                    and (
+                        member.get("name") in anonymous
+                        if name is None
+                        else member.get("name") == name
+                    )
+                    and type(member.get("bits_offset")) is int
+                    and member["bits_offset"] == offset
+                    and type(member.get("bitfield_size", 0)) is int
+                    and member.get("bitfield_size", 0) == 0,
+                    "fixed address member/offset/bitfield differs",
+                )
+            return members
+
+        def scalar(key, size, encodings, name=None):
+            row = resolve(key)
+            _need(
+                row["kind"] == "INT"
+                and (name is None or row.get("name") == name)
+                and type(row.get("size")) is int
+                and row["size"] == size
+                and type(row.get("nr_bits")) is int
+                and row["nr_bits"] == size * 8
+                and type(row.get("bits_offset")) is int
+                and row["bits_offset"] == 0
+                and row.get("encoding") in encodings,
+                "address scalar representation differs",
+            )
+
+        def family(key):
+            scalar(key, 2, ("(none)",))
+
+        def char_array(key, count):
+            row = resolve(key)
+            _need(
+                row["kind"] == "ARRAY"
+                and type(row.get("nr_elems")) is int
+                and row["nr_elems"] == count,
+                "exact address array dimension required",
+            )
+            scalar(row.get("type_id"), 1, ("(none)", "SIGNED", "CHAR"), "char")
+            # The integer index type does not define the address extent; compilers
+            # use ordinary 32/64-bit indices. It must still be a real integer type.
+            index = resolve(row.get("index_type_id"))
+            _need(
+                type(index.get("size")) is int and index["size"] in (4, 8),
+                "array integer index type",
+            )
+            scalar(index["id"], index["size"], ("(none)", "SIGNED"))
+
+        def address_profile(row):
+            name = row.get("name")
+            if name == "sockaddr_unsized":
+                members = layout(row, "STRUCT", 2, ("sa_family", "sa_data"), (0, 16))
+                family(members[0].get("type_id"))
+                char_array(members[1].get("type_id"), 0)
+                return "sockaddr_unsized"
+            _need(
+                name == "sockaddr",
+                "unsupported address pointee: "
+                + (name[:64] if type(name) is str else "<unnamed>"),
+            )
+            members = row.get("members")
+            _need(
+                type(members) is list
+                and len(members) == 2
+                and type(members[1]) is dict,
+                "address members required",
+            )
+            if members[1].get("name") == "sa_data":
+                members = layout(row, "STRUCT", 16, ("sa_family", "sa_data"), (0, 16))
+                family(members[0].get("type_id"))
+                char_array(members[1].get("type_id"), 14)
+                return "sockaddr_direct"
+            members = layout(row, "STRUCT", 16, ("sa_family", None), (0, 16))
+            family(members[0].get("type_id"))
+            union = resolve(members[1].get("type_id"))
+            _need(union.get("name") in anonymous, "anonymous address union required")
+            members = layout(union, "UNION", 14, ("sa_data_min", None), (0, 0))
+            char_array(members[0].get("type_id"), 14)
+            nested = resolve(members[1].get("type_id"))
+            _need(nested.get("name") in anonymous, "anonymous flexible marker required")
+            members = layout(
+                nested, "STRUCT", 0, ("__empty_sa_data", "sa_data"), (0, 0)
+            )
+            empty = resolve(members[0].get("type_id"))
+            _need(empty.get("name") in anonymous, "anonymous empty marker required")
+            layout(empty, "STRUCT", 0, (), ())
+            char_array(members[1].get("type_id"), 0)
+            return "sockaddr_flex_union"
 
         found = [
             row
@@ -422,7 +534,18 @@ def validate_kernel_prototype(raw):
         )
         integer(proto.get("ret_type_id"))
         pointer(params[0].get("type_id"), "socket")
-        pointer(params[1].get("type_id"), "sockaddr")
+        addr = resolve(params[1].get("type_id"))
+        _need(addr["kind"] == "PTR", "address pointer required")
+        profile = address_profile(resolve(addr.get("type_id")))
+        unix = [
+            row
+            for row in rows
+            if row["kind"] == "STRUCT" and row.get("name") == "sockaddr_un"
+        ]
+        _need(len(unix) == 1, "unique concrete Unix address layout required")
+        members = layout(unix[0], "STRUCT", 110, ("sun_family", "sun_path"), (0, 16))
+        family(members[0].get("type_id"))
+        char_array(members[1].get("type_id"), 108)
         integer(params[2].get("type_id"))
         integer(params[3].get("type_id"))
         return dict(
@@ -430,6 +553,7 @@ def validate_kernel_prototype(raw):
             function_id=function["id"],
             prototype_id=proto["id"],
             arguments=4,
+            address_profile=profile,
             btf_sha256=hashlib.sha256(raw).hexdigest(),
         )
     except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:

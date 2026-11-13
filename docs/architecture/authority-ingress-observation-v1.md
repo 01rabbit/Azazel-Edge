@@ -310,3 +310,11 @@ is not universally emitted. Bool/unknown encodings refuse. Family remains unsign
 16bits. Independent sockaddr_un110/path108 and the unchanged copied-buffer/framing
 bounds remain mandatory. New helper tests and read-only baseline gate acceptance
 must precede final CI; this adds no new observation or source-byte conversion.
+
+Compatibility validation before final CI:79 affected prototype/layout tests passed
+(41 unchanged FFI tests deselected). A read-only cap0/no-new-privileges/network-none
+query accepted the actual Linux6.8 BTF specifically as sockaddr_flex_union; no new
+probe, actor, compilation or matrix ran. Independent scoped review CLEAN. Only the
+build-time helper/tests changed; native bytes, captured event wire, existing role
+permissions and all six original diagnostics remain unchanged. New runner profile
+and observation success remain pending, never inferred from this metadata query.
