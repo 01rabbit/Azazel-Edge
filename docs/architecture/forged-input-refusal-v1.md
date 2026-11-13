@@ -194,3 +194,13 @@ binding guard reproduces the original published result exactly, with no fresh
 process or observation. Existing valid observations are not rerun as substitutes.
 Final-head CI additionally retains a fresh public export, must execute the actual
 Linux cases without skips, and remains required before conditional merge.
+
+## Frozen CI environment correction
+
+First PR CI43355694926 selected ubuntu-26.04 for the existing service-objectives
+job's ubuntu-latest alias. Its unchanged Ubuntu24.04-only mirror guard refused
+before dependencies or any measurement. Preserve that failed run. Before fixing
+the workflow, freeze this boundary: pin ONLY that existing job to ubuntu-24.04,
+matching the guard and existing systemd labs. Do not expand the OS/Root/hosted-runner
+guard, change apt security checks, add privileges, skip tests or weaken verdicts.
+All other jobs and runtime policies remain unchanged; new final-head CI required.
