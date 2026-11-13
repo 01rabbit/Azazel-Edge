@@ -87,8 +87,8 @@ jobs:
           # Search permission on this disposable runner only; checkout is readable.
           sudo chmod o+x "$HOME"
           set -o pipefail
-          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_FORGED_REFUSAL_PUBLIC_DIR=$GITHUB_WORKSPACE/forged-refusal-public" .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
-            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py tests/test_outcome_native_confinement_linux.py tests/test_outcome_socket_boundary_linux.py tests/test_outcome_witness_abstract_linux.py tests/test_safety_collection_linux.py tests/test_protected_ingress_linux.py tests/test_udp_queue_linux.py tests/test_udp_queue_lifecycle_linux.py tests/test_source_recovery_linux.py tests/test_source_witness_linux.py tests/test_forged_input_refusal_linux.py tests/test_recorded_nft_collection_linux.py tests/test_paired_safety_queue_linux.py tests/test_udp_payload_copy_linux.py tests/test_udp_copy_credentials_linux.py tests/test_udp_copy_link_lifecycle_linux.py tests/test_paired_safety_payload_copy_linux.py | tee input-auth-uids.log
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_FORGED_REFUSAL_PUBLIC_DIR=$GITHUB_WORKSPACE/forged-refusal-public" "EDGE_FORGED_REFUSAL_V2_PUBLIC_DIR=$GITHUB_WORKSPACE/forged-refusal-v2-public" .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_outcome_input_auth_linux.py tests/test_outcome_live_origin_linux.py tests/test_outcome_service_capture_linux.py tests/test_outcome_witness_service_linux.py tests/test_outcome_native_confinement_linux.py tests/test_outcome_socket_boundary_linux.py tests/test_outcome_witness_abstract_linux.py tests/test_safety_collection_linux.py tests/test_protected_ingress_linux.py tests/test_udp_queue_linux.py tests/test_udp_queue_lifecycle_linux.py tests/test_source_recovery_linux.py tests/test_source_witness_linux.py tests/test_forged_input_refusal_linux.py tests/test_forged_input_refusal_v2_linux.py tests/test_recorded_nft_collection_linux.py tests/test_paired_safety_queue_linux.py tests/test_udp_payload_copy_linux.py tests/test_udp_copy_credentials_linux.py tests/test_udp_copy_link_lifecycle_linux.py tests/test_paired_safety_payload_copy_linux.py | tee input-auth-uids.log
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
@@ -110,6 +110,80 @@ jobs:
             forged-refusal-public/worker.stderr
             forged-refusal-public/result.json
             forged-refusal-public/manifest.json
+          if-no-files-found: error
+
+      - name: Retain public five-case forged-refusal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forged-refusal-v2-public
+          path: |
+            forged-refusal-v2-public/wrong_key/plan.json
+            forged-refusal-v2-public/wrong_key/trust.json
+            forged-refusal-v2-public/wrong_key/before-source.raw
+            forged-refusal-v2-public/wrong_key/before-journal.raw
+            forged-refusal-v2-public/wrong_key/before-anchors.raw
+            forged-refusal-v2-public/wrong_key/after-source.raw
+            forged-refusal-v2-public/wrong_key/after-journal.raw
+            forged-refusal-v2-public/wrong_key/after-anchors.raw
+            forged-refusal-v2-public/wrong_key/worker.stdout
+            forged-refusal-v2-public/wrong_key/worker.stderr
+            forged-refusal-v2-public/wrong_key/result.json
+            forged-refusal-v2-public/wrong_key/reference-frame.raw
+            forged-refusal-v2-public/wrong_key/manifest.json
+            forged-refusal-v2-public/scope_mismatch/plan.json
+            forged-refusal-v2-public/scope_mismatch/trust.json
+            forged-refusal-v2-public/scope_mismatch/before-source.raw
+            forged-refusal-v2-public/scope_mismatch/before-journal.raw
+            forged-refusal-v2-public/scope_mismatch/before-anchors.raw
+            forged-refusal-v2-public/scope_mismatch/after-source.raw
+            forged-refusal-v2-public/scope_mismatch/after-journal.raw
+            forged-refusal-v2-public/scope_mismatch/after-anchors.raw
+            forged-refusal-v2-public/scope_mismatch/worker.stdout
+            forged-refusal-v2-public/scope_mismatch/worker.stderr
+            forged-refusal-v2-public/scope_mismatch/result.json
+            forged-refusal-v2-public/scope_mismatch/reference-frame.raw
+            forged-refusal-v2-public/scope_mismatch/manifest.json
+            forged-refusal-v2-public/replay/plan.json
+            forged-refusal-v2-public/replay/trust.json
+            forged-refusal-v2-public/replay/before-source.raw
+            forged-refusal-v2-public/replay/before-journal.raw
+            forged-refusal-v2-public/replay/before-anchors.raw
+            forged-refusal-v2-public/replay/after-source.raw
+            forged-refusal-v2-public/replay/after-journal.raw
+            forged-refusal-v2-public/replay/after-anchors.raw
+            forged-refusal-v2-public/replay/worker.stdout
+            forged-refusal-v2-public/replay/worker.stderr
+            forged-refusal-v2-public/replay/result.json
+            forged-refusal-v2-public/replay/reference-frame.raw
+            forged-refusal-v2-public/replay/manifest.json
+            forged-refusal-v2-public/chain_corruption/plan.json
+            forged-refusal-v2-public/chain_corruption/trust.json
+            forged-refusal-v2-public/chain_corruption/before-source.raw
+            forged-refusal-v2-public/chain_corruption/before-journal.raw
+            forged-refusal-v2-public/chain_corruption/before-anchors.raw
+            forged-refusal-v2-public/chain_corruption/after-source.raw
+            forged-refusal-v2-public/chain_corruption/after-journal.raw
+            forged-refusal-v2-public/chain_corruption/after-anchors.raw
+            forged-refusal-v2-public/chain_corruption/worker.stdout
+            forged-refusal-v2-public/chain_corruption/worker.stderr
+            forged-refusal-v2-public/chain_corruption/result.json
+            forged-refusal-v2-public/chain_corruption/reference-frame.raw
+            forged-refusal-v2-public/chain_corruption/manifest.json
+            forged-refusal-v2-public/partial_frame/plan.json
+            forged-refusal-v2-public/partial_frame/trust.json
+            forged-refusal-v2-public/partial_frame/before-source.raw
+            forged-refusal-v2-public/partial_frame/before-journal.raw
+            forged-refusal-v2-public/partial_frame/before-anchors.raw
+            forged-refusal-v2-public/partial_frame/after-source.raw
+            forged-refusal-v2-public/partial_frame/after-journal.raw
+            forged-refusal-v2-public/partial_frame/after-anchors.raw
+            forged-refusal-v2-public/partial_frame/worker.stdout
+            forged-refusal-v2-public/partial_frame/worker.stderr
+            forged-refusal-v2-public/partial_frame/result.json
+            forged-refusal-v2-public/partial_frame/reference-frame.raw
+            forged-refusal-v2-public/partial_frame/manifest.json
+            forged-refusal-v2-public/case-index.json
           if-no-files-found: error
 
       - name: Run tests
