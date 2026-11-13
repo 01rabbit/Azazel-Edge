@@ -79,3 +79,112 @@ agents/model changes. Root integrates fixed conditions, evidence, final-head CI
 and exact base/head/tree, merges only clean candidates and updates existing400/393.
 If the environment cannot support passive observation, retain exact limitations
 and complete only safe independently testable parts without fabricated success.
+
+## Actual feasibility and final product freeze BEFORE implementation
+
+The first probe compiled but cross-UID /proc/actor/ns/pid stat was refused EACCES;
+retain this failure. A scoped second probe enrolled observer's own PID namespace
+and actually matched actors with the existing kernel namespace helper. Offline
+Linux AArch64 raw_tp/sys_enter loaded/attached with exactly BPF+PERFMON and NNP;
+two cap0/NNP UID1000 actors produced actual execve entries (benign and absent-path).
+Task group-leader start_boottime matched proc startticks (USER_HZ100). This proves
+only feasibility, not execveat, governance, creation or absence coverage.
+
+FIRST PRODUCT ONLY supports native64 AArch64, rejecting other architectures
+before compile/load. x86 CS/ELF checks alone do not exclude INT0x80 compatibility
+syscalls; no unproven x86 profile or relaxed guard is accepted. A dedicated
+mandatory ubuntu-24.04-arm CI job must run actual cases without skips. General
+x86 CI still runs pure/regression tests, not a skipped substitute ARM acquisition.
+
+Kernel mode guard reads KERNEL pt_regs.pstate and requires(pstate&0x1f)==0;
+no user memory, argv or filenames. Closed actual native syscall IDs are getpid172,
+execve221,execveat281,clone220,clone3435; fixed root-build headers/BTF/layout verified.
+One raw_tp/sys_enter program owns ARRAY maps config1/state1/events64/stats1.
+ABI exact Config56: u64 pidns_device,pidns_inode,actor_start_ticks,started_ns,
+deadline_ns; u32 actor_tgid,actor_uid,user_hz,max_events. State32: u64
+calibrated_at_ns,start_boottime_ns; u32 tgid,tid,uid,native_abi. Event48: u64
+monotonic_ns,start_boottime_ns,syscall_id; u32 tgid,tid,uid,event_kind,native_abi,
+reserved. Stats64 eightu64: observed,emitted,overflow,identity_failure,abi_rejected,
+uncalibrated,creation_attempts,calibration_conflict. native_abi only1; reserved0.
+event_kind is independently derived getpid0/exec1/creation2, never caller authority.
+
+Actual getpid after attachment calibrates immutable kernel group-leader start_ns
+before GO, after proc-tick/namespace/UID match. Later events require EXACT start_ns;
+conflict is sticky. Initial counter/tick/proc/actor reports alone do not calibrate.
+Any creation attempt, ABI/identity/calibration failure, overflow or link loss
+withholds consistency. Do not attach again and repair a lost interval. Any already
+valid captured exec entries survive later failure, including cleanup uncertainty;
+snapshot data before owned cleanup, return partial reasons rather than erase it.
+Owned link identity is sampled {fd,link_id,prog_id,link_type:1,tp_name:'sys_enter',
+prog_tag}; IDs positive, tag16hex. Its normal close is not global object absence.
+
+Nine closed actual cases: ordinary_advice,command_prose,extra_keys,
+forbidden_intent,execve_success,execve_failed,execveat_failed,creation_attempt,
+link_loss. Four governance cases call UNCHANGED AIGovernance.invoke and real
+P0AuditLogger with a fixed declared TEST invoker, no model/network or executor
+patch. Allowed ordinary/command-looking prose produces input/output-adopted;
+extra executable keys produces input/review-rejected/output-fallback; execute
+intent produces input/decision-blocked and zero TEST invoker calls. Real exec
+controls use fixed /usr/bin/true and fixed absent paths, not advisory strings.
+execveat tests only a failed fixed-path attempt. Creation control reaps its own
+bounded child, while observation stays incomplete. Link-loss control loses only
+own observer link AFTER a captured failed exec and preserves that positive.
+These controls prove the observation layer, not native defense execution.
+
+## Frozen data/API/intake
+
+verify_advisory_exec_observation(plan_raw,*,expected_plan_sha256,probe_raw,
+governance_raw,audit_raw) is PURE: no files/processes/network/signing/audit writes.
+Plan canonical JSON+LF <=32KiB exact keys schema_version(edge-advisory-exec-plan/v1),
+capture_id,case_id,kernel_boot_id,architecture(aarch64),actor,configuration,go,
+worker,observer_source_sha256,observer_object_sha256,probe_sha256,
+governance_sha256,audit_sha256. Actor exact tgid,uid,start_ticks,pidns_device,
+pidns_inode,user_hz100,code_sha256,input_sha256. Input hash binds canonical+LF
+{case_id,context,raw_payload,invoker_output} for governance cases; controls bind
+canonical+LF{case_id}. Code/object/source hashes are external Root premises, not
+cryptographic execution truth. Acquisition uses the fixed first-party BPF source
+and externally pinned object, no arbitrary callback/command or target write.
+GO exact release_before_ns/release_after_ns brackets actual pipewrite; do not
+retime. Require calibration<=before<=after; event/call timestamps>=before mean
+inside the possible challenge interval, not precise causation after write.
+Worker exact started_ns,exited_ns,returncode,forced,error. Optional raw None iff
+corresponding hash None; missing is unknown, never an empty successful measurement.
+
+Probe canonical+LF <=64KiB, exact schema_version(edge-advisory-exec-probe/v1),
+architecture,started_ns,finished_ns,configuration,calibration,events,counters,
+partial_reasons,link_identity. Config/State/Event/Stats field names follow exact
+ABI above; calibration may be None, counters may be None if unavailable and
+link_identity may be None after actual link loss. <=64 events, strict typed uints.
+Partial reason vocabulary: observer_link_lost,identity_failure,abi_rejected,
+uncalibrated,creation_attempt,calibration_conflict,overflow,acquisition_error,
+observer_cleanup_unverified. Raw known entries must survive missing stats/link.
+
+Governance canonical+LF <=64KiB exact case_id,context,raw_payload,invoker_output,
+result,invoker_calls,call_started_ns,call_finished_ns. Recompute exact boundary
+semantics with pure existing should_invoke/sanitize_payload/validate_output only;
+never invoke callbacks or logging in analysis. Audit ORIGINAL P0 serialization
+is not canonical sorted wire: strict bounded parse <=64KiB/8rows, existing hash-
+chain/genesis, exact stage/payload/trace/source sequence, no rotation/extra rows.
+ai_assist is not a durable-kind record; no fsync/physical persistence claim.
+
+New sealed intake collect_advisory_exec_observation(enrollment_path,*,
+expected_enrollment_sha256,expected_plan_sha256). Enrollment canonical+LF32KiB,
+exact schema_version(edge-advisory-exec-enrollment/v1),plan_sha256,reader_uid,
+kernel_boot_id,paths:{plan,probe,governance,audit}; missing paths/hashes matchedNone.
+Reuse protectedRoot0444/single-link/heldFD/allclose/actualboot reader fences,
+nonroot reader distinct actorUID. Published copies may be0755 directories/0444
+files; original worker/audit and sensor resources remain separate. No keys.
+
+Diagnostic edge-advisory-exec-diagnostic/v1 separately reports nullable
+governance_boundary_consistent and kernel_exec_attempt_count (>0 or None NEVER0),
+coverage_disposition unknown|single_task_window_consistent, reasons/raw hashes.
+Even healthy absence remains unknown; no finite safety zero. Bad audit/governance
+never erases valid kernel-positive entries. Missing probe never becomes zero.
+All5authorityflagsFALSE/qualified_safety_countNULL. Strict duplicate/nonfinite/
+bool/depth32/size limits, old schemas unchanged, supported ARM only; native ELF,
+original link and capability proof are Root/controller provenance premises.
+
+Implementation owns pure diagnostic/intake/unit tests; Linux owner owns passive
+native/FFI and nine actual cases; Root owns CI/public replay/final integration.
+Freeze positive/negative/loss/unsupported/identity/bad-audit cases before code,
+run appropriate regressions, exact-head review/fullCI and refs/tree before merge.
