@@ -191,6 +191,108 @@ jobs:
           . .venv/bin/activate
           PYTHONPATH=.:py pytest -q
 
+  advisory-exec-arm:
+    # Native ARM profile only. Unsupported x86/compat is not a skipped success.
+    name: Advisory exec observation (aarch64, offline)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Provision the isolated lab toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          bpftool_bin="$(rg --files --follow /usr/lib/linux-tools -g bpftool | sort -V | tail -n 1)"
+          test -n "$bpftool_bin" && test -x "$bpftool_bin"
+          dirname "$bpftool_bin" >> "$GITHUB_PATH"
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements/runtime.txt -r requirements/input-auth.txt pytest
+      - name: Actual passive ARM observer and governance controls (offline)
+        run: |
+          sudo chmod o+x "$HOME"
+          set -o pipefail
+          # Namespace construction belongs only to the disposable driver. The
+          # observer drops irreversibly to BPF/PERFMON+NNP; actors have no caps.
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_ADVISORY_EXEC_PUBLIC_DIR=$GITHUB_WORKSPACE/advisory-exec-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_advisory_exec_linux.py | tee advisory-exec-linux.log
+          grep -Eq "^9 passed" advisory-exec-linux.log
+          ! grep -Eq "skipped|failed|error" advisory-exec-linux.log
+      - name: Retain only public advisory exec evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: advisory-exec-public
+          path: |
+            advisory-exec-public/ordinary_advice/plan.json
+            advisory-exec-public/ordinary_advice/probe.json
+            advisory-exec-public/ordinary_advice/governance.raw
+            advisory-exec-public/ordinary_advice/audit.raw
+            advisory-exec-public/ordinary_advice/actor-control.json
+            advisory-exec-public/ordinary_advice/diagnostic.json
+            advisory-exec-public/ordinary_advice/manifest.json
+            advisory-exec-public/command_prose/plan.json
+            advisory-exec-public/command_prose/probe.json
+            advisory-exec-public/command_prose/governance.raw
+            advisory-exec-public/command_prose/audit.raw
+            advisory-exec-public/command_prose/actor-control.json
+            advisory-exec-public/command_prose/diagnostic.json
+            advisory-exec-public/command_prose/manifest.json
+            advisory-exec-public/extra_keys/plan.json
+            advisory-exec-public/extra_keys/probe.json
+            advisory-exec-public/extra_keys/governance.raw
+            advisory-exec-public/extra_keys/audit.raw
+            advisory-exec-public/extra_keys/actor-control.json
+            advisory-exec-public/extra_keys/diagnostic.json
+            advisory-exec-public/extra_keys/manifest.json
+            advisory-exec-public/forbidden_intent/plan.json
+            advisory-exec-public/forbidden_intent/probe.json
+            advisory-exec-public/forbidden_intent/governance.raw
+            advisory-exec-public/forbidden_intent/audit.raw
+            advisory-exec-public/forbidden_intent/actor-control.json
+            advisory-exec-public/forbidden_intent/diagnostic.json
+            advisory-exec-public/forbidden_intent/manifest.json
+            advisory-exec-public/execve_success/plan.json
+            advisory-exec-public/execve_success/probe.json
+            advisory-exec-public/execve_success/governance.raw
+            advisory-exec-public/execve_success/audit.raw
+            advisory-exec-public/execve_success/actor-control.json
+            advisory-exec-public/execve_success/diagnostic.json
+            advisory-exec-public/execve_success/manifest.json
+            advisory-exec-public/execve_failed/plan.json
+            advisory-exec-public/execve_failed/probe.json
+            advisory-exec-public/execve_failed/governance.raw
+            advisory-exec-public/execve_failed/audit.raw
+            advisory-exec-public/execve_failed/actor-control.json
+            advisory-exec-public/execve_failed/diagnostic.json
+            advisory-exec-public/execve_failed/manifest.json
+            advisory-exec-public/execveat_failed/plan.json
+            advisory-exec-public/execveat_failed/probe.json
+            advisory-exec-public/execveat_failed/governance.raw
+            advisory-exec-public/execveat_failed/audit.raw
+            advisory-exec-public/execveat_failed/actor-control.json
+            advisory-exec-public/execveat_failed/diagnostic.json
+            advisory-exec-public/execveat_failed/manifest.json
+            advisory-exec-public/creation_attempt/plan.json
+            advisory-exec-public/creation_attempt/probe.json
+            advisory-exec-public/creation_attempt/governance.raw
+            advisory-exec-public/creation_attempt/audit.raw
+            advisory-exec-public/creation_attempt/actor-control.json
+            advisory-exec-public/creation_attempt/diagnostic.json
+            advisory-exec-public/creation_attempt/manifest.json
+            advisory-exec-public/link_loss/plan.json
+            advisory-exec-public/link_loss/probe.json
+            advisory-exec-public/link_loss/governance.raw
+            advisory-exec-public/link_loss/audit.raw
+            advisory-exec-public/link_loss/actor-control.json
+            advisory-exec-public/link_loss/diagnostic.json
+            advisory-exec-public/link_loss/manifest.json
+            advisory-exec-public/case-index.json
+          if-no-files-found: error
+
   outcome-systemd:
     name: Outcome real systemd (${{ matrix.flavor }}, no OS reboot)
     runs-on: ubuntu-24.04

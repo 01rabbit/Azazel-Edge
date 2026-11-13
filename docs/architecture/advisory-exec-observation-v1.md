@@ -243,3 +243,31 @@ samples, not complete process-tree/window coverage. Absence ALWAYS remains null;
 unseen pre-existing tasks, direct file/network/netlink/IPC authority and native
 executor isolation stay unmeasured. Do not relabel original results or add a
 success flag. Any actual creation attempt still forces unknown consistency.
+
+## Validation record before final CI
+
+Pure diagnostic/intake61 synthetic tests passed using real unchanged governance
+and audit functions;40 synthetic FFI boundary tests passed, including the three
+original failures and duplicate-slot raw preservation.21 existing governance/
+arbiter/advisory regressions plus4subtests passed. These are distinct from kernel
+observation and do not prove actual probe attachment or production safety.
+
+The first actual ARM batch retained8passes/1test-fault failure. Only the failed
+link-loss case was rerun after the scoped test/backend corrections: it passed,
+retaining one actual failed-exec entry after own link loss with unknown coverage.
+All nine actual controls are covered across these separate immutable runs; they
+are NOT one successful repeated matrix. Original eight-case index SHA256
+`7ca716754437d17ee117cad1f00ca94712c77f460420eb16af076582845eed6b`;
+corrected-link-only index SHA256
+`09e42b4b347569bc8e3fc1be408a9beedd29123d3138db373f57aa21f5ac14e4`.
+Each keeps its other missing cases explicit. Both inventories/manifests/raw hashes
+were verified; pure final-code replay reproduces all nine original diagnostics
+exactly without new queries/processes or rewriting original results.
+
+Governance cases match actual admission/result/audit stages but have no matching
+exec entry; attempt count stays null, never zero. Three direct exec controls each
+retain one entry; creation withholds consistency; link loss preserves one entry
+and unknown consistency. None of this proves general advisory-to-native isolation,
+command identity, successful effect, full task inventory, physical durability or
+whole-system safety. Final mandatory ARM CI requires exactly9passed/no skips,
+fresh public originals, independent final review and exact refs/tree before merge.
