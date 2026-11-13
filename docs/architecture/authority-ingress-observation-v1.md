@@ -248,3 +248,39 @@ affected clock/conflict tests passed after it. Final FFI suite66tests passed,
 including25 prototype negatives. A separate real unchanged writer contract test
 checks the existing audit shape; synthetic kernel receipts remain synthetic.
 Final-head complete CI and independent exact-tree/artifact review remain required.
+
+## Explicit second kernel address profile (fixed before new CI observation)
+
+First CI43394642536 refused the second-argument pointee before compilation/load:
+authority6 setup errors, no observations/public authority artifact. Its remaining
+unchanged jobs were cancelled. The log does NOT expose the actual pointee name;
+sockaddr_unsized is a candidate until a checked new runner reports that profile.
+Local Linux6.8 originals remain separate, never relabeled as new-kernel results.
+
+Primary upstream conversion85cb0757d7e1f9370a8b52a8b8144c37941cba0a changes the
+connect callback address type while retaining the four arguments/int return and
+protocol-body sockaddr_un cast. Pinned source23eb7901811a06805ec7d6e766dd82f083d03204:
+[protocol](https://code.googlesource.com/linux/torvalds/linux/+/23eb7901811a06805ec7d6e766dd82f083d03204/net/unix/af_unix.c),
+[kernel copy](https://code.googlesource.com/linux/torvalds/linux/+/23eb7901811a06805ec7d6e766dd82f083d03204/net/socket.c),
+[address definition](https://github.com/torvalds/linux/blob/23eb7901811a06805ec7d6e766dd82f083d03204/include/linux/socket.h),
+[Unix layout](https://github.com/torvalds/linux/blob/23eb7901811a06805ec7d6e766dd82f083d03204/include/uapi/linux/un.h).
+
+Support ONLY two explicitly identified BTF profiles: sockaddr (size16, sa_family
+unsigned16 atbit0, char sa_data[14] atbit16) and sockaddr_unsized (size2, samefamily,
+flexiblechar sa_data[] atbit16). Require exact two members/names, no bitfields,
+known signedness-neutral 8-bit CHAR representation and exact array dimensions.
+Also require one sockaddr_un STRUCT size110 with unsigned16sun_family atbit0 and
+char sun_path[108] atbit16. Family is unsigned16/no bool/signed encoding. Resolve
+only the already bounded acyclic typedef/qualifier wrappers. Keep all existing
+unique-function, ordered parameter names/types, signed32return/args and four-slot
+checks. Unknown names, void pointers, unexpected layout/array/encoding/members,
+extra args or return changes still refuse. Diagnostics may name the bounded public
+BTF symbol that differed; no unbounded memory/BTF dump is exported.
+
+Build proof adds address_profile to control-only facts with BTF digest/functionID;
+no C event/plan/diagnostic/enrollment conversion, target reads or extra authority.
+The unsized declaration itself does NOT establish buffer bounds. Existing kernel
+move_addr_to_kernel storage/callback semantics plus <=110/path+3 checks remain
+required, and peer filesystem binding is unchanged. No inferred source/prototype
+success: new actual CI compile/load/six controls, original artifact replay and
+independent final-head review are mandatory before merge.
