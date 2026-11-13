@@ -204,3 +204,15 @@ the workflow, freeze this boundary: pin ONLY that existing job to ubuntu-24.04,
 matching the guard and existing systemd labs. Do not expand the OS/Root/hosted-runner
 guard, change apt security checks, add privileges, skip tests or weaken verdicts.
 All other jobs and runtime policies remain unchanged; new final-head CI required.
+
+The same first run's Python job also selected Ubuntu26.04:260 actual Linux cases
+passed (including both new refusal/control cases), while24 existing UDP-copy
+cases failed at compilation under its changed toolchain. No sensor success is
+claimed for those cases. Pin this job to the prior validated Ubuntu24.04 as well;
+do not modify sensor source/compiler stack limits or skip unsupported cases.
+
+Public upload separately failed because its new Root-owned export directory was
+0700. Only the fixed-whitelist PUBLIC COPY directory will be0755 with files0444,
+so the ordinary CI uploader can read it. Original private/runtime and Root-sealed
+intake directories/permissions remain unchanged. Test the public-copy readability
+from an unprivileged existing UID; no key/private fixture is exported.
