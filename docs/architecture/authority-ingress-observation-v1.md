@@ -211,7 +211,10 @@ row has exact fields kind,ts,source,peer_uid,path,device_count,diff,patched_coun
 For this fixed single-device recipe patched_count must be integer1. No requested_by
 fields occur in the delivered Root recipe; the spoofed negative body never reaches
 parsing. Synthetic parser data must include the real writer's existing field,
-not a separately invented log schema. Kernel group-leader birth start_ns must be
-positive and no later than the observed event; conflicting exact birth values
-within the same coarse proc tick make consistency unknown while preserving known
-samples/rows. Synthetic clocks must obey these physical ordering conditions.
+not a separately invented log schema. Kernel group-leader birth start_ns must be positive; conflicting exact birth
+values within the same coarse proc tick make consistency unknown while preserving
+known samples/rows. start_ns is kernel start_boottime (BOOTTIME), whereas at_ns is
+bpf_ktime_get_ns (MONOTONIC). Their ordering MUST NOT be compared: suspend changes
+the offset, and zero time-namespace offsets do not eliminate it. No inferred clock
+offset or translated timestamps are introduced. Synthetic data may represent a
+no-suspend profile but cannot turn cross-clock ordering into an acceptance gate.
