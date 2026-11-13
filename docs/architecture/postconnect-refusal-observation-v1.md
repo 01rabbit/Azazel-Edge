@@ -64,3 +64,19 @@ backfill, implicit conversion of #604 v1 artifacts, production/HIL/physical or
 whole-system safety acceptance. Existing98%/1.2x criteria are unchanged. Freeze
 positive/negative/lifecycle/loss/identity cases and exact unknown rules next, once
 kernel feasibility is observed. All authority flags false/qualified safety null.
+
+## Preserved feasibility failure and scoped follow-up
+
+First isolated probe compiled and exact kernel BTF prototype validation passed,
+but the verifier rejected the signed helper length before either attachment.
+No copy observation exists. Both waiting fixture processes were forcibly reaped
+on failure, not reported as clean completion. Original source/object/log/result
+and stopped container are retained independently.
+
+The next bounded feasibility attempt may only change the helper size to an
+explicitly unsigned, verifier-bounded length and add the predeclared receive guards:
+AF_UNIX/SOCK_STREAM, known non-PEEK/non-OOB/non-ERRQUEUE flags, user-destination
+iterator (data_source=false and exact observed UBUF/IOVEC type), checked linear
+consumed+skip/chunk. No permission, hook/observation-layer or fallback substitution.
+The finite scratch probe's128-byte bound is not yet the product payload contract.
+Product corpus/wire/coverage/export remain unfrozen until actual feasibility.
