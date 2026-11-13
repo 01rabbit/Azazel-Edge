@@ -188,3 +188,10 @@ Implementation owns pure diagnostic/intake/unit tests; Linux owner owns passive
 native/FFI and nine actual cases; Root owns CI/public replay/final integration.
 Freeze positive/negative/loss/unsupported/identity/bad-audit cases before code,
 run appropriate regressions, exact-head review/fullCI and refs/tree before merge.
+
+Exact four governance input literals are fixed in
+tests/fixtures/advisory-exec/v1/governance.json before actual tests. Case labels
+are externally registered challenge premises, not natural-language classifiers.
+Pure verification binds original complete input SHA and checks actual governance
+semantics; it must not execute command-looking text to classify it. Test invoker
+output is data, not a real model response or native execution fact.
