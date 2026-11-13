@@ -118,12 +118,13 @@ def test_a_stop_writes_the_last_interval_once_and_is_not_held_by_the_poll_interv
     assert stderr.count("azazel-edge-core stopping: 1 ingress summary record(s)") == 1
 
 
-def test_a_stop_with_nothing_pending_writes_nothing(rust_core_bin, tmp_path):
-    # 100 lines are admitted whole: nothing is shed, so no summary at all.
-    proc, err = _start(rust_core_bin, tmp_path, 100, 200)
+@pytest.mark.parametrize("lines", [0, 100], ids=["empty", "admitted-only"])
+def test_empty_stop_is_empty_and_admission_tail_is_accounted(rust_core_bin, tmp_path, lines):
+    proc, err = _start(rust_core_bin, tmp_path, lines, 200)
     try:
         assert _wait_for(lambda: "azazel-edge-core started" in (tmp_path / "core.stderr").read_text(encoding="utf-8"), 20.0)
         time.sleep(0.5)
+        assert _summaries(tmp_path) == []  # periodic emission remains shed-only
         rc, took = _stop(proc, [signal.SIGTERM])
     finally:
         if proc.poll() is None:
@@ -131,5 +132,13 @@ def test_a_stop_with_nothing_pending_writes_nothing(rust_core_bin, tmp_path):
             proc.wait(timeout=10)
         err.close()
     assert rc == 0 and took < STOP_BOUND_S
-    assert _summaries(tmp_path) == []
-    assert "stopping: 0 ingress summary record(s)" in (tmp_path / "core.stderr").read_text(encoding="utf-8")
+    summaries = _summaries(tmp_path)
+    if lines == 0:
+        assert summaries == []
+    else:
+        assert len(summaries) == 1
+        summary = summaries[0]
+        assert summary["interval_end"] == "shutdown"
+        assert summary["examined"] == summary["admitted"] == lines
+        assert summary["shed_total"] == summary["alerts_shed"] == 0
+    assert f"stopping: {int(lines > 0)} ingress summary record(s)" in (tmp_path / "core.stderr").read_text(encoding="utf-8")

@@ -214,3 +214,19 @@ decision loss to disappear. Generic legacy spool counters/stderr wording do not
 prove decision-only counts; an extra audit record cannot substitute for a missing
 decision. No production change is authorized or needed for these test expectations.
 Keep original failures and require new final-head full CI after test adaptation.
+
+The existing forward-stats/v1 control heartbeat bypasses undelivered event
+accounting. Tests validate its exact closed shape and integer types separately;
+it is forbidden in the spool and cannot substitute for any decision/audit event.
+Unknown records still fail. Targeted offline Linux validation initially passed
+eight cases and exposed a test classifier omission for this heartbeat; the failed
+case passed after that test-only correction. Both attempts are retained, with no
+runtime change. All nine cases are covered; no unchanged successful cases were
+repeated locally.
+
+The warm-up-corrected production head10eec8bf also completed full SO11 CI's six
+conditions (200/200 SO03,150/150 SO04-start,110/110 SO07 at each load level), with
+no unmet prerequisites and graceful exit0 throughout. Record SHA256
+`7f0ff9ea2691183438b52bdb2318702c1e2c3d52ca03e8ba5d2c9eab08b20de0`.
+The verdict remains not_measurable for declared provisional/hardware gaps.
+Test-only integration adaptation still requires final-head full CI before merge.
