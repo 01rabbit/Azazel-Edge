@@ -152,7 +152,7 @@ class FakeNative:
 
     def next(self, *a):
         C.set_errno(errno.ENOENT)
-        return -1
+        return -errno.ENOENT
 
 
 @pytest.mark.parametrize(
@@ -516,7 +516,12 @@ def test_changed_or_ambiguous_btf_refuses(fault):
     "rc,error,expected",
     [
         (0, 0, "value"),
-        (-1, errno.ENOENT, "vacant"),
+        (-errno.ENOENT, 0, "vacant"),
+        (-errno.ENOENT, errno.ENOENT, "vacant"),
+        (-errno.ENOENT, errno.EPERM, "vacant"),
+        (-1, errno.ENOENT, "error"),
+        (-13, errno.ENOENT, "error"),
+        (-77, errno.ENOENT, "error"),
         (-1, errno.EPERM, "error"),
         (-1, 0, "error"),
         (1, errno.ENOENT, "error"),
@@ -734,3 +739,32 @@ def test_fault_worker_resolves_loaded_map_and_waits_for_both_original_frames():
     calls = list(state["fd_calls"])
     shim.check_link(identity)
     assert state["closed"] == [25] and state["fd_calls"] == calls
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "root_patch",
+        "devices_not_list",
+        "invalid_allowed_networks",
+        "observer_loss_after_refusal",
+        "missing_after_sot",
+    ],
+)
+def test_actual_harness_never_masks_acquisition_error_with_planned_uncertainty(case):
+    from test_postconnect_refusal_linux import _assert_probe_reasons
+
+    expected = ["observer_link_lost"] if case == "observer_loss_after_refusal" else []
+    _assert_probe_reasons(case, json.dumps({"partial_reasons": expected}).encode())
+    with pytest.raises(AssertionError):
+        _assert_probe_reasons(
+            case,
+            json.dumps({"partial_reasons": expected + ["acquisition_error"]}).encode(),
+        )
+    with pytest.raises(AssertionError):
+        _assert_probe_reasons(
+            case,
+            json.dumps(
+                {"partial_reasons": expected + ["observer_cleanup_unverified"]}
+            ).encode(),
+        )

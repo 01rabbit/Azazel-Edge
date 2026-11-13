@@ -176,10 +176,9 @@ class _Libbpf(_Tracing):
     def lookup_optional(self, fd, key, value):
         C.set_errno(0)
         rc = self.lib.bpf_map_lookup_elem(fd, C.byref(key), C.byref(value))
-        error = C.get_errno()
         if rc == 0:
             return value
-        if rc == -1 and error == errno.ENOENT:
+        if rc == -errno.ENOENT:
             return None
         raise PostconnectCopyBPFError("event lookup failed")
 
@@ -357,7 +356,7 @@ def _capture_events(
                 )
                 if rc == 0:
                     reason("pending_not_empty")
-                elif C.get_errno() != errno.ENOENT:
+                elif rc != -errno.ENOENT:
                     reason("acquisition_error")
             except Exception:
                 reason("acquisition_error")

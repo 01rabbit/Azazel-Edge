@@ -178,6 +178,14 @@ def approved_object():
         shutil.rmtree(directory)
 
 
+def _assert_probe_reasons(case_id, probe_raw):
+    # Controlled readback omission never permits unrelated acquisition failures.
+    reasons = json.loads(probe_raw)["partial_reasons"]
+    assert reasons == (
+        ["observer_link_lost"] if case_id == "observer_loss_after_refusal" else []
+    ), reasons
+
+
 @pytest.mark.parametrize("case_id", CASES)
 def test_actual_postconnect_refusal(approved_object, public_export, case_id):
     corpus = json.loads(
@@ -357,6 +365,7 @@ def test_actual_postconnect_refusal(approved_object, public_export, case_id):
         )
         assert actor.returncode == server.returncode == 0, (actor_err, server_err)
         expected = recipe["expected"]
+        _assert_probe_reasons(case_id, probe)
         assert result["response_disposition"] == expected["response_consistency"], (
             result
         )
