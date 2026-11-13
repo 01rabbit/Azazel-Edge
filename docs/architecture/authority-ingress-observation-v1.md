@@ -205,3 +205,13 @@ at that declared path, not a sealed-copy path. Actual audit row.path must equal
 target_paths.sot. This is a pinned Root configuration/readback premise, not proof
 that an unauthenticated audit line caused a write. Fixed harness passes these exact
 paths through existing daemon environment variables; no substituted destination.
+
+Pre-collection source/fixture alignment: the existing real sot_devices_patch audit
+row has exact fields kind,ts,source,peer_uid,path,device_count,diff,patched_count.
+For this fixed single-device recipe patched_count must be integer1. No requested_by
+fields occur in the delivered Root recipe; the spoofed negative body never reaches
+parsing. Synthetic parser data must include the real writer's existing field,
+not a separately invented log schema. Kernel group-leader birth start_ns must be
+positive and no later than the observed event; conflicting exact birth values
+within the same coarse proc tick make consistency unknown while preserving known
+samples/rows. Synthetic clocks must obey these physical ordering conditions.
