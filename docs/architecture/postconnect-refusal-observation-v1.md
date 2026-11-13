@@ -80,3 +80,14 @@ iterator (data_source=false and exact observed UBUF/IOVEC type), checked linear
 consumed+skip/chunk. No permission, hook/observation-layer or fallback substitution.
 The finite scratch probe's128-byte bound is not yet the product payload contract.
 Product corpus/wire/coverage/export remain unfrozen until actual feasibility.
+
+The second finite attempt also refused before attachment: compiler spill/reload
+lost the verifier's dynamic-size bound. No copy observations exist; original v1/v2
+sources/objects/logs/results and stopped containers remain separate. Forced cleanup
+of waiting fixture actors is recorded as failure cleanup, not clean completion.
+A third proposed material change snapshots the SAME contiguous checked kernel
+range through a fixed unrolled128-byte loop, constant1-byte helpers only where
+index<validatedchunk. Every required byte must succeed; no fill, fragment stitching
+or observation-layer/privilege substitution. Independent review and a new scratch
+freeze precede any third actual attempt. The observer still only reads kernel data;
+entry snapshots are bounded readbacks, not atomic hostile-Root/kernel attestation.
