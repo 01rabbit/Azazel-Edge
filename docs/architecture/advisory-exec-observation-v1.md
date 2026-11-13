@@ -271,3 +271,11 @@ and unknown consistency. None of this proves general advisory-to-native isolatio
 command identity, successful effect, full task inventory, physical durability or
 whole-system safety. Final mandatory ARM CI requires exactly9passed/no skips,
 fresh public originals, independent final review and exact refs/tree before merge.
+
+Final-head CI attempt43385132948 failed before observation: the ARM image had no
+rg, so tool selection fell through to Ubuntu's kernel-version wrapper instead of
+the installed real bpftool binary. All nine acquisition setups errored; no public
+observations were produced and none are counted as passes/zero. The scoped CI
+correction uses Python's standard-library glob and separate fail-closed checks to
+select an installed executable. No kernel, observer profile, schema or acceptance
+change; require a complete new final-head CI rather than relabeling this failure.
