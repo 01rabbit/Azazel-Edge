@@ -284,3 +284,29 @@ move_addr_to_kernel storage/callback semantics plus <=110/path+3 checks remain
 required, and peer filesystem binding is unchanged. No inferred source/prototype
 success: new actual CI compile/load/six controls, original artifact replay and
 independent final-head review are mandatory before merge.
+
+### Observed legacy flexible-union layout (before compatibility implementation)
+
+Read-only actual Linux6.8 BTF inspection found that its sockaddr is NOT the direct
+sa_data[14] assumption above. The existing six-case results used the prior strict
+prototype-name gate, not that newly proposed layout gate; do not relabel them as
+layout-validated. Support two known pointee names via THREE exact address_profile
+values: sockaddr_direct, sockaddr_flex_union, sockaddr_unsized. The direct/unsized
+layouts remain as defined above. Additional observed sockaddr_flex_union requires:
+
+- sockaddr STRUCT size16: sa_family unsigned16 atbit0; one anonymous UNION atbit16.
+- UNION size14: exactly sa_data_min:char[14] atbit0 and one anonymous STRUCT atbit0.
+- Nested STRUCT size0: exactly __empty_sa_data (empty anonymous STRUCT size0) and
+  sa_data:char[0], both atbit0. The empty marker has no members.
+- Anonymous member names are the explicit empty/(anon) representation emitted by
+  the trusted bpftool JSON, not arbitrary names. All exact names/counts/offsets/
+  sizes/array bounds and known scalar encodings are checked; no bitfields, cycles,
+  unexpected nesting, generic member flattening or recursive name search.
+
+The primary [v6.8 socket definition](https://github.com/torvalds/linux/blob/v6.8/include/linux/socket.h)
+uses the explicit union/DECLARE_FLEX_ARRAY form. C char means an exact8-bit INT
+named char with known ordinary signed/unsigned/CHAR encodings; a CHAR encoding flag
+is not universally emitted. Bool/unknown encodings refuse. Family remains unsigned
+16bits. Independent sockaddr_un110/path108 and the unchanged copied-buffer/framing
+bounds remain mandatory. New helper tests and read-only baseline gate acceptance
+must precede final CI; this adds no new observation or source-byte conversion.
