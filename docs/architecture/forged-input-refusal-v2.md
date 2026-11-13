@@ -105,3 +105,29 @@ after collection, including failures: exact five kind keys map to
 {state:'complete'|'missing',manifest_sha256:sha256_or_null}. Completeness describes
 public artifact availability only, not safety/admission. Missing remains explicit;
 no repair, invented measurements or replacement of completed case files.
+
+## Validation before final CI (2026-11-13)
+
+49 unchanged v1 plus49 new v2 unit cases passed;112 existing Source/witness
+regressions passed. The shared refactor reproduced the original #601 published
+v1 result exactly from its separately retained manifest-bound bytes. Synthetic
+unit metadata and real test cryptography are not actual process observations.
+
+ONE offline Linux matrix executed ten fresh uniquely named lab scopes: five
+matched valid-next controls and five negatives.10passed, no skips/failures/retries.
+Each negative produced its exact real runtime exception; original Source/journal/
+anchors bytes AND enrolled original metadata remained unchanged. Each separate
+valid control advanced the authenticated cursor as explicit missed backlog, not
+Outcome/app consumption. Existing producer1000/consumer65534/witnessRoot/reader65533
+roles, five setup capabilities, NNP, network-none and read-only code were retained.
+Sealed-reader/unsafe-file/forbidden-reader and public UID1000 readability/hash
+checks passed. Test lifecycle/registration labels and foreign key are lab data,
+not native execution or independent production custody.
+
+The fixed66 public files were retained, with all five case entries complete.
+Original case-index SHA256
+`904e41e80101e8038a0ead1e2ab90accfc099efd5dfe43e46da0c0d7b194071c`.
+Each case manifest and all12 original file SHA/size bindings were checked; pure
+offline replay reproduced all five published results exactly without new process,
+key, query or observation. Original files were not rewritten. Independent code
+review is clean; final-head complete CI and exact base/head/tree remain merge gates.

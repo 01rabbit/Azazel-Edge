@@ -10,6 +10,7 @@ from .forged_input_refusal import (
     _sha,
     _integer,
     verify_forged_input_refusal,
+    verify_forged_input_refusal_v2,
 )
 from azazel_edge.outcome.input_auth import TrustPolicy
 
@@ -30,7 +31,30 @@ SLOTS = (
 def collect_forged_input_refusal(
     enrollment_path, *, expected_enrollment_sha256, expected_plan_sha256
 ):
-    """Verify sealed finite samples; never query a live journal or witness."""
+    """Original v1 enrollment boundary, never v2 adoption."""
+    return _collect(
+        enrollment_path,
+        expected_enrollment_sha256=expected_enrollment_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+        version=1,
+    )
+
+
+def collect_forged_input_refusal_v2(
+    enrollment_path, *, expected_enrollment_sha256, expected_plan_sha256
+):
+    """Explicit v2 enrollment including its original reference artifact."""
+    return _collect(
+        enrollment_path,
+        expected_enrollment_sha256=expected_enrollment_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+        version=2,
+    )
+
+
+def _collect(
+    enrollment_path, *, expected_enrollment_sha256, expected_plan_sha256, version
+):
     held = collection._HeldFiles()
     failure = result = None
     try:
@@ -54,14 +78,16 @@ def collect_forged_input_refusal(
         collection._require(
             _sha(raw) == expected_enrollment_sha256
             and enrollment["schema_version"]
-            == "edge-forged-input-refusal-enrollment/v1"
+            == f"edge-forged-input-refusal-enrollment/v{version}"
             and enrollment["plan_sha256"] == expected_plan_sha256
             and uid == enrollment["reader_uid"]
             and boot == enrollment["kernel_boot_id"],
             "external enrollment/reader/boot differs",
         )
         paths = enrollment["paths"]
-        safety._fields(paths, " ".join(SLOTS))
+        safety._fields(
+            paths, " ".join(SLOTS) + (" reference_frame" if version == 2 else "")
+        )
         plan_raw, trust_raw = read(paths["plan"], 32768), read(paths["trust"], 32768)
         plan = _object(plan_raw, 32768)
         trust = TrustPolicy(_object(trust_raw, 32768))
@@ -84,7 +110,17 @@ def collect_forged_input_refusal(
                 )
         stdout, stderr = read(paths["stdout"], 65536), read(paths["stderr"], 65536)
         held.verify()
-        evaluation = verify_forged_input_refusal(
+        extra = (
+            {"reference_frame_raw": read(paths["reference_frame"], 65536)}
+            if version == 2
+            else {}
+        )
+        verifier = (
+            verify_forged_input_refusal_v2
+            if version == 2
+            else verify_forged_input_refusal
+        )
+        evaluation = verifier(
             plan_raw,
             expected_plan_sha256=expected_plan_sha256,
             trust_raw=trust_raw,
@@ -92,6 +128,7 @@ def collect_forged_input_refusal(
             after=samples["after"],
             stdout_raw=stdout,
             stderr_raw=stderr,
+            **extra,
         )
         held.verify()
         collection._require(
@@ -99,7 +136,7 @@ def collect_forged_input_refusal(
             "reader/boot changed",
         )
         result = dict(
-            schema_version="edge-forged-input-refusal-collection/v1",
+            schema_version=f"edge-forged-input-refusal-collection/v{version}",
             evaluation=evaluation,
             provenance=dict(
                 enrollment_sha256=expected_enrollment_sha256,

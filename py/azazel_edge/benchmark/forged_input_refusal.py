@@ -3,7 +3,13 @@
 import hashlib
 import uuid
 
-from azazel_edge.outcome.input_auth import SourceVerifier, TrustPolicy, hex_bytes
+from azazel_edge.outcome.input_auth import (
+    SourceVerifier,
+    TrustPolicy,
+    hex_bytes,
+    verify_signature,
+    SOURCE_DOMAIN,
+)
 from azazel_edge.outcome.input_witness import validate_state
 from azazel_edge.outcome.journal import (
     OutcomeJournalError,
@@ -208,18 +214,186 @@ def _journal(raw, policy, source_identity, prefix, anchors, journal_identity):
 def verify_forged_input_refusal(
     plan_raw, *, expected_plan_sha256, trust_raw, before, after, stdout_raw, stderr_raw
 ):
-    """Read-only consistency over sealed originals; no runtime or safety authority."""
+    """Original v1 boundary; no v2 format or challenge adoption."""
+    return _verify(
+        plan_raw,
+        expected_plan_sha256=expected_plan_sha256,
+        trust_raw=trust_raw,
+        before=before,
+        after=after,
+        stdout_raw=stdout_raw,
+        stderr_raw=stderr_raw,
+        version=1,
+        reference_frame_raw=None,
+    )
+
+
+def verify_forged_input_refusal_v2(
+    plan_raw,
+    *,
+    expected_plan_sha256,
+    trust_raw,
+    before,
+    after,
+    stdout_raw,
+    stderr_raw,
+    reference_frame_raw,
+):
+    """Five explicitly enrolled finite challenges, never execution authority."""
+    return _verify(
+        plan_raw,
+        expected_plan_sha256=expected_plan_sha256,
+        trust_raw=trust_raw,
+        before=before,
+        after=after,
+        stdout_raw=stdout_raw,
+        stderr_raw=stderr_raw,
+        version=2,
+        reference_frame_raw=reference_frame_raw,
+    )
+
+
+REASONS = {
+    "wrong_key": "authentication signature invalid",
+    "scope_mismatch": "signed input identity/sequence mismatch",
+    "replay": "signed input identity/sequence mismatch",
+    "chain_corruption": "signed input identity/sequence mismatch",
+    "partial_frame": "incomplete input tail; automatic resume refused",
+}
+
+
+def _challenge_v2(policy, plan, prefix, suffix, reference, result):
+    challenge = plan["challenge"]
+    _need(
+        type(reference) is bytes and 0 < len(reference) <= 65536,
+        "reference unavailable or oversized",
+    )
+    _need(
+        _sha(reference) == challenge["reference_frame_sha256"], "reference hash differs"
+    )
+    rows = _rows(reference)
+    _need(len(rows) == 1, "one reference frame required")
+    row = rows[0]
+    verifier = SourceVerifier(policy)
+    verifier.verify(prefix + reference)
+    _need(
+        row["boot_ref"] == plan["expected_context"]["boot_ref"]
+        and row["event"]["capture_origin"]["session_ref"]
+        == plan["expected_context"]["session_ref"]
+        and row["event"]["capture_origin"]["kind"] == "session_start",
+        "reference selected session/start differs",
+    )
+    result["reference_frame_authenticated"] = True
+    kind = challenge["kind"]
+    if kind == "partial_frame":
+        cut = challenge["partial_bytes"]
+        _need(
+            0 < cut < len(reference)
+            and suffix == reference[:cut]
+            and b"\n" not in suffix,
+            "partial reference prefix differs",
+        )
+        direct_reason = "invalid bounded signed source"
+    elif kind == "replay":
+        _need(
+            suffix == prefix.splitlines(keepends=True)[-1],
+            "original replay frame differs",
+        )
+        direct_reason = REASONS[kind]
+    else:
+        submitted = _rows(suffix)
+        _need(len(submitted) == 1, "one challenge frame required")
+        submitted = submitted[0]
+        mutable = {"signature"}
+        if kind == "scope_mismatch":
+            mutable.add("scope_ref")
+            _ref(submitted["scope_ref"])
+            _need(submitted["scope_ref"] != row["scope_ref"], "scope was not changed")
+        elif kind == "chain_corruption":
+            mutable.add("prev")
+            safety._hex(submitted["prev"])
+            _need(submitted["prev"] != row["prev"], "chain was not changed")
+        _need(
+            set(submitted) == set(row)
+            and safety._same(
+                {k: v for k, v in submitted.items() if k not in mutable},
+                {k: v for k, v in row.items() if k not in mutable},
+            ),
+            "nonisolated mutation",
+        )
+        _need(submitted["signature"] != row["signature"], "signature was not changed")
+        hex_bytes(submitted["signature"], 64)
+        public = (
+            challenge["challenge_public_key"]
+            if kind == "wrong_key"
+            else policy.data["producer_public_key"]
+        )
+        verify_signature(
+            public,
+            submitted["signature"],
+            SOURCE_DOMAIN,
+            {k: v for k, v in submitted.items() if k != "signature"},
+        )
+        direct_reason = REASONS[kind]
+    verifier = SourceVerifier(policy)
+    verifier.verify(prefix)
+    try:
+        verifier.verify(prefix + suffix)
+    except OutcomeJournalError as exc:
+        _need(str(exc) == direct_reason, "unexpected direct verifier reason")
+    else:
+        raise ValueError("challenge was authenticated")
+    result["challenge_verified"] = True
+
+
+def _verify(
+    plan_raw,
+    *,
+    expected_plan_sha256,
+    trust_raw,
+    before,
+    after,
+    stdout_raw,
+    stderr_raw,
+    version,
+    reference_frame_raw,
+):
+    """Shared bounded immutable facts; version selected ONLY by closed wrappers."""
     try:
         safety._hex(expected_plan_sha256)
         plan = _object(plan_raw, 32768)
         _need(_sha(plan_raw) == expected_plan_sha256, "external plan hash differs")
         safety._fields(
             plan,
-            "schema_version capture_id kernel_boot_id expected_trust_sha256 expected_context expected_source_checkpoint expected_anchor_checkpoint samples worker",
+            "schema_version capture_id kernel_boot_id expected_trust_sha256 expected_context expected_source_checkpoint expected_anchor_checkpoint samples worker"
+            + (" challenge" if version == 2 else ""),
         )
         _need(
-            plan["schema_version"] == "edge-forged-input-refusal-plan/v1", "plan schema"
+            plan["schema_version"] == f"edge-forged-input-refusal-plan/v{version}",
+            "plan schema",
         )
+        if version == 2:
+            challenge = plan["challenge"]
+            safety._fields(
+                challenge,
+                "kind reference_frame_sha256 challenge_public_key partial_bytes",
+            )
+            _need(
+                type(challenge["kind"]) is str and challenge["kind"] in REASONS,
+                "challenge kind",
+            )
+            safety._hex(challenge["reference_frame_sha256"])
+            if challenge["kind"] == "wrong_key":
+                safety._hex(challenge["challenge_public_key"])
+            else:
+                _need(
+                    challenge["challenge_public_key"] is None,
+                    "unexpected challenge key",
+                )
+            if challenge["kind"] == "partial_frame":
+                _integer(challenge["partial_bytes"], 1, 65535)
+            else:
+                _need(challenge["partial_bytes"] is None, "unexpected partial length")
         _ref(plan["capture_id"])
         _need(type(plan["kernel_boot_id"]) is str, "boot UUID type")
         _need(
@@ -228,6 +402,15 @@ def verify_forged_input_refusal(
         )
         policy = TrustPolicy(_object(trust_raw, 32768))
         _need(_sha(trust_raw) == plan["expected_trust_sha256"], "trust hash differs")
+        if version == 2 and challenge["kind"] == "wrong_key":
+            _need(
+                challenge["challenge_public_key"]
+                not in (
+                    policy.data["producer_public_key"],
+                    policy.data["witness_public_key"],
+                ),
+                "challenge key roles overlap",
+            )
         safety._fields(plan["samples"], "before after")
         for slots in (before, after, *plan["samples"].values()):
             safety._fields(slots, "source journal anchors")
@@ -269,7 +452,7 @@ def verify_forged_input_refusal(
     except ERRORS as exc:
         raise ForgedInputRefusalInputError(str(exc)) from exc
     result = dict(
-        schema_version="edge-forged-input-refusal-diagnostic/v1",
+        schema_version=f"edge-forged-input-refusal-diagnostic/v{version}",
         status="unknown",
         sampled_state_unchanged=None,
         observed_persistent_change=None,
@@ -282,6 +465,14 @@ def verify_forged_input_refusal(
         reasons=[],
         **safety.FLAGS,
     )
+    if version == 2:
+        result.pop("invalid_signature_verified")
+        result.update(
+            challenge_verified=False,
+            challenge_kind=challenge["kind"],
+            reference_frame_authenticated=False,
+            expected_refusal_reason=REASONS[challenge["kind"]],
+        )
     valid = {}
     for phase, samples in (("before", before), ("after", after)):
         for kind in KINDS:
@@ -328,34 +519,37 @@ def verify_forged_input_refusal(
         )
         prefix = before["source"][: checkpoint["size"]]
         suffix = before["source"][checkpoint["size"] :]
-        rows = _rows(suffix)
-        _need(
-            len(rows) == 1
-            and rows[0]["boot_ref"] == plan["expected_context"]["boot_ref"],
-            "one same-boot challenge required",
-        )
-        event = rows[0].get("event")
-        _need(type(event) is dict, "challenge event object required")
-        origin = event.get("capture_origin")
-        _need(
-            type(origin) is dict
-            and type(origin.get("session_ref")) is str
-            and origin["session_ref"] == plan["expected_context"]["session_ref"],
-            "challenge selected session differs",
-        )
-        hex_bytes(rows[0]["signature"], 64)
-        verifier = SourceVerifier(policy)
-        verifier.verify(prefix)
-        try:
-            verifier.verify(before["source"])
-        except OutcomeJournalError as exc:
-            _need(
-                str(exc) == "authentication signature invalid",
-                "not an eligible invalid signature",
-            )
+        if version == 2:
+            _challenge_v2(policy, plan, prefix, suffix, reference_frame_raw, result)
         else:
-            raise ValueError("challenge signature was accepted")
-        result["invalid_signature_verified"] = True
+            rows = _rows(suffix)
+            _need(
+                len(rows) == 1
+                and rows[0]["boot_ref"] == plan["expected_context"]["boot_ref"],
+                "one same-boot challenge required",
+            )
+            event = rows[0].get("event")
+            _need(type(event) is dict, "challenge event object required")
+            origin = event.get("capture_origin")
+            _need(
+                type(origin) is dict
+                and type(origin.get("session_ref")) is str
+                and origin["session_ref"] == plan["expected_context"]["session_ref"],
+                "challenge selected session differs",
+            )
+            hex_bytes(rows[0]["signature"], 64)
+            verifier = SourceVerifier(policy)
+            verifier.verify(prefix)
+            try:
+                verifier.verify(before["source"])
+            except OutcomeJournalError as exc:
+                _need(
+                    str(exc) == "authentication signature invalid",
+                    "not an eligible invalid signature",
+                )
+            else:
+                raise ValueError("challenge signature was accepted")
+            result["invalid_signature_verified"] = True
         result["baseline_witness_verified"] = True
         _journal(
             before["journal"],
@@ -376,7 +570,15 @@ def verify_forged_input_refusal(
         and _sha(stdout_raw) == worker["stdout_sha256"]
         and _sha(stderr_raw) == worker["stderr_sha256"]
         and stdout_raw == b""
-        and stderr_raw.endswith(REFUSAL)
+        and stderr_raw.endswith(
+            REFUSAL
+            if version == 1
+            else (
+                "azazel_edge.outcome.journal.OutcomeJournalError: "
+                + result["expected_refusal_reason"]
+                + "\n"
+            ).encode()
+        )
         and worker["uid"] == policy.data["observer_uid"]
         and worker["returncode"] > 0
         and worker["forced"] is False
@@ -386,7 +588,9 @@ def verify_forged_input_refusal(
         result["reasons"].append("worker_refusal_unverified")
     if (
         result["sampled_state_unchanged"] is True
-        and result["invalid_signature_verified"]
+        and result[
+            "invalid_signature_verified" if version == 1 else "challenge_verified"
+        ]
         and result["baseline_witness_verified"]
         and result["journal_cursor_structurally_verified"]
         and worker_good
