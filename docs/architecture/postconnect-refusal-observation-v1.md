@@ -347,3 +347,22 @@ other acquisition/cleanup errors fail the test. Pure evaluation still preserves
 known facts and unknowns on all errors. Native bytes, event wire and target/role
 permissions are unchanged. A fresh reviewed five-case batch is required because
 the corrected collection binding affects every case; do not combine runs.
+
+## Fresh actual product result before final CI
+
+Corrected814fe575619c1dee6e435edc9a2493c1165ad69c ran ONE fresh five-case batch:
+5passed/18.68seconds/no skips. Independent pre-copy original index
+983bc3ea2b9c3c2fe10d1ccb31baacbce6cd11ed8910d99e1878a42c0ec8e3a3
+matches all45 copied public originals, five manifests and the intentional absent
+missing_after_sot/sot_after.raw. The first36-file failed inventory stays separate.
+
+All five cases retained two complete copies and reciprocal filesystem-bound socket
+identities. Valid actual SoT/audit update is independently read back; both validation
+refusals leave original byte/metadata samples equal. Controlled loss closes only the
+owned exit link AFTER both copies; only observer_link_lost is reported, copies and
+equality retained/coverageunknown. Deliberate omitted after-SoT leaves clean probe,
+known audit change, SoTunknown/overallunchangedfalse/patchunknown. All actors and
+server exit0/no force; fixture FD holds close before after-samples. Branch/auth/
+qualified-safety remainNone, authorityflagsfalse. No production-close/atomicity/
+physical or whole-system safety acceptance. Final-head fullCI and fresh original
+artifact independent replay/exact refs still gate merge.
