@@ -208,3 +208,11 @@ case keys, complete/missing artifact state and manifest hash/None; complete is n
 coverage or safety. No overwrite/repair of original captured files. CI fixed64-path
 upper allowlist yields54 actual files for a complete nine-case bundle. No private
 fixtures/keys or native object exported; source/object hashes remain Root premises.
+
+Build profile fixed before actual product tests: clang BPF target uses explicit
+-mcpu=v3 for the immutable-calibration atomic operations. Actual kernel load must
+accept that object; unsupported compiler/kernel is a retained setup failure, no
+weaker fallback or capability expansion. Dedicated ARM CI's disposable OUTER
+driver creates an empty network namespace before tests; this is harness setup,
+not observer authority. Observer drops to exact BPF/PERFMON+NNP and actorcap0 as
+before. No production networking/service or confinement configuration changes.
