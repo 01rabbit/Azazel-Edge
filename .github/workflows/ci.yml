@@ -193,7 +193,7 @@ jobs:
 
   advisory-exec-arm:
     # Native ARM profile only. Unsupported x86/compat is not a skipped success.
-    name: Advisory exec observation (aarch64, offline)
+    name: Advisory and authority ingress observation (aarch64, offline)
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -222,6 +222,14 @@ jobs:
             tests/test_advisory_exec_linux.py | tee advisory-exec-linux.log
           grep -Eq "^9 passed" advisory-exec-linux.log
           ! grep -Eq "skipped|failed|error" advisory-exec-linux.log
+      - name: Actual authority ingress and independent readback (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_AUTHORITY_INGRESS_PUBLIC_DIR=$GITHUB_WORKSPACE/authority-ingress-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_authority_ingress_linux.py | tee authority-ingress-linux.log
+          grep -Eq "^6 passed" authority-ingress-linux.log
+          ! grep -Eq "skipped|failed|error" authority-ingress-linux.log
       - name: Retain only public advisory exec evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -292,6 +300,69 @@ jobs:
             advisory-exec-public/link_loss/diagnostic.json
             advisory-exec-public/link_loss/manifest.json
             advisory-exec-public/case-index.json
+          if-no-files-found: error
+
+      - name: Retain only public authority ingress evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authority-ingress-public
+          path: |
+            authority-ingress-public/root_patch/plan.json
+            authority-ingress-public/root_patch/probe.json
+            authority-ingress-public/root_patch/sot_before.raw
+            authority-ingress-public/root_patch/sot_after.raw
+            authority-ingress-public/root_patch/audit_before.raw
+            authority-ingress-public/root_patch/audit_after.raw
+            authority-ingress-public/root_patch/control.json
+            authority-ingress-public/root_patch/diagnostic.json
+            authority-ingress-public/root_patch/manifest.json
+            authority-ingress-public/advisory_dac_denied/plan.json
+            authority-ingress-public/advisory_dac_denied/probe.json
+            authority-ingress-public/advisory_dac_denied/sot_before.raw
+            authority-ingress-public/advisory_dac_denied/sot_after.raw
+            authority-ingress-public/advisory_dac_denied/audit_before.raw
+            authority-ingress-public/advisory_dac_denied/audit_after.raw
+            authority-ingress-public/advisory_dac_denied/control.json
+            authority-ingress-public/advisory_dac_denied/diagnostic.json
+            authority-ingress-public/advisory_dac_denied/manifest.json
+            authority-ingress-public/spoofed_root_dac_denied/plan.json
+            authority-ingress-public/spoofed_root_dac_denied/probe.json
+            authority-ingress-public/spoofed_root_dac_denied/sot_before.raw
+            authority-ingress-public/spoofed_root_dac_denied/sot_after.raw
+            authority-ingress-public/spoofed_root_dac_denied/audit_before.raw
+            authority-ingress-public/spoofed_root_dac_denied/audit_after.raw
+            authority-ingress-public/spoofed_root_dac_denied/control.json
+            authority-ingress-public/spoofed_root_dac_denied/diagnostic.json
+            authority-ingress-public/spoofed_root_dac_denied/manifest.json
+            authority-ingress-public/unrelated_path/plan.json
+            authority-ingress-public/unrelated_path/probe.json
+            authority-ingress-public/unrelated_path/sot_before.raw
+            authority-ingress-public/unrelated_path/sot_after.raw
+            authority-ingress-public/unrelated_path/audit_before.raw
+            authority-ingress-public/unrelated_path/audit_after.raw
+            authority-ingress-public/unrelated_path/control.json
+            authority-ingress-public/unrelated_path/diagnostic.json
+            authority-ingress-public/unrelated_path/manifest.json
+            authority-ingress-public/observer_loss/plan.json
+            authority-ingress-public/observer_loss/probe.json
+            authority-ingress-public/observer_loss/sot_before.raw
+            authority-ingress-public/observer_loss/sot_after.raw
+            authority-ingress-public/observer_loss/audit_before.raw
+            authority-ingress-public/observer_loss/audit_after.raw
+            authority-ingress-public/observer_loss/control.json
+            authority-ingress-public/observer_loss/diagnostic.json
+            authority-ingress-public/observer_loss/manifest.json
+            authority-ingress-public/missing_readback/plan.json
+            authority-ingress-public/missing_readback/probe.json
+            authority-ingress-public/missing_readback/sot_before.raw
+            authority-ingress-public/missing_readback/sot_after.raw
+            authority-ingress-public/missing_readback/audit_before.raw
+            authority-ingress-public/missing_readback/audit_after.raw
+            authority-ingress-public/missing_readback/control.json
+            authority-ingress-public/missing_readback/diagnostic.json
+            authority-ingress-public/missing_readback/manifest.json
+            authority-ingress-public/case-index.json
           if-no-files-found: error
 
   outcome-systemd:
