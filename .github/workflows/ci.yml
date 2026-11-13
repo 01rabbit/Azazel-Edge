@@ -193,7 +193,7 @@ jobs:
 
   advisory-exec-arm:
     # Native ARM profile only. Unsupported x86/compat is not a skipped success.
-    name: Advisory and authority ingress observation (aarch64, offline)
+    name: Independent control observations (aarch64, offline)
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -230,6 +230,14 @@ jobs:
             tests/test_authority_ingress_linux.py | tee authority-ingress-linux.log
           grep -Eq "^6 passed" authority-ingress-linux.log
           ! grep -Eq "skipped|failed|error" authority-ingress-linux.log
+      - name: Actual post-connect validation refusal and original state (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_POSTCONNECT_REFUSAL_PUBLIC_DIR=$GITHUB_WORKSPACE/postconnect-refusal-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_postconnect_refusal_linux.py | tee postconnect-refusal-linux.log
+          grep -Eq "^5 passed" postconnect-refusal-linux.log
+          ! grep -Eq "skipped|failed|error" postconnect-refusal-linux.log
       - name: Retain only public advisory exec evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -363,6 +371,60 @@ jobs:
             authority-ingress-public/missing_readback/diagnostic.json
             authority-ingress-public/missing_readback/manifest.json
             authority-ingress-public/case-index.json
+          if-no-files-found: error
+
+      - name: Retain only public post-connect refusal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postconnect-refusal-public
+          path: |
+            postconnect-refusal-public/root_patch/plan.json
+            postconnect-refusal-public/root_patch/probe.json
+            postconnect-refusal-public/root_patch/sot_before.raw
+            postconnect-refusal-public/root_patch/sot_after.raw
+            postconnect-refusal-public/root_patch/audit_before.raw
+            postconnect-refusal-public/root_patch/audit_after.raw
+            postconnect-refusal-public/root_patch/control.json
+            postconnect-refusal-public/root_patch/diagnostic.json
+            postconnect-refusal-public/root_patch/manifest.json
+            postconnect-refusal-public/devices_not_list/plan.json
+            postconnect-refusal-public/devices_not_list/probe.json
+            postconnect-refusal-public/devices_not_list/sot_before.raw
+            postconnect-refusal-public/devices_not_list/sot_after.raw
+            postconnect-refusal-public/devices_not_list/audit_before.raw
+            postconnect-refusal-public/devices_not_list/audit_after.raw
+            postconnect-refusal-public/devices_not_list/control.json
+            postconnect-refusal-public/devices_not_list/diagnostic.json
+            postconnect-refusal-public/devices_not_list/manifest.json
+            postconnect-refusal-public/invalid_allowed_networks/plan.json
+            postconnect-refusal-public/invalid_allowed_networks/probe.json
+            postconnect-refusal-public/invalid_allowed_networks/sot_before.raw
+            postconnect-refusal-public/invalid_allowed_networks/sot_after.raw
+            postconnect-refusal-public/invalid_allowed_networks/audit_before.raw
+            postconnect-refusal-public/invalid_allowed_networks/audit_after.raw
+            postconnect-refusal-public/invalid_allowed_networks/control.json
+            postconnect-refusal-public/invalid_allowed_networks/diagnostic.json
+            postconnect-refusal-public/invalid_allowed_networks/manifest.json
+            postconnect-refusal-public/observer_loss_after_refusal/plan.json
+            postconnect-refusal-public/observer_loss_after_refusal/probe.json
+            postconnect-refusal-public/observer_loss_after_refusal/sot_before.raw
+            postconnect-refusal-public/observer_loss_after_refusal/sot_after.raw
+            postconnect-refusal-public/observer_loss_after_refusal/audit_before.raw
+            postconnect-refusal-public/observer_loss_after_refusal/audit_after.raw
+            postconnect-refusal-public/observer_loss_after_refusal/control.json
+            postconnect-refusal-public/observer_loss_after_refusal/diagnostic.json
+            postconnect-refusal-public/observer_loss_after_refusal/manifest.json
+            postconnect-refusal-public/missing_after_sot/plan.json
+            postconnect-refusal-public/missing_after_sot/probe.json
+            postconnect-refusal-public/missing_after_sot/sot_before.raw
+            postconnect-refusal-public/missing_after_sot/sot_after.raw
+            postconnect-refusal-public/missing_after_sot/audit_before.raw
+            postconnect-refusal-public/missing_after_sot/audit_after.raw
+            postconnect-refusal-public/missing_after_sot/control.json
+            postconnect-refusal-public/missing_after_sot/diagnostic.json
+            postconnect-refusal-public/missing_after_sot/manifest.json
+            postconnect-refusal-public/case-index.json
           if-no-files-found: error
 
   outcome-systemd:
