@@ -190,3 +190,10 @@ not successful verdict. Partial export precedes verdict assertions; a failed cas
 retains published originals. Upper whitelist55paths; prescribed complete six-case
 run has54files because missing_readback/sot_after.raw is intentionally absent.
 Do not synthesize absent cases or fuse different runs into a success inventory.
+
+Fixed Python client pathname framing requires addr_len==len(ASCIIpath)+3, path
+length1..107, no embeddedNUL/abstract/truncation. The challenge uses direct fixed
+socket.connect, bypassing no privilege check: the ordinary client helper may
+refuse during pathname precheck before the observed kernel function. This is an
+explicit adversarial fixture, not a new product route or evidence that advisory
+code naturally sends commands. Negative DAC prevents request delivery/parsing.
