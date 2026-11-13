@@ -197,3 +197,11 @@ socket.connect, bypassing no privilege check: the ordinary client helper may
 refuse during pathname precheck before the observed kernel function. This is an
 explicit adversarial fixture, not a new product route or evidence that advisory
 code naturally sends commands. Negative DAC prevents request delivery/parsing.
+
+Pre-collection wire clarification: plan additionally requires target_paths exact
+{sot,audit}, distinct normalized absolute ASCII paths<=256bytes to the ORIGINAL
+runtime SoT/audit destinations. Each original sample is the separately read file
+at that declared path, not a sealed-copy path. Actual audit row.path must equal
+target_paths.sot. This is a pinned Root configuration/readback premise, not proof
+that an unauthenticated audit line caused a write. Fixed harness passes these exact
+paths through existing daemon environment variables; no substituted destination.
