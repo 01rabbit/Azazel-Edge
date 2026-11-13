@@ -150,7 +150,10 @@ def test_bootstrap_is_isolated_and_precedes_only_two_affected_jobs():
     assert workflow.count(command) == 2
     for job in ("outcome-systemd", "service-objectives"):
         block = re.search(r"(?ms)^  " + job + r":\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
+        assert "runs-on: ubuntu-24.04" in block
         assert block.index(command) < block.index("sudo apt-get update")
+    python_job = re.search(r"(?ms)^  test-python:\n(.*?)(?=^  [\w-]+:|\Z)", workflow).group(1)
+    assert "runs-on: ubuntu-24.04" in python_job
 
 @pytest.mark.parametrize('scheme', ['http', 'https'])
 @pytest.mark.parametrize('filename,prefix', [

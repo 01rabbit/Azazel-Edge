@@ -216,3 +216,11 @@ Public upload separately failed because its new Root-owned export directory was
 so the ordinary CI uploader can read it. Original private/runtime and Root-sealed
 intake directories/permissions remain unchanged. Test the public-copy readability
 from an unprivileged existing UID; no key/private fixture is exported.
+
+Correction checks:37 existing CI guard regressions passed, including the exact
+two affected host pins. A separate permission-only Linux check copied the retained
+public artifact into a new0755 public directory with0444 files; UID1000 verified
+the exact12-file allowlist and all original manifest hashes/sizes. No verifier,
+Source attempt or protected-state measurement was rerun. Private/runtime/sealed
+permissions and original manifest bytes stayed unchanged. Independent review of
+the two image pins and public-copy boundary is clean; new full CI still required.

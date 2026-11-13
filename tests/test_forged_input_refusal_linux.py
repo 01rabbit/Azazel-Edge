@@ -326,7 +326,8 @@ def _sealed_and_exported(plan_raw, trust, before, after, stdout, stderr, result)
         export = os.environ.get("EDGE_FORGED_REFUSAL_PUBLIC_DIR")
         if export:
             destination = Path(export)
-            destination.mkdir(mode=0o700)
+            destination.mkdir(mode=0o755)
+            destination.chmod(0o755)  # public copies only, independent of umask
             filenames = dict(
                 plan="plan.json",
                 trust="trust.json",
@@ -354,5 +355,60 @@ def _sealed_and_exported(plan_raw, trust, before, after, stdout, stderr, result)
             with (destination / "manifest.json").open("xb") as output:
                 output.write(_json(manifest) + b"\n")
             (destination / "manifest.json").chmod(0o444)
+            _check_public_readability(destination, digest(_json(manifest) + b"\n"))
     finally:
         shutil.rmtree(directory)
+
+
+PUBLIC_READER = r"""
+import hashlib,json,os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1]);expected=sys.argv[2]
+assert os.geteuid()==1000
+names={'plan.json','trust.json','before-source.raw','before-journal.raw','before-anchors.raw','after-source.raw','after-journal.raw','after-anchors.raw','worker.stdout','worker.stderr','result.json','manifest.json'}
+assert set(os.listdir(root))==names
+assert stat.S_IMODE(root.stat().st_mode)==0o755
+raw={}
+for name in sorted(names):
+ fd=os.open(root/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
+ try:
+  info=os.fstat(fd)
+  assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode)==0o444 and info.st_nlink==1 and 0<=info.st_size<=1048576
+  data=b''
+  while len(data)<=info.st_size:
+   chunk=os.read(fd,min(65536,info.st_size+1-len(data)))
+   if not chunk:break
+   data+=chunk
+  assert len(data)==info.st_size
+  raw[name]=data
+ finally:os.close(fd)
+manifest=raw.pop('manifest.json')
+assert hashlib.sha256(manifest).hexdigest()==expected
+entries=json.loads(manifest)
+assert set(entries)==names-{'manifest.json'}
+for name,data in raw.items():assert entries[name]=={'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+print(json.dumps({'uid':os.geteuid(),'files':len(names),'manifest_sha256':expected}))
+"""
+
+
+def _check_public_readability(destination, expected_manifest_sha256):
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            PUBLIC_READER,
+            str(destination),
+            expected_manifest_sha256,
+        ],
+        cwd="/",
+        user=1000,
+        group=1000,
+        extra_groups=[],
+        capture_output=True,
+        text=True,
+        timeout=12,
+    )
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == dict(
+        uid=1000, files=12, manifest_sha256=expected_manifest_sha256
+    )
