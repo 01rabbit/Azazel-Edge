@@ -104,3 +104,22 @@ repeated kind or subsequent periodic row. Missing final read/exit/error/prefix
 proof remains unknown. This avoids requiring a fabricated empty marker and keeps
 periodic/empty behavior unchanged. All actual emitted counters remain additive
 without duplicated earlier snapshots.
+
+### Explicit join clock and pre-stop absence
+
+Also record actual writer_joined_ns (not the writer window-end), and require
+window_end <=writer_joined_ns <=pre-stop read-start/read-end <=stop.requested_ns
+<=stop.exited_ns <=final read-start/read-end. Unknown/missing/boolean-as-integer
+clock facts cannot satisfy imported record revalidation.
+
+Pre-stop snapshot disposition distinguishes present / observed_absent / unavailable.
+An actual lstat FileNotFound BEFORE shutdown is permitted as observed_absent:
+records/records_read/raw_sha256/raw_bytes/file_identity are null, not fabricated
+zero counters or a synthetic empty file. Other pre-stop errors remain unavailable.
+FINAL file absence always fails. For an observed-absent pre-state require a genuine
+new final file and explicit final pre_stop_binding=created_after_observed_absence;
+for present pre-state require same-file exact original prefix and
+pre_stop_binding=same_file_prefix. The general prefix-preserved gate means this
+explicit binding was checked, not that a missing file was read as empty evidence.
+This supports the first admission-only summary creating its audit at shutdown
+without claiming missing traffic or unknown counters are zero.
