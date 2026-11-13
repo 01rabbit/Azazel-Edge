@@ -290,3 +290,12 @@ and state samples. No new actual race scenario is inferred from this fixture.
 Eligible raw chunks must still satisfy the frozen linear/USER-destination/native
 profile. Retaining partial MESSAGE chunks (nonzero consumed/skip or no complete LF)
 does not allow unsupported nonlinear rows to masquerade as published native facts.
+
+Copy-window clarification before collection: actual copy entry/exit must lie in
+their receiver's recorded lifetime and the finite observer window. The fixed
+actor completes within that window for finite-case consistency. Server FD-hold/
+listener cleanup may follow observer finish; require clean handler/server closure
+before after-samples, not invented whole-role-lifetime observation. Later worker
+or cleanup faults withhold completeness without erasing earlier verified chunks
+or independent original changes. Actual daemon reply JSON is strict original
+unsorted serialization, not reserialized/canonicalized evidence.
