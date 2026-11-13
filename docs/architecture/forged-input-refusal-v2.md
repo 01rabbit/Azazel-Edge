@@ -92,3 +92,16 @@ safety, full journal semantics, physical durability, global antirollback or clea
 5. Appropriate regressions, independent final review, final-head complete CI and
    exact live base/head/tree precede conditional merge; update existing #400/#393,
    no duplicate issue. Keep production/Pi-HIL/whole-system/comparative gates open.
+
+## Frozen public layout
+
+New test-only EDGE_FORGED_REFUSAL_V2_PUBLIC_DIR is distinct from the v1 export.
+Fresh0755 root has five fixed case directories named by kind, each0755, each
+containing exactly the v1 public12files plus reference-frame.raw, all0444.
+Each manifest binds12 original files by exact SHA/size. Never export enrollment
+paths, keys or whole private fixtures. CI uses an explicit66-path allowlist:
+five times13files plus root case-index.json. The finalizer writes the index ONCE
+after collection, including failures: exact five kind keys map to
+{state:'complete'|'missing',manifest_sha256:sha256_or_null}. Completeness describes
+public artifact availability only, not safety/admission. Missing remains explicit;
+no repair, invented measurements or replacement of completed case files.
