@@ -242,3 +242,25 @@ written before publication, so publication failure cannot discard it. Mandatory
 Linux CI requires a complete publication index before upload. Publication-only
 replay may reuse existing retained evidence; it does not rerun or requalify the
 actual matrix. Final-head CI remains required.
+
+## Generated-data collection boundary (frozen before CI-only correction)
+
+Final-head run43898767994 passed the mandatory Linux matrix (51.74s) and
+published all99 evidence leaves plus index and log. Independent raw replay
+verified the101-entry archive and original/new evaluations. The later full
+Python suite FAILED during collection: pytest searched Root0700 generated
+synthetic directories for conftest.py and encountered seven PermissionErrors.
+No source test body executed in that step. Keep the failed log and published
+originals; do not change original ownership or modes.
+
+Exclude ONLY the literal generated `window-cost-public` output directory from
+that general pytest discovery command. It contains evidence/setup artifacts,
+not repository test sources. Leave every source test path, mandatory Linux step,
+collection default, evaluator and recording byte unchanged. Before final CI,
+verify the test collection with and without the exact ignore has identical
+source-node IDs in a controlled Linux fixture that also includes tests outside
+the tests/ directory; the unignored protected artifact directory must reproduce
+the original non-root EACCES failure. The ignored run must not enter the0700
+directory. This is a harness boundary correction, not a skipped source test or
+qualification change. A new final-head full CI remains required; do not rerun
+or replace the retained local matrix or failed CI artifact.
