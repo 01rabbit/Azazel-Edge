@@ -441,39 +441,84 @@ def test_a_failed_chain_write_is_counted_in_the_queue(tmp_path, monkeypatch):
         relay.stop()
 
 
+class _HeldAuditFsync:
+    """Scoped audit-module os proxy; hold the real target's fsync call site."""
+
+    def __init__(self, audit, monkeypatch):
+        from azazel_edge.audit import logger
+
+        self.audit = audit
+        self.entered, self.release, self.returned = (threading.Event() for _ in range(3))
+        self.caller = None
+        monkeypatch.setattr(logger, "os", self)
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def fsync(self, fd):
+        opened = os.fstat(fd)
+        named = self.audit.path.stat() if self.audit.path.exists() else None
+        target = named is not None and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
+        if target:
+            if not self.entered.is_set():
+                self.caller = threading.current_thread().name
+            self.entered.set()
+            if not self.release.wait(30):
+                raise RuntimeError("test fsync release liveness guard expired")
+        result = os.fsync(fd)
+        if target:
+            self.returned.set()
+        return result
+
+
+def _submit_prebuilt(recorder, events, done, errors):
+    try:
+        for event in events:
+            recorder.submit(event)
+    except Exception as exc:
+        errors.append(exc)
+    finally:
+        done.set()
+
+
+def _completed_before_fsync_release(gate, completions):
+    return (gate.entered.is_set() and not gate.release.is_set() and not gate.returned.is_set()
+            and all(done.is_set() for done in completions))
+
+
 def test_slow_fsync_never_holds_the_receiver_and_overflow_is_counted(tmp_path, monkeypatch):
-    """Load: every fsync takes 50 ms. Handing 120 P0 decisions from 6
-    threads never waits on a write; what the bounded queue cannot take is
-    counted and written to the P0 queue, never dropped silently."""
+    """Causal dependency regression only; no receiver wall-latency bound."""
 
-    real_fsync = os.fsync
-
-    def slow_fsync(fd):
-        time.sleep(0.05)
-        return real_fsync(fd)
+    batches = [[core_event("throttle", f"trace-{base}-{n}", 9_400_000 + base * 100 + n)
+                for n in range(20)] for base in range(6)]
 
     audit = P0AuditLogger(tmp_path / "core-decision-audit.jsonl")
     relay = attach_p0_alert_relay(audit, tmp_path / "p0-alert-queue.jsonl")
     recorder = CoreDecisionRecorder(audit, relay, None, max_pending=8).start()
+    gate = _HeldAuditFsync(audit, monkeypatch)
+    threads, completions, errors = [], [], []
     try:
         assert recorder.ready.wait(10) and relay.ready.wait(10)
-        monkeypatch.setattr(os, "fsync", slow_fsync)
-        waits: list = []
-        lock = threading.Lock()
-
-        def hand(base: int) -> None:
-            for n in range(20):
-                t0 = time.monotonic()
-                recorder.submit(core_event("throttle", f"trace-{base}-{n}", 9_400_000 + base * 100 + n))
-                with lock:
-                    waits.append(time.monotonic() - t0)
-
-        threads = [threading.Thread(target=hand, args=(b,)) for b in range(6)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        assert max(waits) < 0.05, max(waits)  # never one fsync long
+        seed_done = threading.Event()
+        completions.append(seed_done)
+        seed = threading.Thread(target=_submit_prebuilt,
+                                args=(recorder, batches[0][:1], seed_done, errors), name="test-seed-receiver")
+        threads.append(seed)
+        seed.start()
+        assert gate.entered.wait(10), "writer did not reach target fsync"
+        assert gate.caller == "core-decision-recorder"
+        for base, batch in enumerate(batches):
+            done = threading.Event()
+            completions.append(done)
+            producer = threading.Thread(target=_submit_prebuilt,
+                args=(recorder, batch[1:] if base == 0 else batch, done, errors))
+            threads.append(producer)
+            producer.start()
+        assert all(done.wait(10) for done in completions), "receiver/producer liveness guard expired"
+        assert not errors
+        assert _completed_before_fsync_release(gate, completions)
+        gate.release.set()
+        assert gate.returned.wait(10), "actual fsync did not return after release"
         assert recorder.wait_idle(60)
         m = recorder.metrics()
         assert m["core_record_handoff_dropped_total"] > 0
@@ -484,9 +529,51 @@ def test_slow_fsync_never_holds_the_receiver_and_overflow_is_counted(tmp_path, m
             for s in _statuses(relay.queue.path, "core_record_loss")
         ), timeout=30)
     finally:
-        monkeypatch.setattr(os, "fsync", real_fsync)
+        gate.release.set()
+        for thread in threads:
+            thread.join(timeout=10)
         recorder.stop()
         relay.stop()
+        assert all(not thread.is_alive() for thread in threads)
+
+
+def test_receiver_completion_predicate_rejects_synchronous_durable_write(tmp_path, monkeypatch):
+    """SYNTHETIC injected receiver dependency; same predicate must reject it."""
+
+    event = core_event("throttle", "synchronous-receiver-control", 9_499_999)
+    audit = P0AuditLogger(tmp_path / "control-audit.jsonl")
+    relay = attach_p0_alert_relay(audit, tmp_path / "control-queue.jsonl")
+    recorder = CoreDecisionRecorder(audit, relay, None).start()
+    original_submit = recorder.submit
+
+    def synchronous_submit(value):
+        trace_id, payload = core_decisions.core_decision_payload(value)
+        audit.log_action_decision(trace_id=trace_id, source=core_decisions.CORE_DECISION_SOURCE, **payload)
+        original_submit(value)
+
+    monkeypatch.setattr(recorder, "submit", synchronous_submit)
+    gate = _HeldAuditFsync(audit, monkeypatch)
+    done, errors = threading.Event(), []
+    receiver = threading.Thread(target=_submit_prebuilt, args=(recorder, [event], done, errors),
+                                name="test-synchronous-receiver")
+    try:
+        assert recorder.ready.wait(10) and relay.ready.wait(10)
+        receiver.start()
+        assert gate.entered.wait(10), "injected durable receiver did not reach target fsync"
+        assert gate.caller == "test-synchronous-receiver"
+        assert not _completed_before_fsync_release(gate, [done])
+        assert not done.is_set() and not errors
+        gate.release.set()
+        assert done.wait(10) and gate.returned.wait(10)
+        assert not errors and recorder.wait_idle(10)
+        assert _rows(audit.path) and P0AuditLogger.verify_chain(audit.path)["ok"] is True
+    finally:
+        gate.release.set()
+        if receiver.ident is not None:
+            receiver.join(timeout=10)
+        recorder.stop()
+        relay.stop()
+        assert not receiver.is_alive()
 
 
 def test_reconcile_counts_what_it_could_not_read(tmp_path):
