@@ -246,6 +246,21 @@ jobs:
             tests/test_postconnect_authorization_linux.py | tee postconnect-authorization-linux.log
           grep -Eq "^5 passed" postconnect-authorization-linux.log
           ! grep -Eq "skipped|failed|error" postconnect-authorization-linux.log
+      - name: Actual natural-close receiver completion and original state (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_NATURAL_CLOSE_ABI_PATH=$GITHUB_WORKSPACE/natural-close-abi.json" "EDGE_NATURAL_CLOSE_RECV_PUBLIC_DIR=$GITHUB_WORKSPACE/natural-close-recv-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_natural_close_recv_linux.py | tee natural-close-recv-linux.log
+          grep -Eq "^7 passed" natural-close-recv-linux.log
+          ! grep -Eq "skipped|failed|error" natural-close-recv-linux.log
+      - name: Retain control-only natural-close kernel ABI projection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: natural-close-abi-projection
+          path: natural-close-abi.json
+          if-no-files-found: error
       - name: Retain only public advisory exec evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -487,6 +502,78 @@ jobs:
             postconnect-authorization-public/missing_after_sot/diagnostic.json
             postconnect-authorization-public/missing_after_sot/manifest.json
             postconnect-authorization-public/case-index.json
+          if-no-files-found: error
+
+      - name: Retain only public natural-close receiver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: natural-close-recv-public
+          path: |
+            natural-close-recv-public/own_uid_patch/plan.json
+            natural-close-recv-public/own_uid_patch/probe.json
+            natural-close-recv-public/own_uid_patch/sot_before.raw
+            natural-close-recv-public/own_uid_patch/sot_after.raw
+            natural-close-recv-public/own_uid_patch/audit_before.raw
+            natural-close-recv-public/own_uid_patch/audit_after.raw
+            natural-close-recv-public/own_uid_patch/control.json
+            natural-close-recv-public/own_uid_patch/diagnostic.json
+            natural-close-recv-public/own_uid_patch/manifest.json
+            natural-close-recv-public/root_only_refused/plan.json
+            natural-close-recv-public/root_only_refused/probe.json
+            natural-close-recv-public/root_only_refused/sot_before.raw
+            natural-close-recv-public/root_only_refused/sot_after.raw
+            natural-close-recv-public/root_only_refused/audit_before.raw
+            natural-close-recv-public/root_only_refused/audit_after.raw
+            natural-close-recv-public/root_only_refused/control.json
+            natural-close-recv-public/root_only_refused/diagnostic.json
+            natural-close-recv-public/root_only_refused/manifest.json
+            natural-close-recv-public/spoofed_root_refused/plan.json
+            natural-close-recv-public/spoofed_root_refused/probe.json
+            natural-close-recv-public/spoofed_root_refused/sot_before.raw
+            natural-close-recv-public/spoofed_root_refused/sot_after.raw
+            natural-close-recv-public/spoofed_root_refused/audit_before.raw
+            natural-close-recv-public/spoofed_root_refused/audit_after.raw
+            natural-close-recv-public/spoofed_root_refused/control.json
+            natural-close-recv-public/spoofed_root_refused/diagnostic.json
+            natural-close-recv-public/spoofed_root_refused/manifest.json
+            natural-close-recv-public/partial_read_close/plan.json
+            natural-close-recv-public/partial_read_close/probe.json
+            natural-close-recv-public/partial_read_close/sot_before.raw
+            natural-close-recv-public/partial_read_close/sot_after.raw
+            natural-close-recv-public/partial_read_close/audit_before.raw
+            natural-close-recv-public/partial_read_close/audit_after.raw
+            natural-close-recv-public/partial_read_close/control.json
+            natural-close-recv-public/partial_read_close/diagnostic.json
+            natural-close-recv-public/partial_read_close/manifest.json
+            natural-close-recv-public/actor_death/plan.json
+            natural-close-recv-public/actor_death/probe.json
+            natural-close-recv-public/actor_death/sot_before.raw
+            natural-close-recv-public/actor_death/sot_after.raw
+            natural-close-recv-public/actor_death/audit_before.raw
+            natural-close-recv-public/actor_death/audit_after.raw
+            natural-close-recv-public/actor_death/control.json
+            natural-close-recv-public/actor_death/diagnostic.json
+            natural-close-recv-public/actor_death/manifest.json
+            natural-close-recv-public/observer_stop_after_copy/plan.json
+            natural-close-recv-public/observer_stop_after_copy/probe.json
+            natural-close-recv-public/observer_stop_after_copy/sot_before.raw
+            natural-close-recv-public/observer_stop_after_copy/sot_after.raw
+            natural-close-recv-public/observer_stop_after_copy/audit_before.raw
+            natural-close-recv-public/observer_stop_after_copy/audit_after.raw
+            natural-close-recv-public/observer_stop_after_copy/control.json
+            natural-close-recv-public/observer_stop_after_copy/diagnostic.json
+            natural-close-recv-public/observer_stop_after_copy/manifest.json
+            natural-close-recv-public/missing_after_sot/plan.json
+            natural-close-recv-public/missing_after_sot/probe.json
+            natural-close-recv-public/missing_after_sot/sot_before.raw
+            natural-close-recv-public/missing_after_sot/sot_after.raw
+            natural-close-recv-public/missing_after_sot/audit_before.raw
+            natural-close-recv-public/missing_after_sot/audit_after.raw
+            natural-close-recv-public/missing_after_sot/control.json
+            natural-close-recv-public/missing_after_sot/diagnostic.json
+            natural-close-recv-public/missing_after_sot/manifest.json
+            natural-close-recv-public/case-index.json
           if-no-files-found: error
 
   outcome-systemd:
