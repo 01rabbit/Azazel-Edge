@@ -159,3 +159,44 @@ Preserve every assigned scope and any failure before analysis/export assertions.
 A correctly withheld measurement may be a passing software test, but unknown
 nonempty actual window cost remains unknown. Independent final code/raw-artifact
 review and exact base/head/tree checks precede any conditional merge decision.
+
+## First retained actual matrix and assertion correction (2026-11-16 JST)
+
+Source `765d8871b97fa10972f541d74bc4acd86f085051` ran one existing actual
+network-disabled Linux six-arm matrix plus all seven separate synthetic cases.
+No added capabilities, production service/key, provider or runtime change.
+All six original 1.2x load/98% accounting/marker gates and both genuine on-arm
+normal stops passed; 108,024 non-alerts were written, actual offered rates
+2999.619–2999.926/s. The unchanged sampled 5ms clock qualifier passed, with worst
+discrepancy 1,627,622ns and observed offset-envelope width 33,626ns. Actual
+APPLIED-window exercise and its costs remain unavailable/null.
+
+The first mandatory test FAILED after 50.15s on its overly broad synthetic-case
+status assertion. The analyzer correctly withheld the witness-close case:
+its raw journal has five rows/1935bytes ending in a written LOST row and no CLOSE,
+while the failed witness ACK left memory at the exact four-row/1551byte prefix,
+with pending1/lost0/write_failures1 and no receipt. The original journal writes
+and fsyncs before witness acknowledgement and applies in-memory state afterward.
+An unacknowledged written loss is not a verified protected close or successful loss.
+
+The original report SHA256
+`f1981dc20fe41dd4d85af5d720fb3507b2a494ca48f42ab8a8f7ca33b9d27f92`,
+113 local retained files and failed log remain unchanged. Of these, the closed
+CI/public evidence set is 99 files:62 original normal-clock files,35 declared
+synthetic artifact files plus their manifest, and the new completion report.
+The other14 local files are non-export synthetic fixture setup inputs/policies.
+
+After independent diagnosis, ONLY test assertions were corrected to require
+this witness case WITHHELD with the exact mismatch reason, null receipt, no
+CLOSE and unavailable observed lifecycle. The strict analyzer and its report
+were not changed. The entire corrected assertion function passed against the
+SAME saved report with the runner stubbed; no actual matrix or analyzer rerun.
+A targeted unit regression also passed. This is an assertion correction, not a
+new passing Linux trial or retrospective qualification. The fresh final-head CI
+matrix remains mandatory and its results must be retained separately.
+
+All seven synthetic recipes remain distinct from native APPLIED evidence.
+The30 role/arm cost rows retain partial and unavailable metrics rather than
+zero; Root controller/witness process accounting remains mixed. Original reports,
+clock refusals, missing CPU/I/O, incomplete lifecycle and physical/custody/causal
+limitations are unchanged. Independent artifact replay and full CI remain gates.
