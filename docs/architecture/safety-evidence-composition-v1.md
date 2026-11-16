@@ -169,3 +169,8 @@ against writeopens, mutations, sockets and subprocesses afterimports; compare al
 originalhashes before/after. Existingouter setup UID/GID capability subsetonly,
 no BPF/NET_ADMIN/newpermission required. Required CIUID stage must run all7, not
 skip-as-pass. No new accounts/services/productionkeys or sensors.
+
+Existingmain reported violations (>0) and its originalcategory reason codes are
+also explicit comparisonblockers, labelled main_reported_violation:<category>
+and main:<category>:<reason>. This describes the originalmain result without
+promoting its independence, modifyingcounts or hiding its positive rows.
