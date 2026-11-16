@@ -128,3 +128,22 @@ required dropped-capability/NNP offline test. Final integration, full CI and
 independent final-CI artifact review remain separate gates. No actual protected
 service, provider, real APPLIED window, safe-zero denominator or causal benefit
 has been measured by this software-path test.
+
+## Explicit-output test boundary correction (frozen before implementation)
+
+CI43904637916 failed before the evaluator ran: pytest's unused tmp_path fixture
+followed inherited Root user-name environment after the process was dropped to
+the runner UID, then correctly refused the existing Root-owned pytest temp tree.
+The retained artifact contains only the failure log; no preflight/raw reports
+were created and no comparison observation occurred.
+
+The dedicated Linux test already requires EDGE_PREFLIGHT_PUBLIC_DIR explicitly.
+Remove ONLY the unused tmp_path fixture parameter and unreachable default-path
+fallback, and index that required environment variable directly. Preserve the
+explicit harness skip guard, dropped UID/capabilities/NNP, offline namespace,
+original temp ownership/modes, evaluator, fixtures, wrapper and every assertion.
+Do not loosen or delete the protected Root temp directory. Reproduce the failure
+with an inherited Root name and existing0700Root tree in an isolated Linux
+fixture; the corrected explicit-output test must execute as an ordinary UID
+without touching that tree. Keep failed and corrected runs separate, and require
+new final-head whole CI and independent raw review before merge.
