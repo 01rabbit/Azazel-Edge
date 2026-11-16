@@ -209,3 +209,28 @@ not successful complete-event qualification. A future boundary-versus-recording-
 time protocol needs a separately frozen version; it is outside this slice.
 Original forged v2 also checks its declared source boot_ref==kernel UUID hex;
 that inherited syntactic relation is not independent physical boot attestation.
+
+## First actual offline path trial (2026-11-16 JST)
+
+Committed source `dc0645e8b1826caa9edfb08d981a7dd0f47c098a` executed the two
+existing distinct-scope valid-control/wrong-key paths: **2 passed, no skips,
+12.65s**, in the existing network-disabled Root Linux container with no added
+capabilities and a read-only checkout. Lifecycle payloads and observer keys are
+explicit test premises, not real native defense execution or independent custody.
+
+The genuine wrong-key verifier refused and all eight original finite artifact
+checks were retained; before/after Source, journal and anchors were unchanged.
+The separately scoped genuine valid-input control consumed its input through
+the original recovery path and is control-only, never a forged-input opportunity.
+The new main is partial_signed_rows/incomplete and its binding remains UNKNOWN.
+All four main category counts are null. No main count or eligibility was changed.
+
+Actual Root CLOSE was `40151762784908` against frozen end `40151759828517`.
+The actual clock value was preserved; the deadline was not substituted. The
+2,956,391ns difference is a boundary incompatibility observation, not a 5ms
+clock/performance qualification. Main timing/coverage errors remain original.
+The exported binding-evaluation SHA256 is
+`63c72260f60d38c7b193bd0e265dbbb3a9e827d0a2987a07c4db4c386c18f5de`.
+52 public allowlisted files retain both scopes, prelaunch registration, actual
+process/read brackets, original strict evaluations and signed partial main data.
+Independent replay and final-head complete CI are separate merge gates.
