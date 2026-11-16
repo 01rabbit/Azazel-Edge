@@ -133,3 +133,58 @@ Independent review checks code, originals and exact replay; final-head complete
 CI and base/head/testmerge/tree equality precede merge, postmerge tree checked.
 Update existing #400/#393 with measured scopes/unknowns; keep both OPEN. No new
 Issue, no production/physical/Pi/HIL or whole-system latency/safety acceptance.
+
+## Preimplementation wire/control clarification
+
+20ms is a REQUESTED synthetic wait, not an observed exact delay or pure lock/
+I/O cost. Store genuine target-callsite attempted/entered, primitive-held,
+release and return brackets. Establish same target object/call and a pre-release
+attempt; otherwise mark the control unexercised. Such Python wrapper brackets
+can include descheduling before the delegated acquire and cannot prove exclusive
+kernel mutex waiting. Never infer20ms actual blocking from a requested sleep.
+
+If enabled, runnable control uses exactly one same-UID competitor process with
+a100ms requested CPU window and one50ms requested observed-thread CPU-work
+window, competitor-ready handshake before observation, no affinity/priority/
+policy changes. Retain actual endpoints and counters; no positive runqueue delta
+means unexercised positive control, never rerun. Disabled/unavailable enablement
+means no competitor workload and an explicit unmeasured case.
+
+NotificationRecording metadata EXACT six pins: run_id,case_id,protocol_sha256,
+source_inventory_sha256,fixture_sha256,interpreter_sha256. Header adds pid,
+process_start_ticks,boot_id,clock_domain,resolutions and limits. Thread row:
+native_tid,task_start_ticks,pid,process_start_ticks,boot_id,thread_name. Event row:
+index,event_sha256,core_event_key,trace_id. Intent row: span_id,parent_id,phase,
+object_id,event_index,native_tid,task_start_ticks. Span repeats intent and adds
+outcome,start_ns,end_ns,thread_cpu_start_ns,thread_cpu_end_ns,
+process_cpu_start_ns,process_cpu_end_ns,scheduler_before,scheduler_after.
+End: normal_return=true,active_spans=0,incomplete=false, only after genuine joins.
+All integers strict nonnegative uints, optional identities/unknowns null with
+reasons, outcome returned|raised. Header domain uses existing device/inode/
+timens_offsets/established shape. Resolution floats are finite positive seconds.
+Scheduler snapshots: read_begin_ns,read_end_ns,pid,process_start_ticks,native_tid,
+task_start_ticks,boot_id,schedstats_raw,schedstat_raw,runtime_ns,runqueue_wait_ns,
+timeslices,error. Preserve partial raw even when an error invalidates delta.
+
+bind_event(index,event,key) accepts exact key mapping {core_event_key,trace_id};
+lookup_event(core_event_key string) returns unique index orNone. Optional simple
+introspection: incomplete,rows_written,bytes_written,lost_rows. The bounded
+canonical event_index_raw is {schema_version:edge-notification-event-index/v1,
+events:[{index,event,event_sha256,core_event_key,trace_id}]}. Original-result
+EXACT envelope: schema_version=edge-notification-original-result/v1,case_id,
+assigned_events,completed_submissions,metrics,audit_raw,queue_raw,control,
+collection_errors. Metrics retain original dictionary verbatim or null/error;
+audit_raw/queue_raw retain original UTF8 bytes as strings or null, controls are
+explicit test metadata, not qualifications. Public original files remain
+separately pinned too. Original audit chain verification uses existing helpers
+independently; supplied collector summary is not authentication or safety proof.
+
+Analyzer expected EXACT {header:{six pins,pid,process_start_ticks,boot_id,
+clock_domain},event_index_sha256,original_result_sha256}. Collect those bootstrap
+pins independently before the tracer; do not infer expected pins from supplied
+trace bytes. Source commit/tree live in independently pinned outer manifest;
+source inventory identifies exact executable test/runtime source bytes.
+Strict known envelopes plus bounded original metrics/control JSON preserve all
+material without accepting caller eligibility. Any malformed original/index
+causes local descriptive attribution to be withheld while completed trace prefix
+facts remain. No supplied counter or accepted boolean grants measurement/safety.
