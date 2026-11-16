@@ -15,7 +15,7 @@ API: evaluate_comparison_preflight(plan_raw, manifest_raw, inputs_raw, *,
 expected_plan_sha256, expected_manifest_sha256, reference_artifacts=None,
 expected_reference_sha256=None). All raw objects are canonical JSON+LF, strict
 UTF8/duplicate/type/finite/bounds checking before reuse. Contract <=128KiB,
-manifest/inputs <=8MiB each; <=128 assignments; nesting<=16. Optional references
+manifest/inputs <=8MiB each; <=128 assignments; nesting<=24. Optional references
 are exactly event_binding/window_cost, each <=64MiB and externally pinned or
 explicitly absent. They are retained diagnostic REFERENCES, never imported proof
 of qualification or permission. Do not accept caller eligibility/approved flags.
@@ -93,3 +93,12 @@ is run. Source-level/observed process no-launch controls and unchanged old repla
 verify the pure path. Preserve every actual failure; no favorable data retry.
 Root verifies final code, independent raw replay, complete final-head CI and
 exact base/head/test-merge/tree before merge; update #400/#393, keepOPEN.
+
+## Reviewed pre-collection compatibility amendment
+
+The first targeted compatibility run produced23passed/1failed: unchanged valid
+legacy measurement records have19containerlevels and exceeded the new depth16
+limit. Independent review approved a depth24 bound before any collection or
+parser change. Root JSON depth is0, each child adds1; depth24is accepted and
+depth25refused. All byte/assignment bounds,5ms/98%/1.2x and authority gates stay
+unchanged. No legacy records are flattened, rewritten or selected away.
