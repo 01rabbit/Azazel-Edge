@@ -59,10 +59,12 @@ Fullmessage additionally requires single LF frame/zero skip+consumed/linear skb.
 Partial16byte read may qualify individual boundedbyte completion while fullmessage
 remains unknown. This is not Python parsing/internal branch/application consumption.
 
-Server request and client response are individual facts. Fresh reciprocal peer+
-endpoint can establish only the explicitly checked pair; missing peer NEVER gets
-filled from earlier request/socket history. Pair and authorization refusal consistency
-remain null whenever current reciprocal identity unavailable. Individual client
+Server request and client response are individual facts. Optional peer/endpoint reads are non-atomic best-effort metadata. With natural
+close, the other process may release/reuse objects during this lockless chain;
+read success does NOT establish coherent peer incarnation. This profile ALWAYS
+leaves reciprocal pairing and authorization refusal consistency null, even when
+all optional fields were readable. Missing peer NEVER gets filled from earlier
+request/socket history. No stable peer-lifetime proof is claimed. Individual client
 payload may classify a root_only refusal RESPONSE, explicitly not a proven pair or
 internal branch. BOOTTIME birth and MONOTONIC invocation clocks stay distinct.
 
@@ -129,3 +131,13 @@ An actor killed during recv may emit an actual negative/restart syscall return
 before death; retain it as a return fact, never a completed positive read. If an
 exit is absent, pending_not_empty may be present; neither shape is manufactured
 or required as proof of positive completion. Normal lifecycle remains unclean.
+
+## Independent precollection natural-close race restriction
+
+Review found that removing the accepted-FD hold also removes a stable-lifetime
+premise for the OTHER process's optional peerfile chain. Checked nonnull reads
+are not atomic identity attestation. Retain exact best-effort optional readbacks
+and statuses only; reciprocal_pair_verified and root_only_refusal_response_consistent
+are ALWAYS null in this new profile. Individual own-inode/invocation/read completion
+proof remains separate. Neither available optional fields nor historical IDs can
+restore peer qualification. A future coherent peer observer needs its own gate.
