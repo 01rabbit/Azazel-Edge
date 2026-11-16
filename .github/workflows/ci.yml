@@ -140,6 +140,26 @@ jobs:
             hostile-cost-linux.log
           if-no-files-found: error
 
+      - name: Actual cooperative observer stop and genuine end clock (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_NORMAL_CLOCK_PUBLIC_DIR=$GITHUB_WORKSPACE/normal-clock-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_observer_normal_clock_linux.py | tee normal-clock-linux.log
+          grep -Eq "^1 passed" normal-clock-linux.log
+          ! grep -Eq "skipped|failed|error" normal-clock-linux.log
+
+      - name: Retain public normal-stop clock evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: normal-clock-public
+          path: |
+            normal-clock-public/report.json
+            normal-clock-public/*.raw
+            normal-clock-linux.log
+          if-no-files-found: error
+
       - name: Retain public forged-refusal evidence
         if: always()
         uses: actions/upload-artifact@v4

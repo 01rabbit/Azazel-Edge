@@ -768,8 +768,13 @@ def run_live(
     input_max_bytes: int = 16 * 1024 * 1024,
     input_max_records: int = 8192,
     authentication_policy: Path | None = None,
+    stop_requested=None,
 ) -> None:
     """Foreground live-only collector. Historical procfs reconstruction is forbidden."""
+    if stop_requested is not None and (
+        not callable(stop_requested) or not resume_input or authentication_policy is None
+    ):
+        raise ValueError("control stop requires authenticated resumable observation")
     if authentication_policy is not None and not resume_input:
         raise ValueError("authentication requires explicit input resume")
     if resume_input:
@@ -781,7 +786,8 @@ def run_live(
             journal_boot_id=journal_boot_id,initialize_journal=initialize_journal,
             journal_max_bytes=journal_max_bytes,journal_max_identities=journal_max_identities,
             input_max_bytes=input_max_bytes,input_max_records=input_max_records,
-            authentication_policy=authentication_policy)
+            authentication_policy=authentication_policy,
+            **({"stop_requested": stop_requested} if stop_requested is not None else {}))
     policy = OutcomeTelemetryPolicy.from_file(policy_path)
     persistence = None
     if journal_directory is not None:
