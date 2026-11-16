@@ -9,8 +9,10 @@ from unittest.mock import patch
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "linux" or os.geteuid() == 0,
-    reason="offline Linux unprivileged process required, not a measurement pass",
+    sys.platform != "linux"
+    or os.geteuid() == 0
+    or not os.environ.get("EDGE_PREFLIGHT_PUBLIC_DIR"),
+    reason="explicit offline Linux unprivileged harness required, not a measurement pass",
 )
 
 
