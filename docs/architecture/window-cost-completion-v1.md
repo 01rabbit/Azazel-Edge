@@ -200,3 +200,45 @@ The30 role/arm cost rows retain partial and unavailable metrics rather than
 zero; Root controller/witness process accounting remains mixed. Original reports,
 clock refusals, missing CPU/I/O, incomplete lifecycle and physical/custody/causal
 limitations are unchanged. Independent artifact replay and full CI remain gates.
+
+## Publication-only copy boundary
+
+CI43892376481 passed the mandatory B test (49.49s), then artifact upload failed
+with EACCES while traversing a Root0700 synthetic setup directory. The later
+normal-clock step was skipped and the full suite did not execute. No B artifact
+was uploaded; ephemeral raw receipts from that CI job are unavailable. Preserve
+its log and incomplete final-CI status. This is not a qualification change.
+
+Publish a separate copy under `publication/`; never widen or modify original
+setup, role, private, report or evidence paths. The fixed evidence inventory is
+99 files: the completion report; the synthetic manifest and five public outputs
+for each of the seven frozen recipes; and 62 normal-clock originals. The latter
+are its report, five raw slots for each fixed arm, controller/signer/witness
+traces for instrumented arms, observer traces and both clock slots for
+instrumented on/fault arms, requests for all arms, journal/anchors for on/fault
+arms, and completion receipts for the two on arms. No recursive discovery,
+private keys, configs, bootstrap files or other synthetic setup files are copied.
+
+`tests/window_cost_publication.py:publish_publication(output_dir)` accepts the
+existing retained output directory. It uses only fixed relative source names;
+descriptor paths never direct reads. Reject symlink/non-directory ancestors
+for every source and target using directory-FD/no-follow rooted traversal and
+stable identity checks, not leaf-only NOFOLLOW. The publication directory must
+be fresh/exclusive; no reused target or overwrite. Pin normal-copy leaves to the retained
+normal report's original descriptors and synthetic leaves to its retained
+manifest descriptors. Cross-check the normal report against the completion
+report's unchanged original evaluation. Read regular leaves with NOFOLLOW,
+bounded reads and stable named/opened identity fences. Bounds are16MiB per leaf,
+4MiB per synthetic leaf and256MiB total. Create fresh exclusive copies with
+directories0755 and files0444, retaining original bytes and modes unchanged.
+
+Every planned missing, changed, unsafe, oversized or unreadable leaf has an
+explicit error; already copied valid siblings remain available. Write a separate
+readonly `publication/publication-index.json` listing all99 planned evidence
+paths, copied hashes/lengths and per-leaf errors. This diagnostic index is outside
+the frozen analysis report. Completion requires all99 copies and no errors; a
+missing file never becomes a zero or a qualified result. The primary report is
+written before publication, so publication failure cannot discard it. Mandatory
+Linux CI requires a complete publication index before upload. Publication-only
+replay may reuse existing retained evidence; it does not rerun or requalify the
+actual matrix. Final-head CI remains required.
