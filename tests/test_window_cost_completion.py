@@ -182,6 +182,12 @@ def test_original_expiry_and_pending_loss_are_distinct_and_only_synthetic(synthe
     assert cases["commit_failure_loss"]["journal_summary"]["lost"] == 1
     assert cases["witness_close_failure"]["control_receipt"] is None
     assert cases["witness_close_failure"]["journal_summary"]["normal_close_rows"] == 0
+    assert cases["witness_close_failure"]["status"] == "withheld"
+    assert cases["witness_close_failure"]["observed_lifecycle"] == "unavailable"
+    assert (
+        "synthetic_final_journal_status_differs_from_original"
+        in cases["witness_close_failure"]["reasons"]
+    )
     assert cases["recording_failure_prefix"]["status"] == "partial_prefix"
     assert (
         cases["recording_failure_prefix"]["phase_report"]["normal_return_confirmed"]

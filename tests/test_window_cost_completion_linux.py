@@ -78,10 +78,17 @@ def test_actual_cost_and_synthetic_windows_remain_separate(tmp_path):
         == (
             "partial_prefix"
             if case["id"] == "recording_failure_prefix"
+            else "withheld"
+            if case["id"] == "witness_close_failure"
             else "recorded_synthetic_case"
         )
         for case in cases.values()
     )
+    witness = cases["witness_close_failure"]
+    assert witness["control_receipt"] is None
+    assert witness["journal_summary"]["normal_close_rows"] == 0
+    assert witness["observed_lifecycle"] == "unavailable"
+    assert "synthetic_final_journal_status_differs_from_original" in witness["reasons"]
     assert (
         result["whole_measurement_qualified"] is result["comparison_qualified"] is False
     )
