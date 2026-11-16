@@ -18,6 +18,7 @@ from signed_network_phase_recording import (
 )
 
 SCHEMA = "edge-phase-timing-config/v1"
+SCHEMA_V2 = "edge-phase-timing-config/v2"
 
 
 def _need(ok, message):
@@ -50,11 +51,11 @@ def load_config(path, expected_sha256):
     _need(_digest(raw) == expected_sha256, "config pin differs")
     config = json.loads(raw)
     _need(input_auth._json(config) + b"\n" == raw, "canonical config plus LF")
-    _need(type(config) is dict and set(config) == {
-        "schema_version", "metadata", "registration_path", "policy_path", "traces",
-        "worker_path", "worker_sha256",
-    }, "config fields")
-    _need(config["schema_version"] == SCHEMA, "config schema")
+    _need(type(config) is dict and config.get("schema_version") in (SCHEMA, SCHEMA_V2), "config schema")
+    version_two = config["schema_version"] == SCHEMA_V2
+    fields = {"schema_version", "metadata", "registration_path", "policy_path", "traces",
+              "worker_path", "worker_sha256"}
+    _need(set(config) == fields | ({"clock"} if version_two else set()), "config fields")
     metadata = config["metadata"]
     _need(type(metadata) is dict and set(metadata) == {
         "run_id", "arm", "input_sha256", "code_sha256", "core_sha256", "interpreter_sha256",
@@ -72,7 +73,28 @@ def load_config(path, expected_sha256):
     helper = _root_bytes(helper_path)
     _need(Path(config["worker_path"]) == Path(__file__).absolute(), "worker path differs")
     _need(_digest(worker) == config["worker_sha256"], "worker pin differs")
-    _need(_digest(worker + b"\0" + helper) == metadata["code_sha256"], "bootstrap pin differs")
+    bootstrap = worker + b"\0" + helper
+    if version_two:
+        clock = config["clock"]
+        _need(type(clock) is dict and set(clock) == {
+            "helper_path", "helper_sha256", "recording_path", "recording_sha256",
+            "calls_path", "context_path",
+        }, "clock config fields")
+        paths = [*config["traces"].values()]
+        for key in ("calls_path", "context_path", "helper_path", "recording_path"):
+            value = clock[key]
+            _need(type(value) is str and Path(value).is_absolute() and ".." not in Path(value).parts,
+                  "physical clock path")
+            paths.append(value)
+        _need(len(set(paths)) == len(paths), "clock paths alias")
+        for prefix, name in (("helper", "signed_network_load_clock.py"),
+                             ("recording", "signed_network_recording.py")):
+            _need(Path(clock[prefix + "_path"]) == Path(config["worker_path"]).with_name(name),
+                  "adjacent clock helper required")
+            original = _root_bytes(clock[prefix + "_path"])
+            _need(_digest(original) == clock[prefix + "_sha256"], "clock helper pin differs")
+            bootstrap += b"\0" + original
+    _need(_digest(bootstrap) == metadata["code_sha256"], "bootstrap pin differs")
     _need(_digest(Path(sys.executable).resolve().read_bytes()) == metadata["interpreter_sha256"], "interpreter pin differs")
     registration = json.loads(input_auth.read_regular(Path(config["registration_path"]), owner=0, max_bytes=65536)[0])
     refuse_profiles(registration)
@@ -148,6 +170,17 @@ def _observer_args(argv, config):
     values = _options(argv[:20], expected_names)
     _need(argv[22] == config["policy_path"], "observer trust differs")
     _need(values["--interface"] == "lo" and values["--poll-seconds"] == values["--sample-interval-seconds"] == "0.05", "observer workload differs")
+    if config["schema_version"] == SCHEMA_V2:
+        from azazel_edge.outcome.journal import NAME
+        reserved = {Path(values[key]) for key in ("--input", "--output", "--policy")}
+        reserved.update((Path(config["policy_path"]), Path(config["registration_path"]),
+                         Path(values["--journal-directory"]) / NAME))
+        for key in ("calls_path", "context_path"):
+            target = Path(config["clock"][key])
+            _need(target.parent == Path(values["--journal-directory"]),
+                  "clock recording must use existing observer directory")
+            _need(target not in reserved, "clock output aliases original evidence")
+    return values
 
 
 def main(argv=None):
@@ -169,13 +202,25 @@ def main(argv=None):
     if args.role == "receiver":
         options, _ = validate_input_args(original, config, receiver=True)
     else:
-        _observer_args(original, config)
+        observer_options = _observer_args(original, config)
     recorder = PhaseRecording(config["traces"][role], metadata=dict(config["metadata"], role=role))
     normal = False
     try:
         context = record_receiver(recorder, int(options["--receive-fd"])) if role == "signer" else record_observer(recorder)
         with context:
-            result = input_live.main(original) if role == "signer" else telemetry.main(original)
+            if role == "observer" and config["schema_version"] == SCHEMA_V2:
+                # Imported only after load_config pins both adjacent clock modules.
+                from signed_network_load_clock import record_observer_clock
+                policy_path = Path(observer_options["--policy"])
+                policy = json.loads(policy_path.read_bytes())
+                with record_observer_clock(
+                    config["clock"]["calls_path"], config["clock"]["context_path"],
+                    metadata=dict(config["metadata"], role="observer"),
+                    policy=policy, policy_source_ref=str(policy_path),
+                ):
+                    result = telemetry.main(original)
+            else:
+                result = input_live.main(original) if role == "signer" else telemetry.main(original)
         normal = result == 0
         return result
     finally:

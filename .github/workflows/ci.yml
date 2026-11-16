@@ -120,6 +120,26 @@ jobs:
             phase-cost-linux.log
           if-no-files-found: error
 
+      - name: Actual phase-cost evidence at declared 120-percent ingress (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_HOSTILE_COST_PUBLIC_DIR=$GITHUB_WORKSPACE/hostile-cost-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_observer_hostile_cost_linux.py | tee hostile-cost-linux.log
+          grep -Eq "^1 passed" hostile-cost-linux.log
+          ! grep -Eq "skipped|failed|error" hostile-cost-linux.log
+
+      - name: Retain public hostile phase-cost evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostile-cost-public
+          path: |
+            hostile-cost-public/report.json
+            hostile-cost-public/*.raw
+            hostile-cost-linux.log
+          if-no-files-found: error
+
       - name: Retain public forged-refusal evidence
         if: always()
         uses: actions/upload-artifact@v4
