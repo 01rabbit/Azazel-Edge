@@ -100,6 +100,26 @@ jobs:
           grep -Eq "^7 passed" safety-evidence-composition-linux.log
           ! grep -Eq "skipped|failed|error" safety-evidence-composition-linux.log
 
+      - name: Actual original and instrumented phase-cost arms (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_PHASE_COST_PUBLIC_DIR=$GITHUB_WORKSPACE/phase-cost-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_observer_phase_cost_linux.py | tee phase-cost-linux.log
+          grep -Eq "^1 passed" phase-cost-linux.log
+          ! grep -Eq "skipped|failed|error" phase-cost-linux.log
+
+      - name: Retain public phase-cost evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-cost-public
+          path: |
+            phase-cost-public/report.json
+            phase-cost-public/instrumented_*.jsonl
+            phase-cost-linux.log
+          if-no-files-found: error
+
       - name: Retain public forged-refusal evidence
         if: always()
         uses: actions/upload-artifact@v4
