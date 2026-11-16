@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 import hashlib
-import json
 
 import pytest
 
@@ -444,3 +443,15 @@ def test_exit_evidence_consistency_negatives(fault):
     else:
         data["stderr_capture"]["sha256"] = "not-a-hash"
     assert analysis.analyze_arm(data)["load_status"] == "withheld"
+
+
+def test_malformed_clock_sibling_cannot_erase_valid_load(tmp_path):
+    value, calls, context = clock_bytes(tmp_path)
+    report = evaluate(value, calls, context)
+    report["qualification_inputs"]["recorded"]["calls"] = [{}]
+    data = arm()
+    data["clock_report"] = report
+    result = analysis.analyze_arm(data)
+    assert result["load_status"] == "valid_declared_120_percent_load"
+    assert result["clock_status"] == "withheld"
+    assert result["observed_completed_callbacks_inside_load_after_warmup"] is None

@@ -456,6 +456,55 @@ def _clock_ready(report):
         return False
 
 
+def _callbacks_inside_load(report, start, end):
+    """Count a validated retained callback prefix; malformed siblings stay unknown."""
+    try:
+        begin = report["context"]["begin"]
+        domain = begin["identity"]["clock_domain"]
+        if (
+            not isinstance(domain, dict)
+            or domain.get("established") is not True
+            or domain != report["external_controller_clock_domain"]
+            or not _uint(start)
+            or not _uint(end)
+        ):
+            return None
+        rows = report["qualification_inputs"]["recorded"]["calls"]
+        if not isinstance(rows, list) or not 0 < len(rows) <= 900:
+            return None
+        last, count = begin["anchor"]["monotonic_after_ns"], 0
+        for seq, row in enumerate(rows, 1):
+            data = row["data"]
+            if (
+                type(row["seq"]) is not int
+                or row["seq"] != seq
+                or row["kind"] not in ("sample", "event", "finalize")
+                or not _uint(data["start_ns"])
+                or not _uint(data["end_ns"])
+            ):
+                return None
+            before, after = (
+                clock._anchor(data["clock_before"]),
+                clock._anchor(data["clock_after"]),
+            )
+            clock._epoch_interval(data["epoch"])
+            if (
+                not last
+                <= before[0]
+                <= before[2]
+                <= data["start_ns"]
+                <= data["end_ns"]
+                <= after[0]
+                <= after[2]
+            ):
+                return None
+            count += start + 3_000_000_000 <= data["start_ns"] <= data["end_ns"] <= end
+            last = after[2]
+        return count
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return None
+
+
 def analyze_arm(arm):
     """Keep declared load, final accounting, timing and functional gates separate."""
     observed, samples = arm.get("quota_load"), arm.get("marker_samples", [])
@@ -496,26 +545,7 @@ def analyze_arm(arm):
         and set(written) == set(so11.NON_ALERT_KINDS)
         and all(_uint(v) for v in written.values())
     )
-    callbacks_inside_load = None
-    if isinstance(clock_report, dict):
-        context = clock_report.get("context", {}).get("begin")
-        domain = context.get("identity", {}).get("clock_domain") if context else None
-        if (
-            isinstance(domain, dict)
-            and domain.get("established") is True
-            and domain == clock_report.get("external_controller_clock_domain")
-            and _uint(start)
-            and _uint(end)
-        ):
-            calls = clock_report.get("qualification_inputs", {}).get("recorded")
-            if isinstance(calls, dict) and isinstance(calls.get("calls"), list):
-                callbacks_inside_load = sum(
-                    start + 3_000_000_000
-                    <= row["data"]["start_ns"]
-                    <= row["data"]["end_ns"]
-                    <= end
-                    for row in calls["calls"]
-                )
+    callbacks_inside_load = _callbacks_inside_load(clock_report, start, end)
     return dict(
         schema_version="edge-hostile-phase-cost-arm/v1",
         arm_id=arm.get("arm_id"),
@@ -531,6 +561,7 @@ def analyze_arm(arm):
         else None,
         clock_report=clock_report,
         observed_completed_callbacks_inside_load_after_warmup=callbacks_inside_load,
+        callback_window_scope="completed_retained_prefix_only_not_full_coverage",
         clock_status="qualified_sampled_anchors"
         if measured and clock_ready
         else "withheld"
