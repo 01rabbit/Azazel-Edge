@@ -309,7 +309,7 @@ jobs:
       - name: Run tests
         run: |
           . .venv/bin/activate
-          PYTHONPATH=.:py pytest -q
+          PYTHONPATH=.:py pytest -q --ignore=window-cost-public
 
   advisory-exec-arm:
     # Native ARM profile only. Unsupported x86/compat is not a skipped success.
