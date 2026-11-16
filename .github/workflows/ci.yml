@@ -92,6 +92,14 @@ jobs:
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
+      - name: Read-only safety evidence composition with separate UIDs
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_safety_evidence_composition_linux.py | tee safety-evidence-composition-linux.log
+          grep -Eq "^7 passed" safety-evidence-composition-linux.log
+          ! grep -Eq "skipped|failed|error" safety-evidence-composition-linux.log
+
       - name: Retain public forged-refusal evidence
         if: always()
         uses: actions/upload-artifact@v4
