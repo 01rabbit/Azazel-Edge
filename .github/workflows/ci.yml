@@ -306,6 +306,32 @@ jobs:
             forged-refusal-v2-public/case-index.json
           if-no-files-found: error
 
+      - name: Offline comparison preflight as the unprivileged runner
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_PREFLIGHT_PUBLIC_DIR=$GITHUB_WORKSPACE/comparison-preflight-public" \
+            unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+            .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_comparison_preflight_linux.py | tee comparison-preflight-linux.log
+          grep -Eq "^1 passed" comparison-preflight-linux.log
+          ! grep -Eq "skipped|failed|error" comparison-preflight-linux.log
+
+      - name: Retain comparison preflight and original synthetic regression
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-preflight-public
+          path: |
+            comparison-preflight-public/report.json
+            comparison-preflight-public/preflight.json
+            comparison-preflight-public/*.raw
+            comparison-preflight-public/inventory.json
+            comparison-preflight-public/process-boundary.json
+            comparison-preflight-public/original-pilot/*.json
+            comparison-preflight-linux.log
+          if-no-files-found: error
+
       - name: Run tests
         run: |
           . .venv/bin/activate

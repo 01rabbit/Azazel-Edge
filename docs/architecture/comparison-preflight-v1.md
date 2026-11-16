@@ -1,0 +1,186 @@
+# Frozen comparison preflight and mechanical regression — #400/#393
+
+Base190750e3. Commit this contract and protocol before implementation or collection.
+The 24h task completes software, not independent efficacy/safety acceptance.
+
+## Authority and compatibility
+
+Add a pure bounded offline preflight in `azazel_edge.benchmark.comparison_preflight`.
+It never launches a workload, provider, sensor, model, service or executor. Keep
+all existing benefit/measurement APIs, original pilot_v2 bytes and old outputs
+unchanged. No new permissions, keys, roles, network or installer/security/systemd
+changes. No qualified safety, comparison, completion, admission or resume flag.
+
+API: evaluate_comparison_preflight(plan_raw, manifest_raw, inputs_raw, *,
+expected_plan_sha256, expected_manifest_sha256, reference_artifacts=None,
+expected_reference_sha256=None). All raw objects are canonical JSON+LF, strict
+UTF8/duplicate/type/finite/bounds checking before reuse. Contract <=128KiB,
+manifest/inputs <=8MiB each; <=128 assignments; nesting<=24. Optional references
+are exactly event_binding/window_cost, each <=64MiB and externally pinned or
+explicitly absent. They are retained diagnostic REFERENCES, never imported proof
+of qualification or permission. Do not accept caller eligibility/approved flags.
+
+The plan exact fields are schema_version=edge-comparison-preflight-plan/v1,
+manifest_sha256, data_kind=FROZEN_SOFTWARE_PROTOCOL_NOT_MEASUREMENT,
+hypothesis, fixed_gates, allocation_seed, arm_descriptions, exclusions,
+required_prerequisites, historical_pilot.
+Fixed gates exactly load_factor1.2/examined_floor0.98/clock_budget_ns5000000.
+Required prerequisites fixed event_binding,finite_coverage,clock,assignments,
+independent_safety,service_cost,execution_mechanism_release,independent_review.
+No array/boolean of supplied qualifications can satisfy these prerequisites.
+
+File pins use SHA256 of canonical JSON including the final LF. The inner
+inputs.manifest_sha256 uses unchanged benefit.manifest_digest (without LF);
+never substitute one for the other.
+
+Manifest reuses benefit.validate_manifest and existing schema. Freeze ALL36
+assignments (9 declared authored scenarios,2pairs,2arms), horizon60s, analysis
+seed17/bootstrap500/minimum_pairs2 and old SOFTWARE thresholds5s/2ms/0.01.
+Allocation has a distinct seed20261116 and explicit full assignment/order table.
+Source config hashes equal benefit.manifest_digest of the exact frozen
+arm_descriptions; allocation_seed is fixed separately from analysis_seed.
+Source config hashes pin non-executable prospective arm descriptions; they are
+NOT registered effective live profiles. This is an authored pilot protocol,
+not an independently preregistered confirmatory/held-out experiment or permission.
+Future effective arm enrollment and independent service/safety proof remain absent.
+
+Inputs exact schema_version=edge-comparison-preflight-input/v1,
+manifest_sha256, records. Records retain the original measurement record shape.
+Unknown safety values may be null in this NEW boundary but NEVER converted to0
+or sent to the old engine as qualified data. Per-assignment diagnostics enumerate
+missing/duplicate/unknown assignments, known reported positive safety counts,
+null categories, missing/malformed capture/recording/linkage, and original
+execution/mechanism/release/clock/coverage reasons when strict replay is possible.
+Do not choose a latest/favorable attempt. Preserve rejected attempts' known
+positive facts as unqualified reported lower bounds, not deduplicated real safety
+counts. Global plan/manifest/input-envelope unknown fields/schema/hash/budget reject;
+per-record errors do not erase valid siblings. Malformed optional slots
+and bad individual attempts preserve known siblings and original material.
+
+For evidence_kind=synthetic ONLY, reuse measure_experiment on original correctly
+typed receipts (after strict validation) as mechanical_evaluation. Include
+all supplied attempts and gap/restart/harm cases, not only successful/full-horizon
+records; original engine invalid-input refusal remains explicit. Its
+original result is preserved verbatim and NEVER becomes actual comparison. For
+container/recorded_lab/hardware input, comparison_result is null and reasons
+remain explicit. Report status=preflight_complete_measurement_withheld,
+actual_comparison_started=false, comparison_qualified=false,
+qualified_safety_count=null, whole_measurement_qualified=false, all authority
+flagsfalse. Current software has NO real-comparison admission path. A fresh later
+qualification contract is required to remove independent prerequisites; simply
+matching references or passing the original sampled clock cannot do this.
+
+## Regression and Linux acceptance
+
+Reuse tests/run_measurement_pilot.run unchanged for all9/36 historical synthetic
+regressions in a separate report group. Original protocol/cases digests and
+expected gain/neutral/service_harm/protection_harm/actor_pause/shared_source/
+clock_uncertain/capture_gap/restart_lost gates MUST match. Report mechanical_only.
+The new container manifest with no measured receipts must enumerate ALL36 missing
+assignments, preserve unknowns, return no actual benefit score, and start nothing.
+
+New tests: canonical/pin/type/bool/NaN/unknown/bounds; modified thresholds/order;
+missing/duplicate/wrong assignment/source/config/seed/manifest; explicit null
+safety and mixed knownpositive+unknown; poisoned optional references; historical
+synthetic gate preservation; no action/causal/eligibility upgrades; determinism and
+input bytes unchanged. Administrative goal censoring requires the original full
+common horizon; gaps/restart/actor pause remain missing/inconclusive.
+
+Run dedicated Linux offline process tests without Root privilege additions or
+network; require positive pytest execution, not skip-as-pass, and export NEW
+report/original-input groups exclusively. No real provider/network comparison
+is run. Source-level/observed process no-launch controls and unchanged old replay
+verify the pure path. Preserve every actual failure; no favorable data retry.
+Root verifies final code, independent raw replay, complete final-head CI and
+exact base/head/test-merge/tree before merge; update #400/#393, keepOPEN.
+
+## Reviewed pre-collection compatibility amendment
+
+The first targeted compatibility run produced23passed/1failed: unchanged valid
+legacy measurement records have19containerlevels and exceeded the new depth16
+limit. Independent review approved a depth24 bound before any collection or
+parser change. Root JSON depth is0, each child adds1; depth24is accepted and
+depth25refused. All byte/assignment bounds,5ms/98%/1.2x and authority gates stay
+unchanged. No legacy records are flattened, rewritten or selected away.
+
+## First unprivileged Linux software-path check (2026-11-16 JST)
+
+Committed source `41d798293fe5a6d37e5f869b79b29bbef91b74c4` ran the explicit
+offline Linux harness:1passed/no skips/0.87s. Container UID/GID1000, effective/
+permitted/ambient capabilities zero, no-new-privileges1, networknone, no added
+capabilities and read-only source were verified. Python-level launch/network
+attempt guards covered the two pure pipelines; this is not arbitrary-syscall
+or whole-system isolation attestation.
+
+All36 prospective assignments remain missing/unmeasured, with no real comparison
+score or start. All9 original authored synthetic cases/36 assignments replayed
+exactly and remained mechanical_only with zero canonical causal promotions.
+Independent review verified all35 exported files (33 inventory-hashed originals
+plus inventory and actual process-boundary metadata), reproduced the preflight,
+all nine bundles and their report exactly. Exported report SHA256:
+`eca9104363350aba03c9334e5da1c17e9572bd3493657cea3a1ae8d45382acd7`.
+
+The initial depth16 compatibility failure remains separately recorded. The
+reviewed bounded depth24 correction preceded this collection and did not alter
+old inputs, thresholds or results. The later explicit-harness-only test guard
+prevents an ordinary unconfined full-suite process from being mistaken for the
+required dropped-capability/NNP offline test. Final integration, full CI and
+independent final-CI artifact review remain separate gates. No actual protected
+service, provider, real APPLIED window, safe-zero denominator or causal benefit
+has been measured by this software-path test.
+
+## Explicit-output test boundary correction (frozen before implementation)
+
+CI43904637916 failed before the evaluator ran: pytest's unused tmp_path fixture
+followed inherited Root user-name environment after the process was dropped to
+the runner UID, then correctly refused the existing Root-owned pytest temp tree.
+The retained artifact contains only the failure log; no preflight/raw reports
+were created and no comparison observation occurred.
+
+The dedicated Linux test already requires EDGE_PREFLIGHT_PUBLIC_DIR explicitly.
+Remove ONLY the unused tmp_path fixture parameter and unreachable default-path
+fallback, and index that required environment variable directly. Preserve the
+explicit harness skip guard, dropped UID/capabilities/NNP, offline namespace,
+original temp ownership/modes, evaluator, fixtures, wrapper and every assertion.
+Do not loosen or delete the protected Root temp directory. Reproduce the failure
+with an inherited Root name and existing0700Root tree in an isolated Linux
+fixture; the corrected explicit-output test must execute as an ordinary UID
+without touching that tree. Keep failed and corrected runs separate, and require
+new final-head whole CI and independent raw review before merge.
+
+## Causal fsync regression boundary (frozen before test-only correction)
+
+Whole CI43907632518 FAILED one unchanged legacy P0 handoff unit test:
+max wall interval123.536682ms exceeded its50ms assertion.22943 other tests
+passed,451 skipped and230 subtests passed. C's dedicated Linux path and all35
+exported originals independently verified. Retain this failed whole-CI log and
+artifact; they never become a whole-CI pass.
+
+The legacy interval included JSON fixture reads/construction, synchronous
+logging/capture, thread scheduling, submit and a statistics lock. It cannot
+identify fsync as the cause of the delay. The cause remains UNKNOWN. No runtime
+or time budget is changed. The corrected unit test does NOT establish or retain
+a50ms response-performance bound, and is never used as the original5ms clock
+qualification. The observed wall failure remains an unqualified adverse result.
+
+Change only that test and a small local test helper/negative control. Prebuild
+all120 events; hold an actually reached writer os.fsync behind explicit entered
+and release events. Require the seed receiver and six producer threads to
+return all assigned submissions while the writer fsync is STILL held. Preserve
+exact120 event accounting, positive overflow, audit row count and durable relay
+loss counts after finally releasing the barrier and invoking real fsync normally.
+Use bounded waits only as deadlock/liveness guards, never latency measurements.
+All gates are released and threads joined in finally, including failed controls.
+
+A separate fresh recorder's negative control must inject a synchronous durable
+write/fsync dependency on the receiver path, then demonstrate that the SAME
+completion-before-release predicate rejects it while that actual dependency is
+held. Do not mock the predicate or block an unrelated operation. That deliberately
+modified control is synthetic test code, not runtime behavior or a safety event.
+Its added writes do not participate in the positive120-event assertion.
+
+Keep runtime/notifications/audit implementation, source formats, authority,
+original5ms/98%/1.2x, previous reports and all CI Linux collection paths unchanged.
+Run the meaningful corrected positive/negative tests once in isolated Linux,
+independently review them, then require new final-head full CI and fresh evidence
+review. Do not blindly retry the failed job to seek a favorable wall sample.
