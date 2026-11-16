@@ -208,7 +208,13 @@ def run_live_resumable(
     input_max_records,
     authentication_policy=None,
     terminal_stop_registration=None,
+    stop_requested=None,
 ):
+    if stop_requested is not None and (
+        not callable(stop_requested) or authentication_policy is None
+        or terminal_stop_registration is not None
+    ):
+        raise ValueError("control stop requires an authenticated callable and no terminal stop")
     if journal_directory is None:
         raise ValueError("input resume requires a journal directory")
     journal_path = (journal_directory / NAME).resolve()
@@ -245,6 +251,7 @@ def run_live_resumable(
             authentication, terminal_stop_registration
         )
     terminal = None
+    control_stop = None
     result = None
     with BoundedInput(
         input_path,
@@ -277,6 +284,15 @@ def run_live_resumable(
                 raise OutcomeJournalError("clock continuity unavailable")
             next_sample = last_mono
             while terminal is None:
+                if stop_requested is not None:
+                    requested = stop_requested()
+                    if type(requested) is not bool:
+                        raise ValueError("control stop callback must return exact bool")
+                    if requested:
+                        from .input_control_stop import prepare_control_stop
+
+                        control_stop = prepare_control_stop(journal, source, journal_boot_id=journal_boot_id)
+                        break
                 now = time.time()
                 mono = time.monotonic()
                 if (
@@ -363,4 +379,8 @@ def run_live_resumable(
                 time.sleep(max(0.05, poll_seconds))
         if terminal is not None:
             result = terminal.after_journal_close(journal, source)
+    if control_stop is not None:
+        from .input_control_stop import finish_control_stop
+
+        result = finish_control_stop(control_stop, journal, source)
     return result
