@@ -198,3 +198,11 @@ existing336profile as exact9members:anonymousunion@0,orig_x0u64@2176,syscallnos3
 lockdep_hardirqsu64@2560,exit_rcuu64@2624. Strengthen its explicittail checks as
 well; no inventedcommon-tail merging. Bothknownprofiles share only the identical
 verified272-byte register overlay. Unknownprofiles stillrefusebeforeload.
+
+Independentreview accepted exact336/320 typedtail+bothunionarm checks. Onlythe
+validator and its syntheticcounterexamples changed, plus control-only metadata
+export/docs; native source, pureevaluation, wireformat and permissions didnot.
+Affected51ABItests and2boolean-alias rejectiontests passed. Read-only fullactual
+6.8BTF validated under the stricter336profile withoutload or newtraffic. Original
+local63files remainunchanged; freshactual7CI is still required and not substituted
+by syntheticprofiles or the control-only projection.

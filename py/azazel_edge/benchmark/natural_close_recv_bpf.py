@@ -472,7 +472,8 @@ def validate_kernel_prototype(raw):
             and row["size"] == size
             and type(row.get("nr_bits")) is int
             and row["nr_bits"] == size * 8
-            and row.get("bits_offset") == 0
+            and type(row.get("bits_offset")) is int
+            and row["bits_offset"] == 0
             and row.get("encoding") == encoding,
             "wrapper fixed integer",
         )
@@ -505,7 +506,8 @@ def validate_kernel_prototype(raw):
     proto = get(wrapper["type_id"])
     _need(
         proto["kind"] == "FUNC_PROTO"
-        and proto.get("vlen") == 1
+        and type(proto.get("vlen")) is int
+        and proto["vlen"] == 1
         and len(proto.get("params", [])) == 1
         and proto["params"][0].get("name") == "regs",
         "native recvfrom signature",
@@ -520,38 +522,116 @@ def validate_kernel_prototype(raw):
         const["kind"] == "CONST" and const["type_id"] == registers["id"],
         "native const pt_regs",
     )
-    _need(registers.get("size") == 336, "native pt_regs size")
+
+    def shape(row, kind, size, fields):
+        _need(
+            row["kind"] == kind
+            and type(row.get("size")) is int
+            and row["size"] == size
+            and type(row.get("vlen")) is int
+            and row["vlen"] == len(fields)
+            and [(m.get("name"), m.get("bits_offset")) for m in row.get("members", [])]
+            == fields,
+            "frozen native aggregate shape",
+        )
+        for name, _ in fields:
+            member(row, name)
+
+    def scalar(row, name, size, encoding="(none)"):
+        integer(member(row, name)["type_id"], size, encoding)
+
+    if registers.get("size") == 336:
+        shape(
+            registers,
+            "STRUCT",
+            336,
+            [
+                ("(anon)", 0),
+                ("orig_x0", 2176),
+                ("syscallno", 2240),
+                ("unused2", 2272),
+                ("sdei_ttbr1", 2304),
+                ("pmr_save", 2368),
+                ("stackframe", 2432),
+                ("lockdep_hardirqs", 2560),
+                ("exit_rcu", 2624),
+            ],
+        )
+        scalar(registers, "orig_x0", 8)
+        scalar(registers, "syscallno", 4, "SIGNED")
+        scalar(registers, "unused2", 4)
+        for name in ("sdei_ttbr1", "pmr_save", "lockdep_hardirqs", "exit_rcu"):
+            scalar(registers, name, 8)
+        stack = resolve(member(registers, "stackframe")["type_id"])
+        _need(
+            stack["kind"] == "ARRAY"
+            and type(stack.get("nr_elems")) is int
+            and stack["nr_elems"] == 2,
+            "native 336 stackframe array",
+        )
+        integer(stack["type_id"], 8, "(none)")
+        recv_profile = "aarch64_const_pt_regs_336_u64_stackframe2_fdtable_56"
+    elif registers.get("size") == 320:
+        shape(
+            registers,
+            "STRUCT",
+            320,
+            [
+                ("(anon)", 0),
+                ("orig_x0", 2176),
+                ("syscallno", 2240),
+                ("pmr", 2272),
+                ("sdei_ttbr1", 2304),
+                ("stackframe", 2368),
+            ],
+        )
+        scalar(registers, "orig_x0", 8)
+        scalar(registers, "syscallno", 4, "SIGNED")
+        scalar(registers, "pmr", 4)
+        scalar(registers, "sdei_ttbr1", 8)
+        stack = resolve(member(registers, "stackframe")["type_id"])
+        _need(
+            stack["id"] == unique("STRUCT", "frame_record_meta")["id"],
+            "native 320 stackframe metadata",
+        )
+        shape(stack, "STRUCT", 24, [("record", 0), ("type", 128)])
+        scalar(stack, "type", 8)
+        record = resolve(member(stack, "record")["type_id"])
+        _need(
+            record["id"] == unique("STRUCT", "frame_record")["id"],
+            "native frame record type",
+        )
+        shape(record, "STRUCT", 16, [("fp", 0), ("lr", 64)])
+        scalar(record, "fp", 8)
+        scalar(record, "lr", 8)
+        recv_profile = "aarch64_const_pt_regs_320_frame_record_meta24_fdtable_56"
+    else:
+        raise NaturalCloseRecvBPFError("unknown native pt_regs profile")
     overlay = resolve(member(registers, "(anon)")["type_id"])
-    _need(
-        member(registers, "(anon)")["bits_offset"] == 0
-        and overlay["kind"] == "UNION"
-        and overlay.get("size") == 272
-        and [m.get("name") for m in overlay.get("members", [])]
-        == ["user_regs", "(anon)"],
-        "native regs overlay",
-    )
-    nested = resolve(member(overlay, "(anon)")["type_id"])
-    _need(
-        member(overlay, "(anon)")["bits_offset"] == 0
-        and nested["kind"] == "STRUCT"
-        and nested.get("size") == 272
-        and [m.get("name") for m in nested.get("members", [])]
-        == ["regs", "sp", "pc", "pstate"],
-        "native regs fields",
-    )
-    array = resolve(member(nested, "regs")["type_id"])
-    _need(
-        member(nested, "regs")["bits_offset"] == 0
-        and array["kind"] == "ARRAY"
-        and type(array.get("nr_elems")) is int
-        and array["nr_elems"] == 31,
-        "native 31 registers",
-    )
-    integer(array["type_id"], 8, "(none)")
-    for name, offset in (("sp", 1984), ("pc", 2048), ("pstate", 2112)):
-        field = member(nested, name)
-        _need(field["bits_offset"] == offset, "native register offset")
-        integer(field["type_id"], 8, "(none)")
+    shape(overlay, "UNION", 272, [("user_regs", 0), ("(anon)", 0)])
+    for arm in ("user_regs", "(anon)"):
+        nested = resolve(member(overlay, arm)["type_id"])
+        if arm == "user_regs":
+            _need(
+                nested["id"] == unique("STRUCT", "user_pt_regs")["id"],
+                "native user register arm",
+            )
+        shape(
+            nested,
+            "STRUCT",
+            272,
+            [("regs", 0), ("sp", 1984), ("pc", 2048), ("pstate", 2112)],
+        )
+        array = resolve(member(nested, "regs")["type_id"])
+        _need(
+            array["kind"] == "ARRAY"
+            and type(array.get("nr_elems")) is int
+            and array["nr_elems"] == 31,
+            "native 31 registers",
+        )
+        integer(array["type_id"], 8, "(none)")
+        for name in ("sp", "pc", "pstate"):
+            scalar(nested, name, 8)
     task, files, table, file, inode = [
         unique("STRUCT", n)
         for n in ("task_struct", "files_struct", "fdtable", "file", "inode")
@@ -581,5 +661,5 @@ def validate_kernel_prototype(raw):
     integer(member(inode, "i_ino")["type_id"], 8, "(none)")
     return base | {
         "recv_function_id": wrapper["id"],
-        "recvfrom_profile": "aarch64_const_pt_regs_336_fdtable_56",
+        "recvfrom_profile": recv_profile,
     }

@@ -379,7 +379,7 @@ def test_inherited_cached_link_health_distinguishes_query_and_proc_errors(
     assert native.check_link(identity) == ("lost" if stage == "kernel" else "unknown")
 
 
-def wrapper_graph():
+def wrapper_graph(profile=336):
     """SYNTHETIC new wrapper/FD graph extending shared read-actor fixture."""
     from test_postconnect_copy_bpf import graph
 
@@ -414,6 +414,11 @@ def wrapper_graph():
         for r in rows
         if r["kind"] == "INT" and r["size"] == 4 and r["encoding"] == "(none)"
     )
+    s32 = next(
+        r["id"]
+        for r in rows
+        if r["kind"] == "INT" and r["size"] == 4 and r["encoding"] == "SIGNED"
+    )
     u16 = next(
         r["id"]
         for r in rows
@@ -436,8 +441,35 @@ def wrapper_graph():
     overlay = aggregate(
         "(anon)", 272, [("user_regs", user, 0), ("(anon)", anon, 0)], "UNION"
     )
+    if profile == 336:
+        stack = add(
+            "ARRAY", name="(anon)", type_id=unsigned, index_type_id=u32, nr_elems=2
+        )
+        tail = [
+            ("unused2", u32, 2272),
+            ("sdei_ttbr1", unsigned, 2304),
+            ("pmr_save", unsigned, 2368),
+            ("stackframe", stack, 2432),
+            ("lockdep_hardirqs", unsigned, 2560),
+            ("exit_rcu", unsigned, 2624),
+        ]
+    else:
+        record = aggregate(
+            "frame_record", 16, [("fp", unsigned, 0), ("lr", unsigned, 64)]
+        )
+        stack = aggregate(
+            "frame_record_meta", 24, [("record", record, 0), ("type", unsigned, 128)]
+        )
+        tail = [
+            ("pmr", u32, 2272),
+            ("sdei_ttbr1", unsigned, 2304),
+            ("stackframe", stack, 2368),
+        ]
     regs = aggregate(
-        "pt_regs", 336, [("(anon)", overlay, 0), ("orig_x0", unsigned, 2176)]
+        "pt_regs",
+        profile,
+        [("(anon)", overlay, 0), ("orig_x0", unsigned, 2176), ("syscallno", s32, 2240)]
+        + tail,
     )
     const = add("CONST", name="(anon)", type_id=regs)
     proto = add(
@@ -475,11 +507,17 @@ def wrapper_graph():
     return value
 
 
-def test_exact_native_wrapper_and_copy_graph():
-    result = b.validate_kernel_prototype(json.dumps(wrapper_graph()).encode())
+@pytest.mark.parametrize(
+    "profile,tail", [(336, "u64_stackframe2"), (320, "frame_record_meta24")]
+)
+def test_exact_native_wrapper_and_copy_graph(profile, tail):
+    result = b.validate_kernel_prototype(json.dumps(wrapper_graph(profile)).encode())
     assert result["function"] == "unix_stream_read_actor"
     assert result["recv_function_id"] > 0
-    assert result["recvfrom_profile"] == "aarch64_const_pt_regs_336_fdtable_56"
+    assert (
+        result["recvfrom_profile"]
+        == f"aarch64_const_pt_regs_{profile}_{tail}_fdtable_56"
+    )
 
 
 @pytest.mark.parametrize(
@@ -631,3 +669,116 @@ def test_entry_with_no_exit_is_retained_by_snapshot(monkeypatch, tmp_path):
     assert len(result["events"]) == 1
     assert result["events"][0]["kind"] == 0 and result["events"][0]["exited_ns"] == 0
     assert result["partial_reasons"] == ["pending_not_empty"]
+
+
+@pytest.mark.parametrize("profile", [336, 320])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "unknown_size",
+        "tail_rename",
+        "tail_offset",
+        "tail_width",
+        "tail_count",
+        "tail_order",
+        "tail_vlen",
+        "extra_tail",
+        "user_arm_size",
+        "user_arm_count",
+        "user_arm_pstate",
+        "user_arm_signed",
+        "overlay_arm_offset",
+        "overlay_vlen",
+    ],
+)
+def test_explicit_register_profiles_reject_changed_unused_tail_or_union(profile, fault):
+    value = wrapper_graph(profile)
+    rows = value["types"]
+    named = {r.get("name"): r for r in rows if r["kind"] == "STRUCT"}
+    regs = named["pt_regs"]
+    fields = regs["members"]
+    if fault == "unknown_size":
+        regs["size"] = 328
+    elif fault == "tail_rename":
+        fields[-1]["name"] = "unknown"
+    elif fault == "tail_offset":
+        fields[-1]["bits_offset"] -= 8
+    elif fault == "tail_width":
+        next(m for m in fields if m["name"] == "sdei_ttbr1")["type_id"] = next(
+            m for m in fields if m["name"] == "syscallno"
+        )["type_id"]
+    elif fault == "tail_count":
+        stack_id = next(m for m in fields if m["name"] == "stackframe")["type_id"]
+        stack = rows[stack_id - 1]
+        if profile == 336:
+            stack["nr_elems"] = 3
+        else:
+            stack["size"] = 32
+    elif fault == "tail_order":
+        fields[-1], fields[-2] = fields[-2], fields[-1]
+    elif fault == "tail_vlen":
+        regs["vlen"] -= 1
+    elif fault == "extra_tail":
+        fields.append(dict(fields[-1], name="extra"))
+        regs["vlen"] += 1
+    else:
+        overlay = rows[fields[0]["type_id"] - 1]
+        user = named["user_pt_regs"]
+        if fault == "user_arm_size":
+            user["size"] = 280
+        elif fault == "user_arm_count":
+            field = next(m for m in user["members"] if m["name"] == "regs")
+            rows[field["type_id"] - 1]["nr_elems"] = 30
+        elif fault == "user_arm_pstate":
+            next(m for m in user["members"] if m["name"] == "pstate")["bits_offset"] = (
+                2104
+            )
+        elif fault == "user_arm_signed":
+            next(m for m in user["members"] if m["name"] == "pstate")["type_id"] = next(
+                m for m in fields if m["name"] == "syscallno"
+            )["type_id"]
+        elif fault == "overlay_arm_offset":
+            overlay["members"][0]["bits_offset"] = 8
+        elif fault == "overlay_vlen":
+            overlay["vlen"] = 3
+    with pytest.raises(ValueError):
+        b.validate_kernel_prototype(json.dumps(value).encode())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["metadata_type", "record_type", "record_signed", "record_member", "record_offset"],
+)
+def test_320_exact_frame_record_metadata_rejects_unknown_tail(fault):
+    value = wrapper_graph(320)
+    rows = value["types"]
+    named = {r.get("name"): r for r in rows if r["kind"] == "STRUCT"}
+    meta, record = named["frame_record_meta"], named["frame_record"]
+    if fault == "metadata_type":
+        meta["name"] = "unknown"
+    elif fault == "record_type":
+        record["name"] = "unknown"
+    elif fault == "record_signed":
+        record["members"][0]["type_id"] = next(
+            m for m in named["pt_regs"]["members"] if m["name"] == "syscallno"
+        )["type_id"]
+    elif fault == "record_member":
+        record["members"][1]["name"] = "unknown"
+    elif fault == "record_offset":
+        meta["members"][1]["bits_offset"] = 64
+    with pytest.raises(ValueError):
+        b.validate_kernel_prototype(json.dumps(value).encode())
+
+
+@pytest.mark.parametrize("fault", ["integer_offset_bool", "prototype_vlen_bool"])
+def test_native_wrapper_integer_types_do_not_accept_boolean_aliases(fault):
+    value = wrapper_graph()
+    rows = value["types"]
+    func = next(r for r in rows if r.get("name") == "__arm64_sys_recvfrom")
+    proto = rows[func["type_id"] - 1]
+    if fault == "integer_offset_bool":
+        rows[proto["ret_type_id"] - 1]["bits_offset"] = False
+    else:
+        proto["vlen"] = True
+    with pytest.raises(b.NaturalCloseRecvBPFError):
+        b.validate_kernel_prototype(json.dumps(value).encode())
