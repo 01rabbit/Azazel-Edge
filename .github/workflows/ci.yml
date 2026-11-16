@@ -92,6 +92,30 @@ jobs:
           grep -Eq "^[0-9]+ passed" input-auth-uids.log
           ! grep -Eq "skipped|failed|error" input-auth-uids.log
 
+      - name: Actual pre-enrolled refusal with genuine incomplete close (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_COMMON_EVENT_PUBLIC_DIR=$GITHUB_WORKSPACE/common-event-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_common_event_binding_linux.py | tee common-event-linux.log
+          grep -Eq "^2 passed" common-event-linux.log
+          ! grep -Eq "skipped|failed|error" common-event-linux.log
+
+      - name: Retain pre-enrolled finite event evidence and original refusal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: common-event-public
+          path: |
+            common-event-public/**/*.json
+            common-event-public/**/*.raw
+            common-event-public/**/producer.stdout
+            common-event-public/**/producer.stderr
+            common-event-public/**/worker.stdout
+            common-event-public/**/worker.stderr
+            common-event-linux.log
+          if-no-files-found: error
+
       - name: Read-only safety evidence composition with separate UIDs
         run: |
           set -o pipefail
