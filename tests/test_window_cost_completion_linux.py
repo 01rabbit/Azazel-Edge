@@ -1,6 +1,7 @@
 """One existing actual matrix; nonempty windows remain explicitly SYNTHETIC."""
 
 import os
+import json
 from pathlib import Path
 import sys
 
@@ -21,6 +22,12 @@ def test_actual_cost_and_synthetic_windows_remain_separate(tmp_path):
         )
     )
     result = run(output)
+    publication = json.loads(
+        (output / "publication/publication-index.json").read_bytes()
+    )
+    assert publication["status"] == "complete", publication["errors"]
+    assert publication["planned_files"] == publication["copied_files"] == 99
+    assert publication["errors"] == []
     actual = result["original_normal_clock_evaluation"]
     assert actual["both_on_stops_verified"] is True
     assert actual["original_load_evaluation"]["all_load_gates_valid"] is True

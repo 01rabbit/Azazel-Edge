@@ -179,15 +179,16 @@ jobs:
         with:
           name: window-cost-public
           path: |
-            window-cost-public/window-cost-completion.json
-            window-cost-public/original-normal-clock/report.json
-            window-cost-public/original-normal-clock/*.raw
-            window-cost-public/synthetic-window-cases/manifest.json
-            window-cost-public/synthetic-window-cases/*/event.json
-            window-cost-public/synthetic-window-cases/*/policy.json
-            window-cost-public/synthetic-window-cases/*/observations.json
-            window-cost-public/synthetic-window-cases/*/phase.jsonl
-            window-cost-public/synthetic-window-cases/*/journal/observations.journal
+            window-cost-public/publication/window-cost-completion.json
+            window-cost-public/publication/original-normal-clock/report.json
+            window-cost-public/publication/original-normal-clock/*.raw
+            window-cost-public/publication/synthetic-window-cases/manifest.json
+            window-cost-public/publication/synthetic-window-cases/*/event.json
+            window-cost-public/publication/synthetic-window-cases/*/policy.json
+            window-cost-public/publication/synthetic-window-cases/*/observations.json
+            window-cost-public/publication/synthetic-window-cases/*/phase.jsonl
+            window-cost-public/publication/synthetic-window-cases/*/journal/observations.journal
+            window-cost-public/publication/publication-index.json
             window-cost-linux.log
           if-no-files-found: error
 

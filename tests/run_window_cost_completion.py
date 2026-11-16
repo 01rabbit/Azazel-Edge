@@ -8,6 +8,7 @@ import run_observer_normal_clock as original
 from observer_normal_stop_analysis import _read
 from window_cost_completion_lab import run_synthetic_window_cases, wire
 from window_cost_completion_analysis import analyze_window_cost_completion, ROLES
+from window_cost_publication import publish_publication
 
 
 def collect_actual_raw(result):
@@ -59,7 +60,13 @@ def collect_synthetic_raw(result, *, errors=None):
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 values[name] = None
                 if errors is not None:
-                    errors.append(case["id"] + "." + name + "_synthetic_read_failed_" + type(exc).__name__)
+                    errors.append(
+                        case["id"]
+                        + "."
+                        + name
+                        + "_synthetic_read_failed_"
+                        + type(exc).__name__
+                    )
     return collected
 
 
@@ -87,7 +94,11 @@ def run(output_dir):
     try:
         synthetic = run_synthetic_window_cases(output / "synthetic-window-cases")
     except Exception as exc:
-        synthetic = dict(schema_version="edge-synthetic-window-lifecycle/v1", data_kind="SYNTHETIC", cases=[])
+        synthetic = dict(
+            schema_version="edge-synthetic-window-lifecycle/v1",
+            data_kind="SYNTHETIC",
+            cases=[],
+        )
         errors.append("synthetic_bundle_failed_" + type(exc).__name__)
     errors.extend(synthetic.get("blockers", []))
     actual_raw, read_errors = collect_actual_raw(actual)
@@ -101,22 +112,44 @@ def run(output_dir):
         )
     except Exception as exc:
         # Preserve the already exported actual matrix and raw synthetic prefix.
-        report = dict(schema_version="edge-window-cost-completion/v1",
-                      actual_applied_window_status="unavailable_under_existing_authority",
-                      original_normal_clock_evaluation=actual,
-                      actual_lifecycle=dict(evidence_kind="actual_existing_unconfined_software_lab",
-                          normal_stops=[], fault_prefixes=[], applied_window_exercised=False,
-                          expiry_commit_cost=None, pending_stop_loss_cost=None, active_deadline_wait=None,
-                          reasons=["completion_analysis_unavailable"]),
-                      actual_cost_by_arm_role=[], synthetic_window_cases=[],
-                      blockers=["completion_analysis_failed_" + type(exc).__name__,
-                          "synthetic_analysis_unavailable_originals_reference_synthetic-window-cases"],
-                      authority_flags={name: False for name in ("authorizes_transition", "experiment",
-                          "measurement_completed", "production_admission", "resume_authorized")},
-                      whole_measurement_qualified=False, comparison_qualified=False, qualified_safety_count=None)
+        report = dict(
+            schema_version="edge-window-cost-completion/v1",
+            actual_applied_window_status="unavailable_under_existing_authority",
+            original_normal_clock_evaluation=actual,
+            actual_lifecycle=dict(
+                evidence_kind="actual_existing_unconfined_software_lab",
+                normal_stops=[],
+                fault_prefixes=[],
+                applied_window_exercised=False,
+                expiry_commit_cost=None,
+                pending_stop_loss_cost=None,
+                active_deadline_wait=None,
+                reasons=["completion_analysis_unavailable"],
+            ),
+            actual_cost_by_arm_role=[],
+            synthetic_window_cases=[],
+            blockers=[
+                "completion_analysis_failed_" + type(exc).__name__,
+                "synthetic_analysis_unavailable_originals_reference_synthetic-window-cases",
+            ],
+            authority_flags={
+                name: False
+                for name in (
+                    "authorizes_transition",
+                    "experiment",
+                    "measurement_completed",
+                    "production_admission",
+                    "resume_authorized",
+                )
+            },
+            whole_measurement_qualified=False,
+            comparison_qualified=False,
+            qualified_safety_count=None,
+        )
     report["blockers"].extend(errors + read_errors)
     with (output / "window-cost-completion.json").open("xb") as stream:
         stream.write(wire(report))
+    publish_publication(output)
     return report
 
 
