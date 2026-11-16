@@ -132,3 +132,45 @@ evidence without private keys. Actual normal end and its timing verdict must
 replay independently. Mandatory CI must execute, never count a skip as a pass.
 Require independent final-head/artifact review, all final-head CI and exact
 base/head/test-merge/tree before merge. Update existing #400/#393 only.
+
+## First bounded virtual matrix (2026-11-16 JST)
+
+The first collection used implementation commit
+`fab7b27b22e087b855d4f5a8047c7c35ce37ce94` (tree
+`3ad7854e40149c4942f628d3b7f416b31ab999a0`), after the frozen contract
+`817093d`. The existing aarch64 core digest was
+`b735f44863a97d05b2c36f4dbfa3ca8d9206e8761b87e6df7c4677d92dddc024`.
+The disposable Linux container used the same existing Root/role separation,
+`--network none`, a read-only checkout/core and no added capabilities.
+The required six-arm test executed: **1 passed, no skips, 49.48s**.
+
+Both `original_on` and `instrumented_on` returned actual observer exit 0 with
+valid normal-control receipts, Source authentication, witness-acknowledged
+ordinary journal closure, closed resources and retained request/wait evidence.
+The instrumented on arm also retained its genuine end anchor and all three
+closed sidecars. Independent raw replay is a separate review gate.
+
+All six unchanged declared 120-percent load gates passed the existing 98-percent
+examined-accounting floor and marker parity. There were 108,032 written non-alert
+records; actual offered rates were 2999.454–2999.790/s. The original unchanged
+5,000,000ns qualifier on the **262 retained on-arm callbacks** returned qualified
+sampled-anchor consistency: worst supplied-epoch/call-interval discrepancy
+1,684,854ns; observed offset-envelope width 33,293ns. These are finite recorded
+clock checks, not a 5ms defense-response SLA or continuous clock attestation.
+The baseline stop-only arm deliberately has no clock qualification.
+
+Both faulted arms retained actual exit -9, three processed marker cursors and
+two unprocessed marker decisions; the instrumented fault prefix retained 110
+callbacks with no end or completion. Off arms have no observer. Neither absence
+is converted into zero, normal closure or a clock pass. Source input completeness,
+future append exclusion, production custody, Pi/HIL, physical durability,
+whole-system safety and comparative/causal benefit remain unqualified.
+Historical #609/#610 artifacts are unchanged and their missing-end results stay
+withheld. All admission/resume/whole-comparison flags remain false.
+
+The exported report SHA256 is
+`a6cb064eb296df27a36185cf77056a7070a86a5d3422fe6eca1199068decd82a`;
+61 allowlisted raw originals accompany it, without private keys or bootstrap
+configuration. CI must execute a fresh mandatory offline matrix on its own
+platform; its measured clock result may differ and must be retained without a
+threshold change or a favorable-result retry.
