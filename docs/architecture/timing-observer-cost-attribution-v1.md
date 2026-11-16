@@ -141,7 +141,9 @@ of these phase groups for every instrumented arm:
 
 - Signer: `input_receive`, `native_frame_validation`, `source_append`,
   `source_sign`, `source_verify`.
-- Witness: `witness_request`, `witness_append`, `witness_sign`.
+- Witness: `witness_append`, `witness_sign`; also `witness_request` when
+  the observer is present. The existing off arm initializes its witness store
+  but never invokes a witness client; request/RPC time is not exercised there.
 - Controller: `controller_wait`, `source_closure_wait`; also
   `observer_stop_wait` when the observer is present.
 - Observer, when present: `input_snapshot`, `source_verify`, `witness_rpc`,
