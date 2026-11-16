@@ -97,3 +97,25 @@ Required nativeLinux CI sevenactualcases no skips-as-pass. Finalhead allCI, fres
 artifact exactreplay, independentreview, exactbase/head/tree before conditionalmerge.
 All authorityflagsfalse; internalbranch/authverified/safetycountsnull; no automatic
 resume/admission.98%/1.2x unchanged; Pi/HIL/physical/production/causalbenefit unknown.
+
+## Explicit native wire (fixed before load)
+
+Event416: u64token,entered_ns,exited_ns,start_ns,receiver_inode,peer_inode,
+endpoint_inode,requested_len; s64ret; u32kind,role,tgid,tid,uid,euid,netns_inode,fd,
+flags,iter_type,data_source,skip,chunk,consumed,skb_len,data_len,endpoint_major,
+endpoint_minor,peer_status,endpoint_status,reserved,reserved2; data256 atbyte160.
+Kinds0recv_entry/1copy/2recv_exit. Entrytime=token,exittime0/ret0 forentry; exit
+uses originaltoken+savedscalars and actualreturntime. flags is scoped bykind:
+entry/exit syscallflags0; copyinternalflags0or64. Emptydata forentry/exit.
+Optional identity JSON fields are null when status!=1:1available,2absentpointer,
+3readerror. No numericzero advertised asidentity. Sixmaps: config72,recv_pending
+HASH8/416/2,copy_pending HASH8/416/2,eventsHASH4/416/32NOEXIST,zero_template
+ARRAY4/416/1readonlyBPF128,statsARRAY4/128/1. Counters oldtwelve+recv_selected,
+recv_completed,recv_inflight,unmatched_recv_exit. Hookkeys recv_entry,recv_exit,
+copy_entry,copy_exit preserved separately in probe link_identities.
+
+Normal-case finite_case_consistent means bounded INDIVIDUAL receiver observations
+and clean sampled-state lifecycle, never a missing-peer pair or globalcoverage.
+Pair/refusalconsistency remain separate null when missing. The corpus full-client
+frame expectation on observer_stop_after_copy means original completeCOPY bytes;
+its syscallreturn may legitimately be absent. No callback forces a specific race.
