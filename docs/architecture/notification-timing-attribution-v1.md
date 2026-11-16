@@ -231,3 +231,43 @@ close errors/state. Partial setup uses abort instead of normal finish. If actual
 measured workers remain alive, retain their temporary resources/hooks safely,
 mark unfinished and stop later case workloads; do not claim healthy continuation.
 Originals already available still export; later cases remain explicitly not run.
+
+## Preserved first pilot and separately frozen supplement
+
+First committed pilot0752781 (11cases,12.98SECONDS for the whole Linux test)
+remains immutable. Its exact replay is valid, including all unknowns, but import
+of the old test module also imports agent.DecisionLogger and attempted a default
+/var/lib output directory; access was denied. Do not claim this import was pure
+or that no default-path attempt occurred. Before FUTURE execution, scope the
+existing AZAZEL_DECISION_LOG_DIR to fresh owned private scratch BEFORE importing
+the fixture module, restore environment afterward, and retain that scratch for
+the imported object's lifetime. No privilege/default/runtime changes. Prove this
+in a fresh import-only process without rerunning first workload; record no
+protected-path attempt. Never edit the first pilot bytes/results to imply a fix.
+
+The base11 real-fsync diagnostic conditions did NOT reproduce the old global
+requested50ms os.fsync mock. Preserve their original protocol SHA/cases/outputs
+unchanged. slow-fsync-supplement.json separately freezes exactly2 supplemental
+original/instrumented120-event/six-producer cases. Each runs ONCE in a fresh
+same-authority process, preserving120=recorded+dropped, audit/queue chains and
+actual stage/CPU/control brackets. Mirror old global mock timing: install only
+after original readiness/setup, requested50ms then exact ORIGINAL fsync once,
+restore BEFORE final stop. This mock is confined to that child and cannot affect
+base cases/other idle daemons. Record actual child logging/capture profile;
+matching the global mock does not prove full historical environment equivalence.
+Use original trace-{base}-{offset}/SID recipe from pinned old source. Retain
+original monotonic-seconds timer values and wider instrumented clocks separately.
+Any new over50ms observations remain adverse descriptive facts, not a test retry
+or a50ms success gate. No pair subtraction as true profiler cost or attribution
+of the old123.536682ms event.5ms/98%/1.2x Source gates remain separate/unchanged.
+
+Keep base and supplement as separate manifests/reports/public roots and explicit
+profile schemas, not silent legacy conversion. Analyzer/recorder accept the
+TWO exact frozen protocol hashes, with same v1 row semantics and external pins;
+base old replay/output must remain exact. Supplemental driver/Linuxtest are new
+explicit surfaces and require source/child process provenance and exclusive
+original-first exports too. CI runs both mandatory ordinary-UID tests (2passed,
+no skip success); local supplemental capture runs only the2 NEW cases after
+review/commit/precollection. No rerun of already collected base11 for a nicer
+outcome. Final CI may run fresh base+supplement once at its final source as a
+required gate, preserving all assignments/failures and every old unknown.
