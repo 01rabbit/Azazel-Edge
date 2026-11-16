@@ -188,3 +188,38 @@ Strict known envelopes plus bounded original metrics/control JSON preserve all
 material without accepting caller eligibility. Any malformed original/index
 causes local descriptive attribution to be withheld while completed trace prefix
 facts remain. No supplied counter or accepted boolean grants measurement/safety.
+
+## Harness bracket labels
+
+Input here means fixture construction and direct recorder.submit invocation,
+not observed UNIX-socket ingress, Rust reception or application delivery.
+When preserving proper parentage around the legacy statistics lock, its traced
+hold may be only the held prefix through the original endpoint append. Label
+that object/coverage explicitly partial, close its child before legacy_interval
+while the same primitive is still held, and retain the genuine eventual release
+bracket separately. The remainder is unallocated; never backdate tracer clocks
+or report that prefix as the full lock hold. Keep actual original-timer t0/t1/
+elapsed in control metadata separately from wider instrumented tracer brackets.
+
+The original durable audit dispatcher has an idle daemon with no stop API.
+Retain its actual alive/idle/pending/delivered/handed state; do not fabricate a
+join or add runtime termination. Trace finish means measured producer/recorder/
+relay workers joined and measured callbacks drained, not complete process-daemon
+lifecycle. Shared-process CPU includes any other original/idle-case threads and
+is never exclusive per-phase CPU. Whole lifecycle/cost acceptance stays false.
+
+## Same-call control completion
+
+A selected attempted call and its return must share an explicit attempt token
+and nativeTID; another producer returning first cannot close that bracket.
+For unrelated-lock negative control, hold the unrelated primitive for the
+requested minimum20ms AND until that selected same call returns (bounded30s
+watchdog). This is a causal no-dependency control, not a20ms response deadline.
+A timeout remains unexercised/failure, not a successful zero delay.
+
+Fsync identity-probe failure must still delegate the original fsync once and
+preserve its exact return/exception; retain the separate probe error. Partial
+setup/cleanup errors retain already captured originals and actual join state,
+never fabricate completed workers or delete active-worker evidence. Derived
+scheduler positive-control status belongs in new analysis/summary: never rewrite
+already closed original-result bytes after observing counter outcomes.
