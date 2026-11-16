@@ -271,3 +271,13 @@ no skip success); local supplemental capture runs only the2 NEW cases after
 review/commit/precollection. No rerun of already collected base11 for a nicer
 outcome. Final CI may run fresh base+supplement once at its final source as a
 required gate, preserving all assignments/failures and every old unknown.
+
+Fresh import-only negative control also found the existing agent AI-audit
+initializer calling P0AuditLogger at default /var/log/azazel-edge/ai. Before
+future fixture import, scope BOTH existing AZAZEL_DECISION_LOG_DIR and
+AZAZEL_AI_AUDIT_LOG into the same fresh owned private scratch, restoring both
+environment values afterward and retaining scratch for imported-object lifetime.
+The first pilot remains unchanged; do not assume this second default-path
+attempt was absent or classify its outcome without retained evidence. Fresh
+import-only proof must check all protected mkdir/open attempts, not just the
+first DecisionLogger warning. No runtime/default/permission edits.
