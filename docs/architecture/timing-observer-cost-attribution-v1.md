@@ -164,3 +164,29 @@ from the original function, not successful descriptor close or durable storage.
 An externally known recorder failure overrides a clean-looking footer without
 discarding earlier verified complete calls. Child descriptor closure remains
 unproven unless separately recorded; no original result is changed to report it.
+
+## Preserved failed-CI case: functional fault acceptance, not timing completion
+
+CI run 43841918076 failed its timing-completeness assertion. Its original report
+`ad77facf59ccfbea4e061916b4b5b25b0d40c23a057dae101c9370750169e0ee`
+is immutable. It lacks a completed faulted-observer `observation` call while
+retaining all other required completed calls and exact original fault state.
+The valid prefix has pending observation → journal-append intents, a completed
+returned journal-fsync descendant, then a pending witness-RPC intent. Intents
+alone prove neither a function body ran nor where the process was killed.
+
+Before changing code, define a narrow functional-test condition for this shape:
+only the instrumented faulted arm; exact missing list `observer.observation`;
+no invalid row/hash/identity reason; cursor 3, SIGKILL, two unprocessed decisions,
+three native/signed decisions and unchanged six-arm parity/Source closure;
+validated pending observation and journal-append ancestry with a completed
+returned journal-fsync child. Other required phases must have completed calls.
+Corruption, ordinary-on omissions and any other missing phase still fail.
+
+Expose pending intent IDs/parents/phases without invented timings/outcomes.
+The functional test may recognize this planned-fault prefix, but its phase
+collection remains **incomplete**, missing observation statistics stay null,
+and all original failed artifacts remain failed. No clock/load/safety gate is
+relaxed. Do not delay the kill, add callbacks, retry the same trial for favorable
+data, or reclassify this as a successful timing measurement. New final-head CI
+is required for the changed classifier; it is a separate new trial.
