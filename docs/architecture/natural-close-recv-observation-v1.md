@@ -171,3 +171,23 @@ memory/payload/keys) before the unchanged strictgate, publishseparately. It is n
 an observation artifact or proof of compatible attachment. Inspect/freeze an
 exact additionalprofile only after actualtype information; no size-range or
 unknown-layout fallback. Original6.8observations remain immutable/unmodified.
+
+## Exact second register profile frozen from actual CI metadata
+
+Control-only artifact14206332153/run43824872759/head0ff786857444662033eb934023e014877986178b
+ZIPsha2e6d968986e9f7ec5b2eda39e659dfe330de59c9c661500c871b5ad5c9990697
+was checked beforedecode. Kernel7.0.0-1017-azure/BTFJSONsha53173005fb732ec00b181f1d29c3cb553c50909ceba96ac25936dae3dc8a7275.
+Projectioniscompleteforselectednonpointertypes, not fullBTF/attachment proof; strict
+previouscheck already verified wrapper signature before refusing registersize.
+
+Accept ONLY a new named pt_regs320/frame_record_meta24 profile: ordered6members
+anonymousunion@bit0,orig_x0u64@2176,syscallno signed32@2240,pmr unsigned32@2272,
+sdei_ttbr1u64@2304,stackframe structframe_record_meta24@2368. That struct has
+record(frame_record16:fp/lru64@0/64)@0,typeu64@128. Bothunion272 arms user_regs and
+anonymousstruct272 must retain exact4fields regs31u64@0,spu64@1984,pcu64@2048,
+pstateu64@2112. fdtable56 remains exactmax_fds/fd/close_on_exec/open_fds/
+full_fds_bits/rcu. No acceptedsize range, guessedoffset, genericflatten or tail
+ignore for this profile. Existing336profile remains separatelyidentified. Native
+source/event ABI/capabilities/targetpermissions unchanged; actualattachment and
+seven freshCIobservations stillrequired beforemerge. Failedfirst/diagnostic-only
+CI observations remainNONE and logs retained, never retroactivelyqualified.
