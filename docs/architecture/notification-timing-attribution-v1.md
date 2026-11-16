@@ -281,3 +281,41 @@ The first pilot remains unchanged; do not assume this second default-path
 attempt was absent or classify its outcome without retained evidence. Fresh
 import-only proof must check all protected mkdir/open attempts, not just the
 first DecisionLogger warning. No runtime/default/permission edits.
+
+## Interpretation registry and retained prospective results
+
+scope-interpretation.json is a separately versioned interpretation registry for
+both frozen protocols, not a numeric/raw rewrite. Future exports pin its exact
+bytes separately; previously collected public directories stay unchanged.
+In particular lock_acquire is a wrapper/delegate bracket, NOT exclusive kernel
+waiting. lock_hold is an application-body SUBINTERVAL while the primitive is
+owned, NOT full physical ownership: post-acquire probe/setup and pre-release
+probe/teardown outside that clock can occur while the actual mutex remains held.
+Thus8.268ms acquire vs5.208us held-body in one new event does not establish why
+its acquire-call bracket was long. Full ownership transitions and observer overhead remain
+unallocated; future actual acquire-return/release-call brackets need a new
+separately frozen extension. Do not sum these spans or infer old latency cause.
+
+First prospective base profile0752781: one ordinaryUID1000/caps0/NNP/netnone
+Linux test1passed12.98s,11assigned cases,68publicfiles/67manifestpins,9848completed
+spans exactly replayed.8complete descriptive traces, original without timing
+trace withheld, scheduler disabled0 withheld/no workload/no manufactured raw,
+trace loss7completed-prefix facts. First report SHA256
+bbf0eef5b79f312fbdbbced7c0f23987fa05a457355cd2cdcfff5e22a9d300d5.
+Its import/default-path finding remains explicit; readonly stopped/pristine
+image metadata shows requested targets absent but does not prove no transient
+creation. Scoped future import fix and separate proofs do not rewrite this run.
+
+Supplemental prospective profiled69dcd0: exactly2NEWfreshchildren, no base rerun,
+one Linux test1passed3.52s,22publicfiles/21manifestpins. Old-global50ms requested
+wait has21/28actual fsync calls, observed minimum waits50.216502/50.076502ms.
+Both children preserve120=recorded+dropped (9+111 and11+109); original timer
+maxima2.294766ms and32.402509ms,0observed over50ms in each complete120-sample
+set. These are bounded observations under THIS capture/environment, NOT50ms
+performance acceptance, true probe-cost subtraction, oldcaplog equivalence or
+historical event attribution.1760instrumented spans; qualified scheduler null.
+Second report SHA256
+5e66b7a765a2b0a99dc47cbfecd497be1ee1f842333e99306cc2cba50d183ef0.
+All raw/audit/queue/timer/control/child identity and exact analyses independently
+replayed. Historical123.536682ms remains UNKNOWN. OriginalSource1.2x/98%/5ms
+acceptance, real service/Pi/HIL/production/safety remain separate/unqualified.

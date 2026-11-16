@@ -228,6 +228,7 @@ def run(output_dir):
                 interpreter_sha256=sha(Path(sys.executable).resolve().read_bytes()))
     save(output / "protocol.json", protocol_raw)
     save(output / "source-inventory.json", inventory_raw)
+    save(output / "scope-interpretation.json", read_original(ROOT / "tests/fixtures/notification-timing/v1/scope-interpretation.json"))
     save(output / "process-boundary.json", canonical(boundary))
     cases, blockers = [], []
     for recipe in protocol["cases"]:
@@ -288,7 +289,7 @@ def run(output_dir):
         base_pilot_reruns=0, performance_acceptance=False,
         original_source_load_gates="separate_unchanged_not_P0_denominator", **FLAGS)
     save(output / "report.json", canonical(report))
-    names = {"report.json", "protocol.json", "source-inventory.json", "process-boundary.json"}
+    names = {"report.json", "protocol.json", "source-inventory.json", "process-boundary.json", "scope-interpretation.json"}
     names.update(identifier + "." + suffix for identifier in SUPPLEMENT_CASES for suffix in (*SUFFIXES, *CHILD_SUFFIXES))
     save(output / "manifest.json", canonical(dict(schema_version="edge-notification-supplement-public-inventory/v1",
         source=source, metadata=base, cases=[dict(case_id=entry["case_id"], expected=entry["expected"], artifacts=entry["artifacts"]) for entry in cases],

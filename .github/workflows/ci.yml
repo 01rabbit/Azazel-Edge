@@ -354,6 +354,7 @@ jobs:
             notification-timing-public/manifest.json
             notification-timing-public/protocol.json
             notification-timing-public/source-inventory.json
+            notification-timing-public/scope-interpretation.json
             notification-timing-public/process-boundary.json
             notification-timing-public/*.original-result.json
             notification-timing-public/*.event-index.json
@@ -374,6 +375,7 @@ jobs:
             notification-timing-supplement-public/manifest.json
             notification-timing-supplement-public/protocol.json
             notification-timing-supplement-public/source-inventory.json
+            notification-timing-supplement-public/scope-interpretation.json
             notification-timing-supplement-public/process-boundary.json
             notification-timing-supplement-public/*.original-result.json
             notification-timing-supplement-public/*.event-index.json

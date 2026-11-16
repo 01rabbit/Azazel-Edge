@@ -78,6 +78,7 @@ def run(output_dir):
                          interpreter_sha256=sha(Path(sys.executable).resolve().read_bytes()))
     save(output / "protocol.json", protocol_raw)
     save(output / "source-inventory.json", inventory_raw)
+    save(output / "scope-interpretation.json", read_original(ROOT / "tests/fixtures/notification-timing/v1/scope-interpretation.json"))
     save(output / "process-boundary.json", canonical(process_boundary()))
     # Git calls precede every measured scope; no source/default change.
     enrolled = {"head": os.environ.get("EDGE_NOTIFICATION_SOURCE_HEAD"), "tree": os.environ.get("EDGE_NOTIFICATION_SOURCE_TREE")}
@@ -151,7 +152,7 @@ def run(output_dir):
             "scheduler_cause_from_wall_minus_CPU", "shared_process_CPU_and_surviving_idle_original_dispatchers",
             "statistics_lock_held_remainder_after_prefix", "trace_footer_not_descriptor_close_or_durability_proof"], **FLAGS)
     save(output / "report.json", canonical(report))
-    allowed = {"report.json", "manifest.json", "protocol.json", "source-inventory.json", "process-boundary.json"}
+    allowed = {"report.json", "manifest.json", "protocol.json", "source-inventory.json", "process-boundary.json", "scope-interpretation.json"}
     allowed.update(recipe["id"] + "." + suffix for recipe in protocol["cases"] for suffix in SUFFIXES)
     # No traversal: every read is one flat, frozen public basename.
     manifest = dict(schema_version="edge-notification-public-inventory/v1", run_id=run_id,
