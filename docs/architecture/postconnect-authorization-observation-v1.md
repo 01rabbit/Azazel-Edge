@@ -102,3 +102,24 @@ identities, UID/GID maps and four credential IDs/groups/capability status before
 then the controller compares against its own identity map/namespace. It neither
 connects nor writes targets. Same-UID custody is an explicit lab premise; no ptrace,
 permission fallback, root bypass or claim of hostile same-UID isolation.
+
+## Collected virtual evidence and remaining gates
+
+The first container launch inherited the cached image's nonroot review user:
+five Linux-only tests skipped, no observations or export, NOT acceptance. Its
+stopped container/log are retained. Explicit Root setup matches the EXISTING prior
+lab envelope; no capabilities or target permissions were added. The separate fresh
+launch ran all five cases in18.64s without skips under kernel6.8.0-117/aarch64,
+actual iov_iter_6_8. Both negative responses are forbidden/root_only, including
+untrusted peer_uid0; SoT/audit originals are identical at both samples. Positive
+actual writer updates SoT and its audit peer_uid65534. Loss retains both copies and
+equal originals but coverage unknown; submitted after-SoT omission retains audit
+change with overall sampled unchanged=false. All workers exit0 without force.
+
+Forty-five immutable exported files (one declared absence) reproduce all five
+original diagnostics exactly. Index pinned before copying:
+`afe4a89dac342ab998ca21f3ea1a53ec6f70a2ae57ed4f7fbff251ef3d350ddc`.
+Code/SYNTHETIC regression309passed includes the unchanged Root observer/evaluator.
+Independent precollection code/spec review found no blocker. Full final-head CI,
+fresh CI artifact replay and independent final review are still separate merge
+gates. No result closes production/branch/other-state/comparative gates above.
