@@ -191,3 +191,10 @@ ignore for this profile. Existing336profile remains separatelyidentified. Native
 source/event ABI/capabilities/targetpermissions unchanged; actualattachment and
 seven freshCIobservations stillrequired beforemerge. Failedfirst/diagnostic-only
 CI observations remainNONE and logs retained, never retroactivelyqualified.
+
+Read-only local6.8 metadata (tail-extraction container, no programload) fixes the
+existing336profile as exact9members:anonymousunion@0,orig_x0u64@2176,syscallnos32
+@2240,unused2u32@2272,sdei_ttbr1u64@2304,pmr_saveu64@2368,stackframeu64[2]@2432,
+lockdep_hardirqsu64@2560,exit_rcuu64@2624. Strengthen its explicittail checks as
+well; no inventedcommon-tail merging. Bothknownprofiles share only the identical
+verified272-byte register overlay. Unknownprofiles stillrefusebeforeload.
