@@ -79,6 +79,26 @@ audit remains failed/unknown. Never synthesize a terminal summary or counters.
 Verify authenticated signed Source closure and exact native/signed marker parity.
 Cleanup all owned processes; preserve every failed/partial scope and its originals.
 
+The signed-launch adapter observes the actual launcher PID/start and return
+status, not a native `Popen` owned by the controller. Under the explicitly pinned
+trusted `input_live.launch` implementation, launcher return 0 entails that its
+actual native `returncode` and waited signer status were both 0. Retain this as
+`process_role=launcher`,
+`native_exit_basis=trusted_launcher_conjunctive_return`, and
+`native_exit_independently_waited=false`, with separate owned-native PID/start
+and disappearance checks. Revalidate the exact source hash and this basis before
+using the existing `FinalAudit` gate. PID absence alone never supplies an exit
+code, and no fake native process object is passed as the launcher. This is a
+trusted-code derivation, not independent native wait-status authentication.
+
+Retain complete mixed launcher/native stderr from process start to EOF. Tee only
+the exact original startup `os.read` results through a module-local binding,
+then hand over to one bounded reader after the original startup method returns.
+No competing reader, discarded prefix, fabricated empty diagnostic or suffix-only
+file may establish error-free audit writes. Join the reader and verify EOF,
+file identity and bounds before final audit collection. Its mixed scope and
+reader errors remain explicit.
+
 ## Prospective clock and phase recording
 
 Keep phase trace bounds at 4,096 rows/4MiB per role and nesting depth 16.
