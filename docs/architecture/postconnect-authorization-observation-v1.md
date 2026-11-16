@@ -87,3 +87,11 @@ one declared absence. No keys/ELF/private tree. Preserve any failed run separate
 never repair/publish it as success. Pure parser tests are SYNTHETIC. Required real
 ARM Linux five-case CI must run, no skip-as-pass; full final-head CI, independent
 code/artifact review and exact base/head/tree match precede conditional merge.
+
+The isolated Root controller uses primary GID65534 (existing SETGID setup only)
+to read the owner-created0750 directory through existing group read/search bits;
+no supplementary group addition or endpoint mutation. Only the owning fixture UID
+removes its temporary directory AFTER all original samples/exports. Observer UID0
+already has the Root peer-table grant; it never connects. Separate sealed artifact
+reader remains65533, outside target access. This is a test harness setup detail,
+not a production group or observer access grant.
