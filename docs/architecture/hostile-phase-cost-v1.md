@@ -118,6 +118,15 @@ observations. Write an observer end anchor only after a genuine normal return.
 Clock-sidecar failure invalidates this instrumented observer trial; native
 defense/source operation remains separate. Preserve earlier facts and originals.
 
+Pair callback bytes and context bytes through the Root collector's retained
+file hashes, actual staged scope pins and the independently read objective-policy
+digest/source/ref. Matching timestamps alone do not establish that pair. Treat
+this as explicit test-harness custody, not cryptographic observer independence.
+Offline analysis recomputes the unchanged clock result from original inputs;
+an imported `eligible` flag cannot override missing closure or a withheld result.
+Bind distinct launcher/native identities to retained original process samples,
+and compare stderr hashes with the actual retained audit diagnostic hashes.
+
 The current v3 CLI normally stops by SIGTERM/SIGKILL and provides no normal end
 anchor. Therefore this profile's full 5ms qualification is expected to remain
 **withheld** if that evidence is absent, even when individual callback diagnostics
