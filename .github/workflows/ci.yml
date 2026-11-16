@@ -332,6 +332,38 @@ jobs:
             comparison-preflight-linux.log
           if-no-files-found: error
 
+      - name: Offline notification timing attribution without added authority
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_NOTIFICATION_TIMING_PUBLIC_DIR=$GITHUB_WORKSPACE/notification-timing-public" \
+            "EDGE_NOTIFICATION_SOURCE_HEAD=$(git rev-parse HEAD)" "EDGE_NOTIFICATION_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" \
+            unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+            .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_notification_timing_linux.py | tee notification-timing-linux.log
+          grep -Eq "^1 passed" notification-timing-linux.log
+          ! grep -Eq "skipped|failed|error" notification-timing-linux.log
+
+      - name: Retain bounded notification timing originals and unknowns
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notification-timing-public
+          path: |
+            notification-timing-public/report.json
+            notification-timing-public/manifest.json
+            notification-timing-public/protocol.json
+            notification-timing-public/source-inventory.json
+            notification-timing-public/process-boundary.json
+            notification-timing-public/*.original-result.json
+            notification-timing-public/*.event-index.json
+            notification-timing-public/*.trace.jsonl
+            notification-timing-public/*.audit.raw
+            notification-timing-public/*.queue.raw
+            notification-timing-public/*.analysis.json
+            notification-timing-linux.log
+          if-no-files-found: error
+
       - name: Run tests
         run: |
           . .venv/bin/activate
