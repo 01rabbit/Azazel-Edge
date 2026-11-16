@@ -146,3 +146,26 @@ external expectedpublishedpin remains mandatory. A PRESENT path always uses
 strictread/hash checks; failure is never converted to null. This gives the pure
 wrapper an honestly declared unavailable report while retaining validmeasurement
 replay. Other paths keep originalabsence/pin consistency and sealedintake rules.
+
+## Precollection compatibility and actual-file boundary controls
+
+Originalpublished diagnostics use their original boundedcanonical object parser,
+not the maincontract's unrelated256-byte stringlimit: valid256-bytecopy/512hex and
+finite numeric originalreports survive. Canonicaltyped comparison distinguishes
+False/0,True/1,integer/float. Originalplan/trust rolechecks use each family's own
+parser. Category-specific interpretationgaps and observation_layers_status=
+family_capabilities_not_observed_coverage prevent capabilitylabels being mistaken
+for actual measuredcoverage.
+
+Seven isolated offlineLinux file-intake controls use SYNTHETIC signedmain and
+SYNTHETIC natural-close plans/metadata/public TESTkeys. Actual facts tested are
+Root0444files, distinctcap0+NNP UID61002 reading, protectedpaths, strictboot/reader/
+metadata gates and unchangedoriginalbytes; NOT actual packets/newkernelcapture or
+productionidentity/keyindependence. Cases: completehistoricalreference; declared
+missingpublishedreport with nonnullpin; separatelypinned changedpublishedreport;
+missingafterSoT retainingknownauditchange; wrongreader; writableleaf; wrongboot.
+Only fixturecontroller writes/stages/removes its own temporaryfiles. Guard reader
+against writeopens, mutations, sockets and subprocesses afterimports; compare all
+originalhashes before/after. Existingouter setup UID/GID capability subsetonly,
+no BPF/NET_ADMIN/newpermission required. Required CIUID stage must run all7, not
+skip-as-pass. No new accounts/services/productionkeys or sensors.
