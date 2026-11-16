@@ -223,3 +223,11 @@ setup/cleanup errors retain already captured originals and actual join state,
 never fabricate completed workers or delete active-worker evidence. Derived
 scheduler positive-control status belongs in new analysis/summary: never rewrite
 already closed original-result bytes after observing counter outcomes.
+
+Recorder cleanup extension before collection: abort() marks sticky incomplete
+and closes the sidecar descriptor WITHOUT END or invented completion. It never
+terminates original workers, changes their calls or upgrades a prefix. Retain
+close errors/state. Partial setup uses abort instead of normal finish. If actual
+measured workers remain alive, retain their temporary resources/hooks safely,
+mark unfinished and stop later case workloads; do not claim healthy continuation.
+Originals already available still export; later cases remain explicitly not run.
