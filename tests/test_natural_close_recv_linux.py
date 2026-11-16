@@ -186,6 +186,61 @@ print(json.dumps(rows))
     return result
 
 
+def _record_abi_projection(raw):
+    # Control-only diagnostic, produced even when the strict ABI gate refuses.
+    destination = os.environ.get("EDGE_NATURAL_CLOSE_ABI_PATH")
+    if not destination:
+        return
+    rows = json.loads(raw)["types"]
+    by_id = {row["id"]: row for row in rows}
+    selected = {}
+    roots = [
+        row
+        for row in rows
+        if (row["kind"], row.get("name"))
+        in {
+            ("STRUCT", "pt_regs"),
+            ("STRUCT", "fdtable"),
+            ("STRUCT", "files_struct"),
+            ("FUNC", "__arm64_sys_recvfrom"),
+        }
+    ]
+    queue = [(row["id"], 0) for row in roots]
+    while queue and len(selected) < 128:
+        key, depth = queue.pop(0)
+        if not key or key in selected or key not in by_id:
+            continue
+        row = by_id[key]
+        selected[key] = row
+        # Follow registers/tail scalar/aggregate types, not arbitrary pointers.
+        if depth >= 8 or row["kind"] == "PTR":
+            continue
+        refs = [row.get("type_id"), row.get("ret_type_id")]
+        refs.extend(
+            item.get("type_id")
+            for field in ("members", "params")
+            for item in row.get(field, [])
+        )
+        queue.extend((key, depth + 1) for key in refs if key)
+    output = dict(
+        schema_version="edge-natural-close-abi-projection/v1",
+        control_only=True,
+        observation_completed=False,
+        architecture=platform.machine(),
+        kernel_release=platform.release(),
+        btf_sha256=digest(raw),
+        projection_truncated=bool(queue),
+        types=[selected[key] for key in sorted(selected)],
+    )
+    fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o444,
+    )
+    with os.fdopen(fd, "wb") as out:
+        out.write(_json(output) + b"\n")
+
+
 @pytest.fixture(scope="module")
 def approved_object():
     assert platform.machine() == "aarch64" and os.sysconf("SC_CLK_TCK") == 100
@@ -224,6 +279,7 @@ def approved_object():
             ],
             timeout=30,
         )
+        _record_abi_projection(raw_btf)
         build_prototype = validate_kernel_prototype(raw_btf)
         source = ROOT / "native/natural_close_recv_observer.bpf.c"
         obj = directory / "observer.o"

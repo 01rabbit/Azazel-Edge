@@ -160,3 +160,14 @@ No oldartifact converted. Targeted regressions329passed before threeadditional
 pair-withholding cases; affectedpair tests passed. Independent concreteprecollection
 review CLEAN. FinalheadallCI/freshCIartifact/review/base-head-tree remain mergegates.
 No production, internalbranch, allstate or comparative-benefit acceptance follows.
+
+## First CI ABI refusal preserved before collection
+
+CI43824286964/head66a8e2c9 refused allseven at setup beforeprogramload or target
+observation: kernel7 pt_regs did not match the frozen336-byte profile. No export
+or kernel-success claim exists; failedjoblogs are preserved separately. Add only
+a control-only minimized ABIprojection (type metadata/wholeBTFJSONhash, no kernel
+memory/payload/keys) before the unchanged strictgate, publishseparately. It is not
+an observation artifact or proof of compatible attachment. Inspect/freeze an
+exact additionalprofile only after actualtype information; no size-range or
+unknown-layout fallback. Original6.8observations remain immutable/unmodified.

@@ -249,11 +249,18 @@ jobs:
       - name: Actual natural-close receiver completion and original state (offline)
         run: |
           set -o pipefail
-          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_NATURAL_CLOSE_RECV_PUBLIC_DIR=$GITHUB_WORKSPACE/natural-close-recv-public" \
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_NATURAL_CLOSE_ABI_PATH=$GITHUB_WORKSPACE/natural-close-abi.json" "EDGE_NATURAL_CLOSE_RECV_PUBLIC_DIR=$GITHUB_WORKSPACE/natural-close-recv-public" \
             unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
             tests/test_natural_close_recv_linux.py | tee natural-close-recv-linux.log
           grep -Eq "^7 passed" natural-close-recv-linux.log
           ! grep -Eq "skipped|failed|error" natural-close-recv-linux.log
+      - name: Retain control-only natural-close kernel ABI projection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: natural-close-abi-projection
+          path: natural-close-abi.json
+          if-no-files-found: error
       - name: Retain only public advisory exec evidence
         if: always()
         uses: actions/upload-artifact@v4
