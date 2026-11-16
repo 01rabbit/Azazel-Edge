@@ -662,3 +662,109 @@ def test_abort_close_failure_retains_unknown_close_state_and_exact_original_exce
     real_os.close(fd)  # This fake refused to enter the real close syscall.
     rows = [json.loads(line) for line in (tmp_path / "trace").read_bytes().splitlines()]
     assert not any(row["kind"] == "end" for row in rows)
+
+
+def _with_protocol(protocol, case_id):
+    rows, expected, index, original = fixture()
+    rows[0][1].update(protocol_sha256=protocol, case_id=case_id)
+    expected["header"].update(protocol_sha256=protocol, case_id=case_id)
+    value = json.loads(original)
+    value["case_id"] = case_id
+    original = wire(value)
+    expected["original_result_sha256"] = sha(original)
+    return rows, expected, index, original
+
+
+@pytest.mark.parametrize(
+    "protocol,case_id",
+    [
+        (a.PROTOCOL_SHA256, "legacy_instrumented"),
+        (a.SUPPLEMENT_SHA256, "historical_slow_fsync_original"),
+        (a.SUPPLEMENT_SHA256, "historical_slow_fsync_instrumented"),
+    ],
+)
+def test_only_frozen_base_and_supplement_protocols_are_accepted(
+    tmp_path, protocol, case_id
+):
+    value = _with_protocol(protocol, case_id)
+    assert analyze(value)["status"] == "complete_descriptive_trace"
+    metadata = {key: value[1]["header"][key] for key in r.META}
+    recorder = r.NotificationRecording(tmp_path / "trace", metadata=metadata)
+    recorder.finish()
+    assert recorder.incomplete is False
+    assert (
+        r.ALLOWED_PROTOCOL_SHA256
+        == a.ALLOWED_PROTOCOL_SHA256
+        == frozenset((a.PROTOCOL_SHA256, a.SUPPLEMENT_SHA256))
+    )
+
+
+@pytest.mark.parametrize(
+    "protocol,case_id",
+    [
+        ("a" * 64, "legacy_instrumented"),
+        (a.PROTOCOL_SHA256, "historical_slow_fsync_instrumented"),
+        (a.SUPPLEMENT_SHA256, "legacy_instrumented"),
+    ],
+)
+def test_unknown_protocol_or_cross_protocol_case_never_completes(protocol, case_id):
+    result = analyze(_with_protocol(protocol, case_id))
+    assert result["status"] == "withheld" and result["normal_return_confirmed"] is False
+    assert result["completed_spans"] == []
+
+
+def test_recorder_unknown_protocol_refuses_trace_but_preserves_original_calls(tmp_path):
+    value = _with_protocol("a" * 64, "legacy_instrumented")
+    metadata = {key: value[1]["header"][key] for key in r.META}
+    path = tmp_path / "unknown-protocol"
+    recorder = r.NotificationRecording(path, metadata=metadata)
+    assert recorder.incomplete and not path.exists()
+    token, calls = object(), []
+
+    def original():
+        calls.append(1)
+        return token
+
+    assert recorder.call("submit", original) is token
+    recorder.finish()
+    assert calls == [1] and not path.exists()
+
+
+def test_base_protocol_analysis_replay_remains_bit_exact():
+    # Captured before the separately frozen supplement was admitted.
+    assert (
+        sha(wire(analyze(fixture())))
+        == "d486ae6bcb3b457d65850e970c82cd8898713e31d9436f0e5c6b0a1d35a53a71"
+    )
+
+
+@pytest.mark.parametrize(
+    "protocol,case_id",
+    [
+        (a.PROTOCOL_SHA256, "historical_slow_fsync_instrumented"),
+        (a.SUPPLEMENT_SHA256, "legacy_instrumented"),
+        (a.PROTOCOL_SHA256, "arbitrary_unknown_case"),
+        (a.SUPPLEMENT_SHA256, "arbitrary_unknown_case"),
+    ],
+)
+def test_recorder_cross_protocol_or_unknown_case_refused_before_fd_open(
+    tmp_path, protocol, case_id
+):
+    value = _with_protocol(protocol, case_id)
+    metadata = {key: value[1]["header"][key] for key in r.META}
+    path = tmp_path / "rejected-case"
+    recorder = r.NotificationRecording(path, metadata=metadata)
+    assert recorder.incomplete and recorder.fd is None and not path.exists()
+    token, calls = object(), []
+
+    def original():
+        calls.append(1)
+        return token
+
+    assert recorder.call("submit", original) is token
+    recorder.finish()
+    assert calls == [1] and not path.exists()
+    assert r.PROTOCOL_CASES == {
+        a.PROTOCOL_SHA256: a.CASES,
+        a.SUPPLEMENT_SHA256: a.SUPPLEMENT_CASES,
+    }

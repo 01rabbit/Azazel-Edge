@@ -13,6 +13,12 @@ from ..notify.core_decisions import core_decision_payload, core_event_key
 SCHEMA = "edge-notification-timing/v1"
 MAX_ROWS, MAX_BYTES, MAX_REFERENCE_BYTES = 8192, 16777216, 67108864
 PROTOCOL_SHA256 = "8b236c81d46bd4dd9a1b8e7a38030cd3f6b116fc65b54111d76cc0ecac8174e5"
+SUPPLEMENT_SHA256 = "98e610da6e8b0906b448fcca259d226e1f2b13957e9d78fdd383f52aad8aaec5"
+ALLOWED_PROTOCOL_SHA256 = frozenset((PROTOCOL_SHA256, SUPPLEMENT_SHA256))
+SUPPLEMENT_CASES = (
+    "historical_slow_fsync_original",
+    "historical_slow_fsync_instrumented",
+)
 PHASES = (
     "legacy_interval",
     "fixture_input",
@@ -245,12 +251,15 @@ def _header(data, expected):
         and set(data) == META | IDENTITY | {"clock_domain", "resolutions", "limits"},
         "header_fields",
     )
-    _need(_label(data["run_id"]) and data["case_id"] in CASES, "run_or_case")
+    allowed_cases = (
+        SUPPLEMENT_CASES if data["protocol_sha256"] == SUPPLEMENT_SHA256 else CASES
+    )
+    _need(_label(data["run_id"]) and data["case_id"] in allowed_cases, "run_or_case")
     _need(
         all(_hash(data[key]) for key in META - {"run_id", "case_id"}),
         "header_hash_types",
     )
-    _need(data["protocol_sha256"] == PROTOCOL_SHA256, "frozen_protocol_pin")
+    _need(data["protocol_sha256"] in ALLOWED_PROTOCOL_SHA256, "frozen_protocol_pin")
     _identity(data)
     _domain(data["clock_domain"])
     resolutions = data["resolutions"]

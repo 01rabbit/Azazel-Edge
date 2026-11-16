@@ -17,13 +17,31 @@ from unittest.mock import patch
 from azazel_edge.audit import P0AuditLogger, logger as audit_module
 from azazel_edge.notify import core_decisions
 from azazel_edge.notify.p0_alert import attach_p0_alert_relay
-import test_agent_core_p0_path_v1 as original
 from p0_handoff_attribution_recording import (
     NotificationRecording, canonical, process_identity, scheduler_snapshot,
 )
 
+# The old fixture module imports agent.DecisionLogger. Never let that import
+# attempt its production default; retain this directory for that object's life.
+_FIXTURE_IMPORT_SCRATCH = tempfile.TemporaryDirectory(prefix="notification-fixture-import-")
+_import_paths = {"AZAZEL_DECISION_LOG_DIR": _FIXTURE_IMPORT_SCRATCH.name,
+                 "AZAZEL_AI_AUDIT_LOG": str(Path(_FIXTURE_IMPORT_SCRATCH.name) / "ai-audit.jsonl")}
+_old_import_environment = {name: os.environ.get(name) for name in _import_paths}
+os.environ.update(_import_paths)
+try:
+    import test_agent_core_p0_path_v1 as original
+finally:
+    for _name, _value in _old_import_environment.items():
+        if _value is None:
+            os.environ.pop(_name, None)
+        else:
+            os.environ[_name] = _value
+
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "tests/fixtures/notification-timing/v1/protocol.json"
+SUPPLEMENT = ROOT / "tests/fixtures/notification-timing/v1/slow-fsync-supplement.json"
+SUPPLEMENT_SHA256 = "98e610da6e8b0906b448fcca259d226e1f2b13957e9d78fdd383f52aad8aaec5"
+SUPPLEMENT_CASES = ("historical_slow_fsync_original", "historical_slow_fsync_instrumented")
 MAXIMUM = 16 * 1024 * 1024
 RETAINED_UNFINISHED_CASES = []
 
@@ -65,7 +83,9 @@ def cleanup_workers(control, errors, threads, receiver, audit, relay, first_cont
         if thread.ident is not None:
             attempt("producer_" + str(index), lambda thread=thread: thread.join(timeout=30))
     if receiver is not None:
+        control.data["recorder_stop_begin_ns"] = time.monotonic_ns()
         control.data["recorder_stop_result"] = attempt("recorder_stop", lambda: receiver.stop(timeout=30))
+        control.data["recorder_stop_end_ns"] = time.monotonic_ns()
     delivered = attempt("durable_listeners", lambda: audit.wait_durable_listeners(30)) if audit is not None else None
     if relay is None and audit is not None:
         relay = getattr(audit, "_p0_alert_relay", None)
@@ -330,6 +350,37 @@ class FsyncProxy:
         return self.recorder.call("audit_fsync", delegate, object_id="audit.target.fsync")
 
 
+class GlobalSlowFsync:
+    """Separately frozen child-only mock: requested50ms, original fsync once."""
+
+    def __init__(self, real_fsync, control):
+        self.real_fsync, self.control = real_fsync, control
+        control.data["global_fsync_calls"] = []
+
+    def __call__(self, fd):
+        item = dict(fd=fd, requested_wait_ns=50_000_000, outcome="raised")
+        def stamp(name, function):
+            try:
+                item[name] = function()
+            except Exception as exc:
+                item[name] = None
+                item.setdefault("probe_errors", []).append(type(exc).__name__)
+        stamp("native_tid", threading.get_native_id)
+        stamp("start_ns", time.monotonic_ns)
+        stamp("thread_cpu_start_ns", time.thread_time_ns)
+        with self.control.lock:
+            self.control.data["global_fsync_calls"].append(item)
+        try:
+            time.sleep(0.050)
+            stamp("wait_return_ns", time.monotonic_ns)
+            result = self.real_fsync(fd)
+            item["outcome"] = "returned"
+            return result
+        finally:
+            stamp("end_ns", time.monotonic_ns)
+            stamp("thread_cpu_end_ns", time.thread_time_ns)
+
+
 class Hooks:
     def __init__(self, stack, recorder, recording, audit, receiver, control, event_rows):
         self.recorder, self.recording, self.control = recorder, recording, control
@@ -413,6 +464,11 @@ def collect_case(directory, recipe, metadata):
     """Run an assigned case once; save original bytes before any analysis."""
     directory = Path(directory)
     identifier = recipe["id"]
+    supplement = identifier in SUPPLEMENT_CASES
+    if supplement and (sha(read_original(SUPPLEMENT)) != SUPPLEMENT_SHA256 or metadata.get("protocol_sha256") != SUPPLEMENT_SHA256):
+        raise ValueError("supplement protocol not externally pinned")
+    if supplement and os.environ.get("EDGE_NOTIFICATION_SUPPLEMENT_CHILD") != identifier:
+        raise ValueError("global slow-fsync supplement requires its dedicated fresh child")
     recording = NoRecording()
     expected_header = dict(metadata, **process_identity())  # Independent pre-tracer bootstrap.
     control, errors, event_rows, intervals = Control(recipe), {}, {}, []
@@ -437,12 +493,18 @@ def collect_case(directory, recipe, metadata):
         first_continue = threading.Event()
         stats = threading.Lock()
         held_lock = None
+        slow_patch = None
         cleaned = False
 
         def cleanup():
-            nonlocal cleaned, held_lock
+            nonlocal cleaned, held_lock, slow_patch
             if not cleaned:
                 cleaned = True
+                if slow_patch is not None:
+                    control.data["global_fsync_restore_begin_ns"] = time.monotonic_ns()
+                    slow_patch.__exit__(None, None, None)
+                    slow_patch = None
+                    control.data["global_fsync_restore_end_ns"] = time.monotonic_ns()
                 lifecycle.update(cleanup_workers(control, errors, threads, receiver, audit, relay, first_continue, held_lock))
                 held_lock = None
         try:
@@ -461,6 +523,18 @@ def collect_case(directory, recipe, metadata):
                         receiver.start()
                         if not receiver.ready.wait(30) or not relay.ready.wait(30):
                             raise TimeoutError("original worker readiness watchdog")
+                        if supplement:
+                            import logging
+                            fallback = logging.lastResort
+                            control.data.update(requested_wait_ns=50_000_000,
+                                original_ready_observed_ns=time.monotonic_ns(),
+                                child_logging_capture="fresh_child_parent_pipes_not_historical_pytest_caplog",
+                                logging_last_resort=None if fallback is None else dict(
+                                    handler_type=type(fallback).__module__ + "." + type(fallback).__qualname__, level=fallback.level))
+                            slow_patch = patch.object(os, "fsync", GlobalSlowFsync(os.fsync, control))
+                            control.data["global_fsync_install_begin_ns"] = time.monotonic_ns()
+                            slow_patch.__enter__()
+                            control.data["global_fsync_installed_ns"] = time.monotonic_ns()
                         if identifier == "scheduler_contention":
                             _scheduler_control(recording, control)
                         if identifier in ("recorder_lock_delay", "unrelated_lock_negative"):
@@ -491,8 +565,11 @@ def collect_case(directory, recipe, metadata):
                                     legacy.__enter__()
                                     closed = False
                                     try:
+                                        t0_seconds = time.monotonic() if supplement else None
                                         t0 = time.monotonic_ns()
-                                        event = recording.call("fixture_input", original.core_event, "throttle", f"notification-{index}", 9_400_000 + index,
+                                        event = recording.call("fixture_input", original.core_event, "throttle",
+                                                               f"trace-{base}-{offset}" if supplement else f"notification-{index}",
+                                                               9_400_000 + base * 100 + offset if supplement else 9_400_000 + index,
                                                                event_index=index, object_id="original.core_event")
                                         if identifier == "blocking_wait_counterexample":
                                             control.delayed_call(recording, "explicit.blocking.wait", lambda: None)
@@ -502,8 +579,12 @@ def collect_case(directory, recipe, metadata):
                                         interval = None
                                         try:
                                             with recording.span("statistics_lock_hold", object_id="legacy.statistics.held_prefix"):
+                                                t1_seconds = time.monotonic() if supplement else None
                                                 t1 = time.monotonic_ns()
                                                 interval = dict(index=index, start_ns=t0, end_ns=t1, elapsed_ns=t1-t0)
+                                                if supplement:
+                                                    interval.update(start_monotonic_seconds=t0_seconds, end_monotonic_seconds=t1_seconds,
+                                                                    elapsed_seconds=t1_seconds-t0_seconds)
                                                 intervals.append(interval)
                                             legacy.__exit__(None, None, None)
                                             closed = True

@@ -10,6 +10,28 @@ import threading
 import time
 
 SCHEMA = "edge-notification-timing/v1"
+PROTOCOL_SHA256 = "8b236c81d46bd4dd9a1b8e7a38030cd3f6b116fc65b54111d76cc0ecac8174e5"
+SUPPLEMENT_SHA256 = "98e610da6e8b0906b448fcca259d226e1f2b13957e9d78fdd383f52aad8aaec5"
+ALLOWED_PROTOCOL_SHA256 = frozenset((PROTOCOL_SHA256, SUPPLEMENT_SHA256))
+PROTOCOL_CASES = {
+    PROTOCOL_SHA256: (
+        "legacy_original",
+        "legacy_instrumented",
+        "fixture_delay",
+        "logging_delay",
+        "recorder_lock_delay",
+        "unrelated_lock_negative",
+        "writer_fsync_hold",
+        "inline_save_negative",
+        "blocking_wait_counterexample",
+        "scheduler_contention",
+        "trace_loss",
+    ),
+    SUPPLEMENT_SHA256: (
+        "historical_slow_fsync_original",
+        "historical_slow_fsync_instrumented",
+    ),
+}
 PHASES = (
     "legacy_interval",
     "fixture_input",
@@ -178,6 +200,10 @@ class NotificationRecording:
                 for k in ("run_id", "case_id")
             ):
                 raise ValueError("invalid notification metadata values")
+            if metadata["protocol_sha256"] not in ALLOWED_PROTOCOL_SHA256:
+                raise ValueError("unknown notification protocol")
+            if metadata["case_id"] not in PROTOCOL_CASES[metadata["protocol_sha256"]]:
+                raise ValueError("notification protocol/case pairing differs")
             self.fd = os.open(
                 path,
                 os.O_WRONLY
