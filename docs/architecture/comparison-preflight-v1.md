@@ -147,3 +147,40 @@ with an inherited Root name and existing0700Root tree in an isolated Linux
 fixture; the corrected explicit-output test must execute as an ordinary UID
 without touching that tree. Keep failed and corrected runs separate, and require
 new final-head whole CI and independent raw review before merge.
+
+## Causal fsync regression boundary (frozen before test-only correction)
+
+Whole CI43907632518 FAILED one unchanged legacy P0 handoff unit test:
+max wall interval123.536682ms exceeded its50ms assertion.22943 other tests
+passed,451 skipped and230 subtests passed. C's dedicated Linux path and all35
+exported originals independently verified. Retain this failed whole-CI log and
+artifact; they never become a whole-CI pass.
+
+The legacy interval included JSON fixture reads/construction, synchronous
+logging/capture, thread scheduling, submit and a statistics lock. It cannot
+identify fsync as the cause of the delay. The cause remains UNKNOWN. No runtime
+or time budget is changed. The corrected unit test does NOT establish or retain
+a50ms response-performance bound, and is never used as the original5ms clock
+qualification. The observed wall failure remains an unqualified adverse result.
+
+Change only that test and a small local test helper/negative control. Prebuild
+all120 events; hold an actually reached writer os.fsync behind explicit entered
+and release events. Require the seed receiver and six producer threads to
+return all assigned submissions while the writer fsync is STILL held. Preserve
+exact120 event accounting, positive overflow, audit row count and durable relay
+loss counts after finally releasing the barrier and invoking real fsync normally.
+Use bounded waits only as deadlock/liveness guards, never latency measurements.
+All gates are released and threads joined in finally, including failed controls.
+
+A separate fresh recorder's negative control must inject a synchronous durable
+write/fsync dependency on the receiver path, then demonstrate that the SAME
+completion-before-release predicate rejects it while that actual dependency is
+held. Do not mock the predicate or block an unrelated operation. That deliberately
+modified control is synthetic test code, not runtime behavior or a safety event.
+Its added writes do not participate in the positive120-event assertion.
+
+Keep runtime/notifications/audit implementation, source formats, authority,
+original5ms/98%/1.2x, previous reports and all CI Linux collection paths unchanged.
+Run the meaningful corrected positive/negative tests once in isolated Linux,
+independently review them, then require new final-head full CI and fresh evidence
+review. Do not blindly retry the failed job to seek a favorable wall sample.
