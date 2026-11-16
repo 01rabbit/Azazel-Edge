@@ -140,3 +140,9 @@ valid samples/copies using its own missing rules. Never feed unpinned bytes,
 repair a plan, manufacture emptybytes, or synthesize a replacement measurement.
 Invalid plan/trust/globalrequiredidentity may refuse thatoriginalreplay. This is
 inputquarantine, not historyrepair or an observation of the missing event.
+
+The collector permits the explicit evaluation-path null exception while its
+external expectedpublishedpin remains mandatory. A PRESENT path always uses
+strictread/hash checks; failure is never converted to null. This gives the pure
+wrapper an honestly declared unavailable report while retaining validmeasurement
+replay. Other paths keep originalabsence/pin consistency and sealedintake rules.
