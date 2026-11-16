@@ -1,0 +1,161 @@
+# Observer window lifecycle and cost completion v1
+
+Tracking #400/#393. Base `190750e3`. This contract and protocol precede
+implementation or a new trial. Existing #609/#610/#611 reports, failures,
+qualifications and raw artifacts remain immutable.
+
+## Feasibility and authority
+
+`OutcomeTelemetryCollector.observe_event` admits a nonempty observation window
+only for throttle/redirect/isolate with `ExecutionStatus.APPLIED`, a matching
+objective and usable persistence. `input_resume.objective_identity` has the
+same disruptive-action/APPLIED guard. The adapter may label an ordinary observe
+decision APPLIED; that is insufficient to open a disruptive observation window.
+
+The existing actual normal-clock lab disables enforcement and high-impact
+automation, enables dry-run and uses an empty objective policy. Under this
+authorized profile, a genuine applied disruptive window is unavailable. Merely
+adding an objective does not change this guard. Editing an event to say applied,
+re-signing it or using an existing public test signature cannot establish that
+the real core applied an action. No attempt to enable enforcement, providers,
+new privileges or a different production profile is authorized by this slice.
+
+Freeze `actual_applied_window_status=unavailable_under_existing_authority`.
+Do not spend the two-hour feasibility allowance seeking additional authority.
+Nonempty-window expiry and loss cases use explicitly SYNTHETIC inputs and
+recorded test premises only. Their counters, real test-function execution and
+bounded filesystem operations are not a native APPLIED measurement, physical
+effect, production sensor truth or independently commissioned witness evidence.
+
+No runtime changes, new services/accounts/groups/capabilities, installer/security/
+systemd edits, new enforcement, production keys or network traffic. Root,
+bootstrap code, known test keys and host/kernel custody remain lab premises.
+
+## Files and interfaces
+
+Add only the following implementation surfaces after this freeze is reviewed:
+
+- `tests/window_cost_completion_lab.py`: `run_synthetic_window_cases(work)`
+  creates bounded, separate SYNTHETIC cases using the existing
+  `test_outcome_control_stop.Lab` and original telemetry/journal APIs. The normal
+  expiry case uses the actual `OutcomeTelemetryCollector.finalize_due` on a
+  known synthetic APPLIED fixture; it does not populate an outcome dictionary
+  and call that an observed commit. Stop-loss occurs before the synthetic
+  deadline and uses ordinary journal/control close, never forced finalization.
+- `tests/window_cost_completion_analysis.py`:
+  `analyze_window_cost_completion(actual_result, synthetic_result, *,
+  actual_phase_raw_by_arm_role, synthetic_artifact_raw_by_case)` is bounded and
+  read-only: no I/O, subprocesses, clocks, writes, new sampling or qualifications.
+  `actual_result` is the retained original normal-clock evaluation and its
+  externally retained artifact descriptors/metadata. Raw inputs are supplied
+  separately as bytes, with null meaning declared absence. Verify exact hashes
+  and bounds before parsing. Invalid optional evidence affects that item and
+  retains valid siblings and original published results.
+- `tests/run_window_cost_completion.py`: call
+  `run_observer_normal_clock.run()` exactly once for the actual matrix; collect
+  the separate synthetic cases; pass bounded originals to the analyzer. Reuse
+  the original public exporter into `original-normal-clock/`; write the new
+  top-level `window-cost-completion.json` separately. Never rewrite an original
+  report, repair an interrupted trace or retry for a more favorable result.
+- `tests/test_window_cost_completion.py` and
+  `tests/test_window_cost_completion_linux.py`: synthetic negatives and one
+  mandatory offline actual matrix using the cached runtime/matching core.
+
+The original six-arm order, marker recipe, 10/20/50/50ms polling, actual
+three-second warmup, at least six-second load, 1.2 x 2500 non-alert lines/s,
+2% per-class rate tolerance, final audit and 98% examined-accounting floor
+remain unchanged. The existing 5,000,000ns qualifier is neither replaced by
+phase duration nor relaxed. A genuine normal end may still withhold that gate.
+
+## Evidence separation and bounded replay
+
+For actual on-arm closure, call the existing pure `verify_normal_end` with the
+retained completion, request, trust, Source, journal, anchors and sidecars, and
+the original externally retained control metadata/pins. Recompute original
+clock and phase reports through those unchanged verification APIs; do not
+trust imported `eligible`, `normal_end_verified`, footer or exit-zero fields.
+For other roles, replay raw phase traces through `analyze_trace` with their
+Root-retained header/incarnation pins. Compare recomputed and published values
+canonically, preserving the original evaluation verbatim on a mismatch while
+reporting the new item unavailable/incomplete. No supplemental fact modifies
+an original clock/load/control verdict or expands its scope.
+
+Existing limits remain: phase traces 4096 rows/4MiB/depth16; clock callbacks
+900 rows/4MiB; clock context two rows/16KiB; normal completion 64KiB; Source
+2MiB; journal/anchors 4MiB; trust 64KiB; EVE/audit 16MiB with the existing
+32768-row EVE bound. The synthetic bundle has at most 16 declared cases,
+64MiB total original bytes, one journal/trace at most 4MiB each and no private
+key export. Unknown fields, duplicate IDs/JSON keys, bad types, mismatched
+hashes, oversized input and invalid chains do not become successful zero counts.
+
+## Frozen report fields
+
+The new report has schema `edge-window-cost-completion/v1` and exactly these
+top-level fields:
+
+`schema_version`, `actual_applied_window_status`,
+`original_normal_clock_evaluation`, `actual_lifecycle`, `actual_cost_by_arm_role`,
+`synthetic_window_cases`, `blockers`, `authority_flags`,
+`whole_measurement_qualified`, `comparison_qualified`, `qualified_safety_count`.
+
+`actual_lifecycle` contains `evidence_kind`, `normal_stops`, `fault_prefixes`,
+`applied_window_exercised`, `expiry_commit_cost`, `pending_stop_loss_cost`,
+`active_deadline_wait`, `reasons`. Its evidence kind is
+`actual_existing_unconfined_software_lab`; applied-window exercise is false;
+the three cost/wait fields are null. Proven ordinary close counters may be
+reported within `normal_stops` as finite counters, never as a nonempty-window
+cost or causal effect. Faults retain their actual interrupted-prefix status.
+
+Each `actual_cost_by_arm_role` item has `arm_id`, `role`, `evidence_kind`,
+`raw_sha256`, `status`, `phase_report`, `process_metrics`, `cost_scope`,
+`full_interval_cpu_seconds`, `full_interval_read_bytes`,
+`full_interval_write_bytes`, `sampled_peak_rss_kib`, `kernel_hwm_kib`,
+`window_specific_cost`, `reasons`. Replayed original phase and process evidence
+remain separate. A phase body is inclusive and may contain child calls and
+trace work; never sum nested spans or subtract unobserved gaps to assign cause.
+The controller includes harness, witness, drainer and recording work. Witness
+thread CPU may be observed, but witness RSS/I/O/process CPU are not isolated.
+Incomplete process intervals keep full CPU/I/O deltas null while preserving
+explicitly partial earlier peaks. An absent role has unavailable metrics,
+not zero cost. Receiver blocking time is not kernel receipt latency.
+Wall-minus-thread-CPU remains causally UNKNOWN. Actual window-specific cost is
+null because the authorized actual profile exercises no applied windows.
+
+Each synthetic case has `id`, `evidence_kind`, `applied_premise`, `status`,
+`expected_lifecycle`, `observed_lifecycle`, `journal_summary`, `outcomes`,
+`control_receipt`, `phase_report`, `process_metrics`, `raw_sha256`, `reasons`.
+Evidence kind is `SYNTHETIC_RECORDED_TEST_ONLY`; applied premise is
+`synthetic_fixture_not_observed_native_action`. Preserve actual recorded
+synthetic return values and prefixes. Normal expiry commits an original
+collector-built outcome at/after its synthetic deadline. Control stop before
+deadline loses pending windows and commits no substitute outcome. Missing
+commit/ACK/close evidence remains unknown, not an expiry or successful loss.
+
+`authority_flags` uses the unchanged five safety flags, all false. Whole
+measurement/comparison qualifications remain false; qualified safety count is
+null. Fixed blockers include actual applied window unavailable, synthetic
+premise not native execution, incomplete/partial cost coverage where applicable,
+mixed controller/witness accounting and causal benefit unestablished.
+
+## Frozen cases and acceptance
+
+The protocol lists fixed independent cases and expected lifecycle states.
+Synthetic expiry-before-deadline, expiry commit, pending-stop loss, duplicate
+execution, commit failure, witness/close failure and interrupted recording
+must retain the original APIs' semantics. Existing Source/witness/receipt
+negative tests are synthetic controls; do not claim they were new kernel or
+actual fault trials. Only an actually executed fresh fault is reported as such.
+
+Test raw/published disagreement, null metrics, PID/start/boot mismatch, malformed
+or truncated/overflowing traces, bad nesting, independent valid siblings and
+old over-5ms withholding. Test no original report mutation, no extra actual
+callbacks, no conversion of synthetic APPLIED into actual evidence and no
+loss-to-commit conversion. Public exports are closed allowlists of original
+reports/bytes; never private key files, bootstrap configuration or secret paths.
+
+After independent freeze review and Root approval, implement and test locally.
+Root coordinates the one actual offline Linux six-arm run and final-head CI.
+Preserve every assigned scope and any failure before analysis/export assertions.
+A correctly withheld measurement may be a passing software test, but unknown
+nonempty actual window cost remains unknown. Independent final code/raw-artifact
+review and exact base/head/tree checks precede any conditional merge decision.
