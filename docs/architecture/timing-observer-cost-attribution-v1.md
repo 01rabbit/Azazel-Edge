@@ -133,3 +133,32 @@ receipts/processmetrics/source+core+bootstrap hashes beforeanalysis. Required CI
 no skip-as-pass; fullfinalheadCI+independentreview+exactbase/head/tree beforemerge.
 All comparison/measurement/admission/resume/authorityflagsfalse; qualifiedsafety
 countsnull. No new issue, no rootcause conclusion or retry/historyrepair allowed.
+
+## Pre-collection clarification: required phase evidence
+
+Before the first actual run, require at least one valid completed call in each
+of these phase groups for every instrumented arm:
+
+- Signer: `input_receive`, `native_frame_validation`, `source_append`,
+  `source_sign`, `source_verify`.
+- Witness: `witness_request`, `witness_append`, `witness_sign`.
+- Controller: `controller_wait`, `source_closure_wait`; also
+  `observer_stop_wait` when the observer is present.
+- Observer, when present: `input_snapshot`, `source_verify`, `witness_rpc`,
+  `observation`, `journal_append`.
+
+Missing required calls make phase collection incomplete even when original
+decisions match. Keep the original reports and all available trace prefixes.
+Do not retry solely to replace an unfavorable result. An observer absent in
+the off arm is not a recording failure. Planned SIGTERM/SIGKILL can leave
+observer trace closure unknown while completed individual calls remain facts.
+`finalize_due` and sample statistics describe only actual recorded calls; no
+extra call is made to satisfy a coverage condition.
+
+Write-cost brackets cover the `os.write` loop only. Serialization, hashing,
+locking, metadata, clocks, final writes and descriptor close remain unallocated
+within the instrumented process totals. A normal-return footer records return
+from the original function, not successful descriptor close or durable storage.
+An externally known recorder failure overrides a clean-looking footer without
+discarding earlier verified complete calls. Child descriptor closure remains
+unproven unless separately recorded; no original result is changed to report it.
