@@ -30,7 +30,9 @@ supplements=None). Main first. New plan edge-safety-evidence-composition-plan/v1
 canonicalJSON+LF <=128KiB, exact schema_version/main_contract_sha256/entries.
 entries list0..64; each exact id,kind,sha256. IDboundedref unique; kindwhitelistabove.
 sha256 is exact per-family FLAT artifactslot map, values lowercasehex64 or null.
-Allitems require plan and evaluation raw bytes/non-nullpins. Missingmeasurement
+Allitems require plan rawbytes and non-null externalplan/evaluation pins; submitted
+evaluation rawbytes may be absent/malformed/hash-mismatched without blocking
+independently valid originalmeasurement replay. Missingmeasurement
 slots allow null and mustmatch originalplan/parser's own missing semantics.
 Wholebundle <=64MiB submitted originalbytes; eachleafbound at most1MiB except
 plan/trust32KiB and probe/governance/stdout/stderr/reference64KiB, evaluation1MiB.
@@ -126,3 +128,15 @@ Run focusedregressions and existingbase/adapter tests, independentreview, PR,
 allfinalheadCI and exactbase/head/tree before conditionalmerge. No newkerneltrial
 is necessary for this pureintegration; no unchangedsensor trial rerun as proof.
 No production/serviceactivation/keys/restrictedpaths/newIssue/privilege change.
+
+## Preimplementation clarification: independent report and measurement failures
+
+Validatepublishedreport integrity separately from measurement artifacts. Missing,
+malformed or mismatched publishedreport makes itemunknown but cannot suppress a
+valid originalreplay. For a missing/bad-hash measurement slot, keep originalbytes/
+actualdigest untouched in caller storage and record the exactquarantinedslot;
+pass explicitNone (unavailable) to its existing verifier, which may preserve other
+valid samples/copies using its own missing rules. Never feed unpinned bytes,
+repair a plan, manufacture emptybytes, or synthesize a replacement measurement.
+Invalid plan/trust/globalrequiredidentity may refuse thatoriginalreplay. This is
+inputquarantine, not historyrepair or an observation of the missing event.
