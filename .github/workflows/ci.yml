@@ -238,6 +238,14 @@ jobs:
             tests/test_postconnect_refusal_linux.py | tee postconnect-refusal-linux.log
           grep -Eq "^5 passed" postconnect-refusal-linux.log
           ! grep -Eq "skipped|failed|error" postconnect-refusal-linux.log
+      - name: Actual post-connect development authorization refusal and original state (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py "EDGE_POSTCONNECT_AUTHORIZATION_PUBLIC_DIR=$GITHUB_WORKSPACE/postconnect-authorization-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_postconnect_authorization_linux.py | tee postconnect-authorization-linux.log
+          grep -Eq "^5 passed" postconnect-authorization-linux.log
+          ! grep -Eq "skipped|failed|error" postconnect-authorization-linux.log
       - name: Retain only public advisory exec evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -425,6 +433,60 @@ jobs:
             postconnect-refusal-public/missing_after_sot/diagnostic.json
             postconnect-refusal-public/missing_after_sot/manifest.json
             postconnect-refusal-public/case-index.json
+          if-no-files-found: error
+
+      - name: Retain only public development authorization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postconnect-authorization-public
+          path: |
+            postconnect-authorization-public/own_uid_patch/plan.json
+            postconnect-authorization-public/own_uid_patch/probe.json
+            postconnect-authorization-public/own_uid_patch/sot_before.raw
+            postconnect-authorization-public/own_uid_patch/sot_after.raw
+            postconnect-authorization-public/own_uid_patch/audit_before.raw
+            postconnect-authorization-public/own_uid_patch/audit_after.raw
+            postconnect-authorization-public/own_uid_patch/control.json
+            postconnect-authorization-public/own_uid_patch/diagnostic.json
+            postconnect-authorization-public/own_uid_patch/manifest.json
+            postconnect-authorization-public/root_only_refused/plan.json
+            postconnect-authorization-public/root_only_refused/probe.json
+            postconnect-authorization-public/root_only_refused/sot_before.raw
+            postconnect-authorization-public/root_only_refused/sot_after.raw
+            postconnect-authorization-public/root_only_refused/audit_before.raw
+            postconnect-authorization-public/root_only_refused/audit_after.raw
+            postconnect-authorization-public/root_only_refused/control.json
+            postconnect-authorization-public/root_only_refused/diagnostic.json
+            postconnect-authorization-public/root_only_refused/manifest.json
+            postconnect-authorization-public/spoofed_root_refused/plan.json
+            postconnect-authorization-public/spoofed_root_refused/probe.json
+            postconnect-authorization-public/spoofed_root_refused/sot_before.raw
+            postconnect-authorization-public/spoofed_root_refused/sot_after.raw
+            postconnect-authorization-public/spoofed_root_refused/audit_before.raw
+            postconnect-authorization-public/spoofed_root_refused/audit_after.raw
+            postconnect-authorization-public/spoofed_root_refused/control.json
+            postconnect-authorization-public/spoofed_root_refused/diagnostic.json
+            postconnect-authorization-public/spoofed_root_refused/manifest.json
+            postconnect-authorization-public/observer_loss_after_refusal/plan.json
+            postconnect-authorization-public/observer_loss_after_refusal/probe.json
+            postconnect-authorization-public/observer_loss_after_refusal/sot_before.raw
+            postconnect-authorization-public/observer_loss_after_refusal/sot_after.raw
+            postconnect-authorization-public/observer_loss_after_refusal/audit_before.raw
+            postconnect-authorization-public/observer_loss_after_refusal/audit_after.raw
+            postconnect-authorization-public/observer_loss_after_refusal/control.json
+            postconnect-authorization-public/observer_loss_after_refusal/diagnostic.json
+            postconnect-authorization-public/observer_loss_after_refusal/manifest.json
+            postconnect-authorization-public/missing_after_sot/plan.json
+            postconnect-authorization-public/missing_after_sot/probe.json
+            postconnect-authorization-public/missing_after_sot/sot_before.raw
+            postconnect-authorization-public/missing_after_sot/sot_after.raw
+            postconnect-authorization-public/missing_after_sot/audit_before.raw
+            postconnect-authorization-public/missing_after_sot/audit_after.raw
+            postconnect-authorization-public/missing_after_sot/control.json
+            postconnect-authorization-public/missing_after_sot/diagnostic.json
+            postconnect-authorization-public/missing_after_sot/manifest.json
+            postconnect-authorization-public/case-index.json
           if-no-files-found: error
 
   outcome-systemd:
