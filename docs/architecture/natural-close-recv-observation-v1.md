@@ -141,3 +141,22 @@ and statuses only; reciprocal_pair_verified and root_only_refusal_response_consi
 are ALWAYS null in this new profile. Individual own-inode/invocation/read completion
 proof remains separate. Neither available optional fields nor historical IDs can
 restore peer qualification. A future coherent peer observer needs its own gate.
+
+## Actual virtual collection (before final CI acceptance)
+
+Fresh isolated Linux6.8.0-117/aarch64 trial: sevenpassed27.95s, noskips, noacceptedFD
+hold. Required BTF+wrapper attachment under unchanged BPF+PERFMON succeeded. Normal
+request and client fullframe each have separate entry/copy/exit and actual matching
+positive recvreturn. Partial16-byte client read completes but fullframe staysnull.
+Intentional actordeath retains entry/negative-return facts and no byte completion;
+normal-exit qualification staysnull. Own recv-exitlink loss happened after actual
+client copy; this run already retained its return too, kept honestly rather than
+fabricating missingexit. Coverage remainsunknown. Missing submitted afterSoT keeps
+knownaudit change/unchangedfalse. All naturalpeer pairing/refusalconsistencynull.
+
+Sixty-three immutable original files reproduce allseven diagnostics exactly;
+index pinned beforecopy42170720be6fac753b3debffb9c14cf6352303cf1f8b9e5ae06956ab2a95673a.
+No oldartifact converted. Targeted regressions329passed before threeadditional
+pair-withholding cases; affectedpair tests passed. Independent concreteprecollection
+review CLEAN. FinalheadallCI/freshCIartifact/review/base-head-tree remain mergegates.
+No production, internalbranch, allstate or comparative-benefit acceptance follows.
