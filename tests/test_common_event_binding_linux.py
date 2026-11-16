@@ -24,7 +24,7 @@ def capture_group():
 
 @pytest.mark.parametrize("negative", [False, True], ids=["valid-control", "wrong-key"])
 def test_original_actual_path_with_prospective_common_event_receipt(
-    fresh_prefix,
+    fresh_prefix,  # noqa: F811
     monkeypatch,
     capture_group,
     negative,  # noqa: F811
