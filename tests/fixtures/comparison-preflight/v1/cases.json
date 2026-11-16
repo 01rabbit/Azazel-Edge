@@ -1,0 +1,1 @@
+{"cases":["all36missing","null_safety","positive_with_unknown","duplicate_attempt","unknown_assignment","changed_order","changed_threshold","wrong_source_config","manifest_pin_mismatch","clock_gap","source_gap_restart","poisoned_optional_reference","all9historical_mechanical_gates","authority_remains_false"],"data_kind":"FROZEN_TEST_RECIPES_NOT_MEASUREMENT"}
