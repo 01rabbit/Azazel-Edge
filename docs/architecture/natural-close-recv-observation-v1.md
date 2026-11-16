@@ -119,3 +119,8 @@ and clean sampled-state lifecycle, never a missing-peer pair or globalcoverage.
 Pair/refusalconsistency remain separate null when missing. The corpus full-client
 frame expectation on observer_stop_after_copy means original completeCOPY bytes;
 its syscallreturn may legitimately be absent. No callback forces a specific race.
+
+recv_exit optional statuses0 mean NOT OBSERVED AT EXIT, with null identityfields;
+never echo saved entry peer/endpoint identities as current exit facts. Entry/copy
+statuses1..3 describe their own observation. Saved syscall-entry owninode/FD/UID/
+start/ns/token inexit are explicit invocation binding, not a new exit reread.
