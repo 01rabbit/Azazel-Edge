@@ -59,22 +59,26 @@ Selected completed-call medians in the instrumented on arm, in milliseconds:
 | Source fsync call | 1.100 |
 | Witness RPC, inclusive | 1.350 |
 | Observation/cursor processing, inclusive | 4.868 |
-| Journal append, inclusive | 2.055 |
+| Journal append, inclusive | 2.054 |
 | Sample callback | 0.356 |
 | No-op finalize-due callback | 0.010 |
 | Original controller polling wait | 23.177 |
-| Source-stop confirmation adapter | 61.239 |
+| Launcher stop call, including cleanup no-op | 61.239 |
 
-These intervals overlap and are not additive. Source-stop confirmation includes
-the existing launcher stop plus read-only native-disappearance, stderr-join and
-final-audit checks in the new adapter; it is not exact native kernel wait time.
+These intervals overlap and are not additive. The stop-call median combines
+two original calls: the actual launcher stop took 122.473ms, while a later
+cleanup call on the already exited launcher took 0.005ms. This combined median
+is not the actual stop latency. Native-disappearance, stderr-join and final-audit
+checks happen outside that recorded span; their ordering is retained separately.
+Neither the span nor those observations identify exact native kernel exit time.
 Receive waits include idle blocking. The empty/stale policy exercises no active
 Outcome window: active-window finalization wait remains null/not exercised.
 
 Instrumented-minus-original marker-loop elapsed differences were -26.489ms off,
 +17.778ms on and +5.217ms faulted. The original `elapsed_seconds` covers the
 three-marker loop after warmup, not the full six-second load. Separate process
-samples span the background-load interval and drain. Their native CPU differences
+samples span before load start through writer join, excluding the later drain,
+stop and final-audit work. Their native CPU differences
 were -0.01s/-0.01s/0s at the recorded tick granularity. These are descriptive
 single sequential trials; negative/quantized differences are retained, not
 interpreted as causal improvement or zero overhead.
