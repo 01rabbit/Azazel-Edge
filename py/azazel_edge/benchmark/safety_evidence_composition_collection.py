@@ -168,7 +168,7 @@ def collect_safety_evidence_composition(
             supplements=supplements,
         )
         collection._require(
-            evaluation["main_evaluation"] == base["evaluation"],
+            safety._same(evaluation["main_evaluation"], base["evaluation"]),
             "composed main differs from original collection",
         )
         collection._require(

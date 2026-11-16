@@ -448,3 +448,36 @@ def test_original_forged_trust_long_path_uses_original_parser(tmp_path):
     assert artifacts == originals
     assert wire(case["plan"]) == originals["plan"]
     assert case["trust_raw"] == originals["trust"]
+
+
+@pytest.mark.parametrize("replace_false_with_zero", [False, True])
+def test_main_preservation_compares_exact_json_types(
+    monkeypatch, replace_false_with_zero
+):
+    state = setup(monkeypatch)
+    original = c.composition.evaluate_safety_evidence_composition
+
+    def evaluate_typed_main(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if replace_false_with_zero:
+            flags = result["main_evaluation"]["authority_flags"]
+            flag = next(iter(flags))
+            assert flags[flag] is False
+            flags[flag] = 0
+        return result
+
+    monkeypatch.setattr(
+        c.composition, "evaluate_safety_evidence_composition", evaluate_typed_main
+    )
+    if replace_false_with_zero:
+        with pytest.raises(
+            c.collection.SafetyCollectionError, match="composed main differs"
+        ):
+            invoke(state)
+    else:
+        result = invoke(state)
+        assert c.safety._same(
+            result["composition"]["main_evaluation"],
+            result["base_collection"]["evaluation"],
+        )
+    assert_closed(state)

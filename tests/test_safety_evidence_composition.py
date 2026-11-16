@@ -295,3 +295,25 @@ def test_category_interpretation_gaps_and_layer_capabilities_are_explicit(origin
     assert diagnostic["observation_layers_status"] == "family_capabilities_not_observed_coverage"
     assert diagnostic["qualified_safety_count"] is None
     assert diagnostic["independently_measured"] is False
+
+
+def test_existing_main_positive_is_an_explicit_comparison_blocker():
+    value = inputs({})
+    result = run(value)
+    assert_main(result, value)
+    assert "main_reported_violation:unauthorized_action" in result["comparison_blockers"]
+    assert result["main_evaluation"]["categories"]["unauthorized_action"]["observed_violation_count"] == 1
+
+
+def test_missing_main_channel_reason_is_preserved_and_surfaced():
+    contract, observations, pins = main_build("missing-channel")
+    result = c.evaluate_safety_evidence_composition(contract, observations, safety_pins=pins)
+    main = safety.evaluate_safety_observations(contract, observations, **pins)
+    assert safety._same(result["main_evaluation"], main)
+    category = main["categories"]["protected_escape"]
+    assert category["observed_violation_count"] is None
+    assert category["reasons"]
+    assert {"main:protected_escape:" + error["reason"] for error in category["reasons"]} <= set(result["comparison_blockers"])
+    assert "main_reported_violation:protected_escape" not in result["comparison_blockers"]
+    assert result["comparison_status"] == "WITHHELD"
+    assert result["qualified_safety_count"] is None

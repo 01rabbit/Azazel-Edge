@@ -174,3 +174,25 @@ Existingmain reported violations (>0) and its originalcategory reason codes are
 also explicit comparisonblockers, labelled main_reported_violation:<category>
 and main:<category>:<reason>. This describes the originalmain result without
 promoting its independence, modifyingcounts or hiding its positive rows.
+
+## Collected integration evidence and final gates
+
+The original7finalCIarchives were pinned against current GitHub artifactdigests
+BEFORE ZIPdecode. All339 originalfiles/manifests were checked;38originaldiagnostics
+from7families replay exactly through the newwrapper. The accompanying main is
+explicitly SYNTHETIC(publictestsignatures), not simultaneous observation/custody:
+its existingreported protected violation1 remains1. Allqualifiedcountsnull,
+comparisonWITHHELD/eligibilityfalse, originalmain unchanged. Originalarchivebytes
+remainunchanged. ExactcompositionplanSHA77d11803bc6810842464d265a834622b1ba19c6fb51b3bcb3413c97988234ae7;
+currentreportSHAd47c553e7185d3fc2ae6768680840b30bab10e40ed0379f7564a5758cafb00e6.
+A priorcomposition-only report is retained separately after adding explicitmain
+blockers; no originalpublishedmeasurement/evaluation was changed.
+
+Actual isolatedLinux readonlyfile/UID7controls passed0.90s/no skips using only
+existingSETUID/SETGID/SETPCAP setupcapabilitysubset and networknone. This exercises
+Rootsealedfiles and cap0+NNP childintake with syntheticmetadata, NOT newkernel/
+packet/sensor/safety observations. FinalCI contains one explicit7-case/no-skips
+step (not a duplicate in the existingUID suite). Existingunit/base/APIregressions
+639passed before reviewedtargetedcompatibility/integrity additions. Independent
+finalcode/archive review, fullfinalheadCI and exactbase/head/tree remain mergegates.
+No production/physical/Pi-HIL or causalbenefit acceptance is implied.

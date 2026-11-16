@@ -209,6 +209,12 @@ def evaluate_safety_evidence_composition(
         except ERRORS:
             reasons.append("composition_plan_or_bundle_invalid")
     blockers = list(COMPARISON_BLOCKERS) + reasons
+    for category, diagnostic in main["categories"].items():
+        count = diagnostic["observed_violation_count"]
+        if type(count) is int and count > 0:
+            blockers.append("main_reported_violation:" + category)
+        blockers.extend("main:" + category + ":" + error["reason"]
+                        for error in diagnostic["reasons"])
     for item in items:
         blockers.extend(item["id"] + ":" + reason for reason in item["reasons"])
         blockers.extend(item["id"] + ":" + reason for reason in
