@@ -29,6 +29,26 @@ bytes; the container cannot resolve the host worktree's Git metadata, so its
 embedded `source_head` is honestly null. CI runs from a normal checkout and
 uploads its own fresh report and role traces, not this local trial's artifacts.
 
+## Preserved CI incompleteness
+
+Final-head CI run 43841918076 at `436e4575` later failed the original timing
+completeness assertion. Its independent six-arm report SHA-256 is
+`ad77facf59ccfbea4e061916b4b5b25b0d40c23a057dae101c9370750169e0ee`
+([original failed artifact](https://github.com/01rabbit/Azazel-Edge/actions/runs/43841918076/artifacts/14213053717)).
+All input/decision/closure and original fault-state checks passed, but the
+faulted observer had no completed `observation` call. Its valid prefix retained
+pending observation and journal-append intents with a completed returned
+journal-fsync child; the later RPC was only an intent. The observation and
+journal append did not return. No precise kill location or root cause follows.
+
+This failed report remains unchanged and its phase collection remains
+**incomplete**. The subsequent functional-test classifier recognizes only the
+specific declared fault prefix and original three-cursor/SIGKILL state; it does
+not supply missing observation timings or mark measurement complete. Any other
+missing phase, malformed trace or ordinary-on failure still blocks acceptance.
+This condition was frozen before changing the classifier. The new final-head
+CI trial is separate; it cannot repair or replace these failed measurements.
+
 ## Descriptive measurements
 
 The following are medians of completed calls in the **instrumented on arm**,

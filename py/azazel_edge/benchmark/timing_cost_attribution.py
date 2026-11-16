@@ -250,6 +250,7 @@ def analyze_trace(raw, *, expected):
         write_cost_ns=None,
         timeline_join="unavailable",
         pending_spans=[],
+        pending_span_intents=[],
         normal_return_confirmed=False,
         active_window_finalization_wait_ns=None,
         active_window_finalization_status="not_exercised",
@@ -535,6 +536,10 @@ def analyze_trace(raw, *, expected):
         else "unavailable"
     )
     result["pending_spans"] = sorted(pending)
+    result["pending_span_intents"] = [
+        {key: pending[ident][key] for key in ("span_id", "parent_id", "phase")}
+        for ident in sorted(pending)
+    ]
     result["write_cost_ns"] = _stats(writes)
     result["write_cost_scope"] = "observed_os_write_loop_only"
     result["unallocated_trace_costs"] = [

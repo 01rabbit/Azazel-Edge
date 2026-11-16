@@ -126,6 +126,17 @@ def test_missing_pins_or_bytes_never_becomes_zero():
         assert result["phases"]["source_append"]["elapsed_ns"] is None
 
 
+def test_pending_intents_have_no_invented_timing_or_execution_outcome():
+    rows = trace()[:2]
+    result = analyze_trace(encode(rows), expected=PINS_DATA)
+    assert result["pending_span_intents"] == [
+        dict(span_id=1, parent_id=None, phase="source_append")
+    ]
+    assert result["complete_spans"] == []
+    assert result["phases"]["source_append"]["elapsed_ns"] is None
+    assert not result["normal_return_confirmed"]
+
+
 @pytest.mark.parametrize(
     "fault", ["pin", "process", "reverse", "duplicate", "parent", "end_pending"]
 )
