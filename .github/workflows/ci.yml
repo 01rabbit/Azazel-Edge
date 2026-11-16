@@ -164,6 +164,34 @@ jobs:
             hostile-cost-linux.log
           if-no-files-found: error
 
+      - name: Actual bounded cost and separate synthetic window lifecycle (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_WINDOW_COST_PUBLIC_DIR=$GITHUB_WORKSPACE/window-cost-public" \
+            unshare --net -- .venv/bin/python -m pytest -q -rs -p no:cacheprovider \
+            tests/test_window_cost_completion_linux.py | tee window-cost-linux.log
+          grep -Eq "^1 passed" window-cost-linux.log
+          ! grep -Eq "skipped|failed|error" window-cost-linux.log
+
+      - name: Retain actual cost prefixes and labelled synthetic windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-cost-public
+          path: |
+            window-cost-public/publication/window-cost-completion.json
+            window-cost-public/publication/original-normal-clock/report.json
+            window-cost-public/publication/original-normal-clock/*.raw
+            window-cost-public/publication/synthetic-window-cases/manifest.json
+            window-cost-public/publication/synthetic-window-cases/*/event.json
+            window-cost-public/publication/synthetic-window-cases/*/policy.json
+            window-cost-public/publication/synthetic-window-cases/*/observations.json
+            window-cost-public/publication/synthetic-window-cases/*/phase.jsonl
+            window-cost-public/publication/synthetic-window-cases/*/journal/observations.journal
+            window-cost-public/publication/publication-index.json
+            window-cost-linux.log
+          if-no-files-found: error
+
       - name: Actual cooperative observer stop and genuine end clock (offline)
         run: |
           set -o pipefail
@@ -281,7 +309,7 @@ jobs:
       - name: Run tests
         run: |
           . .venv/bin/activate
-          PYTHONPATH=.:py pytest -q
+          PYTHONPATH=.:py pytest -q --ignore=window-cost-public
 
   advisory-exec-arm:
     # Native ARM profile only. Unsupported x86/compat is not a skipped success.
