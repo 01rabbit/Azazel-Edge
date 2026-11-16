@@ -102,3 +102,29 @@ limit. Independent review approved a depth24 bound before any collection or
 parser change. Root JSON depth is0, each child adds1; depth24is accepted and
 depth25refused. All byte/assignment bounds,5ms/98%/1.2x and authority gates stay
 unchanged. No legacy records are flattened, rewritten or selected away.
+
+## First unprivileged Linux software-path check (2026-11-16 JST)
+
+Committed source `41d798293fe5a6d37e5f869b79b29bbef91b74c4` ran the explicit
+offline Linux harness:1passed/no skips/0.87s. Container UID/GID1000, effective/
+permitted/ambient capabilities zero, no-new-privileges1, networknone, no added
+capabilities and read-only source were verified. Python-level launch/network
+attempt guards covered the two pure pipelines; this is not arbitrary-syscall
+or whole-system isolation attestation.
+
+All36 prospective assignments remain missing/unmeasured, with no real comparison
+score or start. All9 original authored synthetic cases/36 assignments replayed
+exactly and remained mechanical_only with zero canonical causal promotions.
+Independent review verified all35 exported files (33 inventory-hashed originals
+plus inventory and actual process-boundary metadata), reproduced the preflight,
+all nine bundles and their report exactly. Exported report SHA256:
+`eca9104363350aba03c9334e5da1c17e9572bd3493657cea3a1ae8d45382acd7`.
+
+The initial depth16 compatibility failure remains separately recorded. The
+reviewed bounded depth24 correction preceded this collection and did not alter
+old inputs, thresholds or results. The later explicit-harness-only test guard
+prevents an ordinary unconfined full-suite process from being mistaken for the
+required dropped-capability/NNP offline test. Final integration, full CI and
+independent final-CI artifact review remain separate gates. No actual protected
+service, provider, real APPLIED window, safe-zero denominator or causal benefit
+has been measured by this software-path test.
