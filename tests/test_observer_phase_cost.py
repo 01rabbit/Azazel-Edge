@@ -469,3 +469,186 @@ def test_export_mutation_blocks_trace_copy_and_keeps_report_of_failure(tmp_path)
     with pytest.raises(ValueError, match="trace changed"):
         lab.export_public(result, output)
     assert [path.name for path in output.iterdir()] == ["report.json"]
+
+
+def intended_fault_fixture():
+    reports = {
+        role: dict(
+            normal_return_confirmed=True,
+            reasons=[],
+            phases={
+                phase: dict(elapsed_ns=dict(observed_calls=1))
+                for phase in required
+                + (("observer_stop_wait",) if role == "controller" else ())
+            },
+        )
+        for role, required in lab.REQUIRED_PHASES.items()
+    }
+    observer = reports["observer"]
+    observer.update(
+        status="partial_prefix",
+        normal_return_confirmed=False,
+        reasons=["normal_return_not_recorded"],
+        pending_spans=[30, 31, 33],
+        pending_span_intents=[
+            dict(span_id=30, parent_id=None, phase="observation"),
+            dict(span_id=31, parent_id=30, phase="journal_append"),
+            dict(span_id=33, parent_id=31, phase="witness_rpc"),
+        ],
+        complete_spans=[
+            dict(span_id=32, parent_id=31, phase="journal_fsync", outcome="returned")
+        ],
+    )
+    observer["phases"]["observation"] = dict(
+        elapsed_ns=None, process_cpu_ns=None, thread_cpu_ns=None
+    )
+    return dict(
+        arm_id="instrumented_faulted",
+        mode="faulted",
+        instrumented=True,
+        original_cost_report=dict(
+            observer_input_records=3,
+            observer_exit=-9,
+            observer_unprocessed_decisions=2,
+            expected_decisions=3,
+            native_decisions=3,
+            signed_decisions=3,
+        ),
+        phase_reports=reports,
+        **lab.phase_checks(reports, "faulted"),
+    )
+
+
+def test_intended_fault_functional_gate_keeps_missing_measurement_and_all_originals():
+    arm = intended_fault_fixture()
+    original = deepcopy(arm)
+    gate = lab.functional_phase_gate(arm, six_arm_semantic_parity=True)
+    assert gate == dict(
+        accepted=True, status="intended_fault_interruption_prefix_observed"
+    )
+    assert arm == original
+    assert arm["phase_collection_status"] == "incomplete"
+    assert arm["missing_required_phase_calls"] == ["observer.observation"]
+    assert (
+        arm["phase_reports"]["observer"]["phases"]["observation"]["elapsed_ns"] is None
+    )
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("observer_input_records", 2),
+        ("observer_input_records", True),
+        ("observer_exit", -15),
+        ("observer_unprocessed_decisions", 1),
+        ("expected_decisions", 2),
+        ("native_decisions", 2),
+        ("signed_decisions", 2),
+    ],
+)
+def test_intended_fault_gate_requires_every_exact_original_fault_fact(field, bad):
+    arm = intended_fault_fixture()
+    arm["original_cost_report"][field] = bad
+    assert (
+        lab.functional_phase_gate(arm, six_arm_semantic_parity=True)["accepted"]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_arm",
+        "on_mode",
+        "not_instrumented",
+        "status_changed",
+        "wrong_missing",
+        "invalid_roles",
+        "corruption",
+        "other_role_corruption",
+        "other_phase_missing",
+        "normal_return",
+        "not_partial",
+        "missing_intents",
+        "pending_mismatch",
+        "duplicate_intent",
+        "wrong_observation",
+        "wrong_append_parent",
+        "wrong_fsync_parent",
+        "fsync_raised",
+        "no_completed_child",
+        "unrelated_completed_append",
+        "invented_observation_timing",
+        "observation_complete",
+        "intent_invented_timing",
+    ],
+)
+def test_fault_exception_is_limited_to_validated_exact_pending_ancestry(fault):
+    arm = intended_fault_fixture()
+    observer = arm["phase_reports"]["observer"]
+    if fault == "wrong_arm":
+        arm["arm_id"] = "instrumented_on"
+    elif fault == "on_mode":
+        arm["mode"] = "on"
+    elif fault == "not_instrumented":
+        arm["instrumented"] = False
+    elif fault == "status_changed":
+        arm["phase_collection_status"] = "required_phase_calls_observed"
+    elif fault == "wrong_missing":
+        arm["missing_required_phase_calls"].append("observer.witness_rpc")
+    elif fault == "invalid_roles":
+        arm["invalid_phase_trace_roles"] = ["observer"]
+    elif fault == "corruption":
+        observer["reasons"].append("invalid_or_incomplete_row_64")
+    elif fault == "other_role_corruption":
+        arm["phase_reports"]["witness"]["reasons"] = ["invalid_or_incomplete_row_7"]
+    elif fault == "other_phase_missing":
+        observer["phases"]["witness_rpc"]["elapsed_ns"] = None
+    elif fault == "normal_return":
+        observer["normal_return_confirmed"] = True
+    elif fault == "not_partial":
+        observer["status"] = "unavailable"
+    elif fault == "missing_intents":
+        del observer["pending_span_intents"]
+    elif fault == "pending_mismatch":
+        observer["pending_spans"] = [30, 31]
+    elif fault == "duplicate_intent":
+        observer["pending_span_intents"].append(
+            deepcopy(observer["pending_span_intents"][0])
+        )
+    elif fault == "wrong_observation":
+        observer["pending_span_intents"][0]["phase"] = "finalize_due"
+    elif fault == "wrong_append_parent":
+        observer["pending_span_intents"][1]["parent_id"] = 99
+    elif fault == "wrong_fsync_parent":
+        observer["complete_spans"][0]["parent_id"] = 99
+    elif fault == "fsync_raised":
+        observer["complete_spans"][0]["outcome"] = "raised"
+    elif fault == "no_completed_child":
+        observer["complete_spans"] = []
+    elif fault == "unrelated_completed_append":
+        observer["complete_spans"] = [
+            dict(span_id=18, parent_id=None, phase="journal_append", outcome="returned")
+        ]
+    elif fault == "invented_observation_timing":
+        observer["phases"]["observation"]["process_cpu_ns"] = {"observed_calls": 1}
+    elif fault == "observation_complete":
+        observer["complete_spans"].append(
+            dict(span_id=35, parent_id=None, phase="observation", outcome="returned")
+        )
+    else:
+        observer["pending_span_intents"][0]["elapsed_ns"] = 0
+    assert (
+        lab.functional_phase_gate(arm, six_arm_semantic_parity=True)["accepted"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("parity", [False, None, 1])
+def test_fault_exception_requires_exact_true_six_arm_parity(parity):
+    assert (
+        lab.functional_phase_gate(
+            intended_fault_fixture(), six_arm_semantic_parity=parity
+        )["accepted"]
+        is False
+    )

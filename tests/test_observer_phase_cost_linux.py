@@ -27,7 +27,7 @@ def test_six_original_and_instrumented_arms_preserve_exact_workload_and_fault_pr
     assert result["six_arm_semantic_parity"] is True
     assert result["measurement_completed"] is False
     assert result["qualified_safety_count"] is None
-    assert result["phase_collection_status"] == "required_phase_calls_observed"
+    assert result["functional_phase_status"] == "functional_phase_evidence_observed"
     for arm in result["arms"]:
         report = arm["original_cost_report"]
         assert (
@@ -50,8 +50,17 @@ def test_six_original_and_instrumented_arms_preserve_exact_workload_and_fault_pr
             assert arm["phase_reports"] == {}
             continue
         phases = arm["phase_reports"]
-        assert arm["phase_collection_status"] == "required_phase_calls_observed"
-        assert arm["missing_required_phase_calls"] == []
+        gate = arm["functional_phase_gate"]
+        assert gate["accepted"] is True
+        if gate["status"] == "intended_fault_interruption_prefix_observed":
+            assert arm["arm_id"] == "instrumented_faulted"
+            assert arm["phase_collection_status"] == "incomplete"
+            assert arm["missing_required_phase_calls"] == ["observer.observation"]
+            assert phases["observer"]["phases"]["observation"]["elapsed_ns"] is None
+        else:
+            assert gate["status"] == "required_phase_calls_observed"
+            assert arm["phase_collection_status"] == "required_phase_calls_observed"
+            assert arm["missing_required_phase_calls"] == []
         for role in ("signer", "witness", "controller"):
             assert phases[role]["complete_spans"]
         assert (

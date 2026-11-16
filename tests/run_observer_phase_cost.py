@@ -424,6 +424,90 @@ def phase_checks(reports, mode):
     )
 
 
+def functional_phase_gate(arm, *, six_arm_semantic_parity):
+    """Recognize one planned fault prefix without completing its missing timing."""
+    rejected = dict(accepted=False, status="incomplete_required_phase_evidence")
+    if six_arm_semantic_parity is not True or arm.get("instrumented") is not True:
+        return rejected
+    phases, mode = arm.get("phase_reports", {}), arm.get("mode")
+    checks = phase_checks(phases, mode)
+    if (
+        checks["phase_collection_status"] == "required_phase_calls_observed"
+        and arm.get("phase_collection_status") == "required_phase_calls_observed"
+    ):
+        return dict(accepted=True, status="required_phase_calls_observed")
+    if (
+        arm.get("arm_id") != "instrumented_faulted"
+        or mode != "faulted"
+        or arm.get("phase_collection_status") != "incomplete"
+        or arm.get("missing_required_phase_calls") != ["observer.observation"]
+        or checks["missing_required_phase_calls"] != ["observer.observation"]
+        or arm.get("invalid_phase_trace_roles") != []
+        or checks["invalid_phase_trace_roles"] != []
+    ):
+        return rejected
+    report = arm.get("original_cost_report", {})
+    for key, expected in dict(
+        observer_input_records=3,
+        observer_exit=-9,
+        observer_unprocessed_decisions=2,
+        expected_decisions=3,
+        native_decisions=3,
+        signed_decisions=3,
+    ).items():
+        if type(report.get(key)) is not int or report[key] != expected:
+            return rejected
+    observer = phases.get("observer", {})
+    if (
+        observer.get("status") != "partial_prefix"
+        or observer.get("normal_return_confirmed") is not False
+        or observer.get("reasons") != ["normal_return_not_recorded"]
+    ):
+        return rejected
+    observation = observer.get("phases", {}).get("observation", {})
+    if any(
+        observation.get(key) is not None
+        for key in ("elapsed_ns", "process_cpu_ns", "thread_cpu_ns")
+    ):
+        return rejected
+    intents = observer.get("pending_span_intents")
+    if type(intents) is not list:
+        return rejected
+    by_id = {}
+    for intent in intents:
+        if type(intent) is not dict or set(intent) != {"span_id", "parent_id", "phase"}:
+            return rejected
+        identifier, parent = intent["span_id"], intent["parent_id"]
+        if (
+            type(identifier) is not int
+            or identifier < 1
+            or identifier in by_id
+            or not (parent is None or type(parent) is int and parent > 0)
+        ):
+            return rejected
+        by_id[identifier] = intent
+    pending = observer.get("pending_spans")
+    if type(pending) is not list or sorted(by_id) != pending:
+        return rejected
+    completed = observer.get("complete_spans", [])
+    if any(span.get("phase") == "observation" for span in completed):
+        return rejected
+    for span in completed:
+        if span.get("phase") != "journal_fsync" or span.get("outcome") != "returned":
+            continue
+        append = by_id.get(span.get("parent_id"), {})
+        outer = by_id.get(append.get("parent_id"), {})
+        if (
+            append.get("phase") == "journal_append"
+            and outer.get("phase") == "observation"
+            and outer.get("parent_id") is None
+        ):
+            return dict(
+                accepted=True, status="intended_fault_interruption_prefix_observed"
+            )
+    return rejected
+
+
 def run(*, keep=False):
     fixtures, arms, progress = [], [], {}
     try:
@@ -498,6 +582,20 @@ def _run(*, keep, fixtures, arms, progress):
             "six-arm exact input/decision parity failed; all fixtures retained"
         )
     result = analyze_cost_arms(arms)
+    for arm in result["arms"]:
+        if arm["instrumented"]:
+            arm["functional_phase_gate"] = functional_phase_gate(
+                arm, six_arm_semantic_parity=result["six_arm_semantic_parity"]
+            )
+    result["functional_phase_status"] = (
+        "functional_phase_evidence_observed"
+        if all(
+            arm.get("functional_phase_gate", {}).get("accepted") is True
+            for arm in result["arms"]
+            if arm["instrumented"]
+        )
+        else "incomplete"
+    )
     instrumented = [arm for arm in arms if arm["instrumented"]]
     result["phase_collection_status"] = (
         "required_phase_calls_observed"
