@@ -114,7 +114,7 @@ ARRAY4/416/1readonlyBPF128,statsARRAY4/128/1. Counters oldtwelve+recv_selected,
 recv_completed,recv_inflight,unmatched_recv_exit. Hookkeys recv_entry,recv_exit,
 copy_entry,copy_exit preserved separately in probe link_identities.
 
-Normal-case finite_case_consistent means bounded INDIVIDUAL receiver observations
+Normal-case bounded_individual_observation means bounded INDIVIDUAL receiver observations
 and clean sampled-state lifecycle, never a missing-peer pair or globalcoverage.
 Pair/refusalconsistency remain separate null when missing. The corpus full-client
 frame expectation on observer_stop_after_copy means original completeCOPY bytes;
@@ -124,3 +124,8 @@ recv_exit optional statuses0 mean NOT OBSERVED AT EXIT, with null identityfields
 never echo saved entry peer/endpoint identities as current exit facts. Entry/copy
 statuses1..3 describe their own observation. Saved syscall-entry owninode/FD/UID/
 start/ns/token inexit are explicit invocation binding, not a new exit reread.
+
+An actor killed during recv may emit an actual negative/restart syscall return
+before death; retain it as a return fact, never a completed positive read. If an
+exit is absent, pending_not_empty may be present; neither shape is manufactured
+or required as proof of positive completion. Normal lifecycle remains unclean.
