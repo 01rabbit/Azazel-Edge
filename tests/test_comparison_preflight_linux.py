@@ -16,10 +16,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_offline_unprivileged_preflight_replays_originals_without_launching(tmp_path):
+def test_offline_unprivileged_preflight_replays_originals_without_launching():
     from run_comparison_preflight import run
 
-    destination = os.environ.get("EDGE_PREFLIGHT_PUBLIC_DIR", str(tmp_path / "public"))
+    destination = os.environ["EDGE_PREFLIGHT_PUBLIC_DIR"]
     status = dict(
         line.split(":", 1)
         for line in Path("/proc/self/status").read_text().splitlines()
