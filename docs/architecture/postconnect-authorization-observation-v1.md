@@ -95,3 +95,10 @@ removes its temporary directory AFTER all original samples/exports. Observer UID
 already has the Root peer-table grant; it never connects. Separate sealed artifact
 reader remains65533, outside target access. This is a test harness setup detail,
 not a production group or observer access grant.
+
+Cross-UID /proc namespace inspection may require forbidden SYS_PTRACE. A separate
+fixed cap0/NNP UID65534 read-only sampler reads the held server/actor namespace
+identities, UID/GID maps and four credential IDs/groups/capability status before GO,
+then the controller compares against its own identity map/namespace. It neither
+connects nor writes targets. Same-UID custody is an explicit lab premise; no ptrace,
+permission fallback, root bypass or claim of hostile same-UID isolation.
