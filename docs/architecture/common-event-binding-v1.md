@@ -185,3 +185,27 @@ Freeze before implementation. Then focused tests, independent code review, one
 bounded fresh offline original-path capture after approval, readonly artifact
 replay, full final-head CI and exact base/head/tree checks precede merge. No new
 issue, favorable retry substitution, deployment or whole-system acceptance.
+
+## Reviewed pre-collection close-boundary feasibility addendum
+
+Original finite safety v1 requires the signed CLOSE row's monotonic_ns to equal
+the prospectively frozen scope end EXACTLY. A genuine Root clock read after a
+fixed deadline cannot guarantee that nanosecond. Do not backdate, substitute the
+deadline, busy-wait/retry for a lucky equality, or reinterpret this v1 timestamp
+as a different declared-boundary field. Keep the old parser and all gates.
+
+The first actual wrong-key/control capture therefore has an expected partial/
+UNKNOWN main channel and binding. Freeze a10-second opportunity at the actual
+Root clock sampled after producer return and BEFORE original before-snapshots.
+Retain the enrollment/contract pins before returning to the original worker
+harness. Fact time and CLOSE time are genuine later Root reads. Wait until the
+frozen end if necessary, then sample actual CLOSE; do not alter it to fit.
+Preserve actual out-of-scope/late-close reasons, original v2 refusal and known
+sampled state facts. Existing exact-matched positives remain SYNTHETIC only.
+The distinct genuine valid control is control-only evidence, not a joined event.
+
+This is a software evidence-path trial with an explicit boundary incompatibility,
+not successful complete-event qualification. A future boundary-versus-recording-
+time protocol needs a separately frozen version; it is outside this slice.
+Original forged v2 also checks its declared source boot_ref==kernel UUID hex;
+that inherited syntactic relation is not independent physical boot attestation.
