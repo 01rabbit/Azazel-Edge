@@ -169,3 +169,40 @@ incorrectly flagged unchanged files. Preserve that failed report and all bytes.
 The correction must explicitly map the enrolled arm prefix, and still require
 exact path, byte length and SHA-256 agreement. Validate the same originals
 read-only; do not recollect a more favorable pilot or rewrite its analysis.
+
+## First prospective data and remaining gates
+
+The first fixed study completed all three children at d0f324f under ordinary
+UID 1000, all capability sets zero, no-new-privileges, network none and a
+read-only checkout. Its original Linux result remains **1 failed in 5.33s**
+because of the publication finding above, not silently replaced by a passing
+collection. The 34 original public files remain unchanged.
+
+Original timer maxima were 3.033616 ms (original), 29.820299 ms (v1) and
+1.755066 ms (deferred); each retained 120 valid timer samples and zero observed
+over-50-ms intervals. Recorded/dropped counts were 9/111, 11/109 and 9/111.
+The deferred profile retained 1752 completed spans and an actual 9.410314-ms
+post-work finalization/close bracket. These are descriptive separate executions,
+not isolated observer-cost differences, Source gate results or performance
+acceptance. The adverse PR #615 CI evidence remains separate and unchanged.
+
+The remaining implementation decision is evidence-bounded:
+
+- Common-event complete coverage cannot be recovered by separating a declared
+  deadline from a later recording clock alone. Current evidence lacks an
+  independently bound terminal observation frontier, drain/in-flight state and
+  complete loss accounting through that deadline. Preserve the actual late
+  CLOSE and known finite artifact facts under the existing strict v1 evaluator;
+  do not introduce a tolerance-based passing version. A new close-barrier
+  protocol would first need prospective original-source evidence of those
+  facts, not another wrapper asserting completeness.
+- The nonempty real APPLIED window has no eligible existing evidence under the
+  authorized read-only scope. Synthetic lifecycle tests remain synthetic;
+  do not create a defensive execution, grant privileges or backfill a window.
+- All real prospective comparison assignments remain gated by exact event,
+  coverage, clock, safety, legitimate-service and assignment prerequisites.
+  Keep the completed comparison harness and original 9-scenario/36-allocation
+  mechanical regression separate from a real comparison or superiority claim.
+- Independent production custody, Pi/HIL, physical durability and activation
+  remain outside software acceptance. Test keys and same-UID diagnostics do not
+  discharge those conditions. Existing #400/#393 stay open.
