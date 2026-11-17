@@ -252,3 +252,18 @@ seeks the supplied descriptor. Invalid identity, writable access or missing
 required seals refuse unrelated/unsealed reads and retain an explicit unknown
 receipt; later read faults retain already-read bounded bytes. Fixed self-proc
 identity/clock reads are permitted; no caller-supplied filesystem paths are.
+
+## Frozen unexpected-error policy
+
+Expected negative evidence is not permission to ignore arbitrary harness errors.
+For abrupt_writer only, the controller's terminal_ack EOFError with null errno
+is expected, and only alongside the actual writer returncode 7, absent D and
+retained attempted-ACK read/EOF diagnostics. Every other unexpected controller
+stage error (including cleanup/export) blocks that case. Collector seal refusal
+in seal_busy is an explicit reader receipt, not a swallowed controller exception.
+All source/collector stdout/stderr observed and retained byte counts must agree
+and match their actual original files; truncation blocks acceptance while keeping
+the bounded prefix. Required normal actors exit 0; the writer exits 7 only in
+abrupt_writer. A constructor failure after Popen must clean up or retain/track
+that exact owned process and make safe continuation false if its state is
+unknown. An empty actor list must not hide a launched but untracked child.
