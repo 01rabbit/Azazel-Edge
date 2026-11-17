@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from azazel_edge.audit import P0AuditLogger, logger as audit_module
 from azazel_edge.notify import core_decisions
-from azazel_edge.notify.p0_alert import attach_p0_alert_relay
+from azazel_edge.notify.p0_alert import P0AlertRelay, attach_p0_alert_relay
 from p0_handoff_attribution_recording import (
     NotificationRecording, canonical, process_identity, scheduler_snapshot,
 )
@@ -181,6 +181,31 @@ def logger_profile(logger):
                       for handler in logger.handlers]))
         logger = logger.parent
     return result
+
+
+def prepare_recording_thread(recording, control):
+    """Explicit new-profile enrollment only, outside original target ownership."""
+    prepare = getattr(recording, "prepare_thread", None)
+    if prepare is not None:
+        try:
+            prepare()
+        except Exception as exc:
+            control.data.setdefault("thread_preparation_errors", []).append(type(exc).__name__)
+
+
+def prepared_entry(recording, control, original_entry):
+    def entry(*args, **kwargs):
+        prepare_recording_thread(recording, control)
+        return original_entry(*args, **kwargs)
+    return entry
+
+
+def deferred_fsync_call(recording, real_fsync, fd):
+    """Original mock body, with scalar-only observer capture and no inode claim."""
+    def delegate():
+        time.sleep(0.050)
+        return real_fsync(fd)
+    return recording.call("audit_fsync", delegate, object_id="global.os.fsync.callsite.unclassified_fd")
 
 
 class Control:
@@ -382,7 +407,7 @@ class GlobalSlowFsync:
 
 
 class Hooks:
-    def __init__(self, stack, recorder, recording, audit, receiver, control, event_rows):
+    def __init__(self, stack, recorder, recording, audit, receiver, control, event_rows, *, deferred=False):
         self.recorder, self.recording, self.control = recorder, recording, control
         self.local = threading.local()
         self.events, self.bindings, self.event_rows = {}, {}, event_rows
@@ -405,6 +430,8 @@ class Hooks:
         stack.enter_context(patch.object(core_decisions, "core_decision_payload", payload))
         if not control.recipe["instrumented"]:
             return
+        if deferred:
+            stack.enter_context(patch.object(receiver, "_run", prepared_entry(recording, control, receiver._run)))
         for target, name, phase, identifier in ((receiver._pending, "put_nowait", "queue_put", "receiver.queue"),
                 (audit, "log_reporting_durability", "audit_save", "audit.save")):
             function = getattr(target, name)
@@ -417,6 +444,8 @@ class Hooks:
         record = receiver._record
 
         def writer(trace_id, value):
+            if deferred:
+                prepare_recording_thread(recording, control)
             with self.binding_lock:
                 index = self.bindings.get(value.get("core_event_key"))
             with recording.event_context(index):
@@ -424,7 +453,8 @@ class Hooks:
 
         stack.enter_context(patch.object(receiver, "_record", writer))
         stack.enter_context(patch.object(core_decisions, "_LOG", LoggerProxy(core_decisions._LOG, recording, control)))
-        stack.enter_context(patch.object(audit_module, "os", FsyncProxy(audit_module.os, audit, recording, control)))
+        if not deferred:
+            stack.enter_context(patch.object(audit_module, "os", FsyncProxy(audit_module.os, audit, recording, control)))
         if control.recipe["id"] == "fixture_delay":
             stack.enter_context(patch.object(original, "FIXTURE", FixtureProxy(original.FIXTURE, recording, control)))
 
@@ -460,7 +490,7 @@ def _scheduler_control(recording, control):
             child.wait(timeout=30)
 
 
-def collect_case(directory, recipe, metadata):
+def collect_case(directory, recipe, metadata, *, recording_factory=None):
     """Run an assigned case once; save original bytes before any analysis."""
     directory = Path(directory)
     identifier = recipe["id"]
@@ -474,8 +504,12 @@ def collect_case(directory, recipe, metadata):
     control, errors, event_rows, intervals = Control(recipe), {}, {}, []
     trace = directory / (identifier + ".trace.jsonl")
     setup_begin = time.monotonic_ns()
+    deferred = recording_factory is not None
     if recipe["instrumented"]:
-        recording = NotificationRecording(trace, metadata=metadata, max_rows=32 if identifier == "trace_loss" else 8192)
+        factory = NotificationRecording if recording_factory is None else recording_factory
+        recording = factory(trace, metadata=metadata, max_rows=32 if identifier == "trace_loss" else 8192)
+    if deferred:
+        prepare_recording_thread(recording, control)
     control.data.update(recording_setup_begin_ns=setup_begin, recording_setup_end_ns=time.monotonic_ns(),
                         input_scope="direct_CoreDecisionRecorder.submit_and_fixture_construction",
                         statistics_hold_scope="measured_prefix_only_release_and_trace_overhead_unallocated")
@@ -515,11 +549,14 @@ def collect_case(directory, recipe, metadata):
             else:
                 control.data["workload_started"] = True
                 audit = P0AuditLogger(Path(work) / "audit.raw")
+                if deferred:
+                    resources.enter_context(patch.object(P0AlertRelay, "_run", prepared_entry(recording, control, P0AlertRelay._run)))
+                    resources.enter_context(patch.object(audit, "_dispatch_durable", prepared_entry(recording, control, audit._dispatch_durable)))
                 relay = attach_p0_alert_relay(audit, Path(work) / "queue.raw")
                 receiver = core_decisions.CoreDecisionRecorder(audit, relay, None, max_pending=8)
                 with nullcontext(resources.enter_context(ExitStack())) as patches:
                     try:
-                        hooks = Hooks(patches, receiver, recording, audit, receiver, control, event_rows)
+                        hooks = Hooks(patches, receiver, recording, audit, receiver, control, event_rows, deferred=deferred)
                         receiver.start()
                         if not receiver.ready.wait(30) or not relay.ready.wait(30):
                             raise TimeoutError("original worker readiness watchdog")
@@ -531,7 +568,15 @@ def collect_case(directory, recipe, metadata):
                                 child_logging_capture="fresh_child_parent_pipes_not_historical_pytest_caplog",
                                 logging_last_resort=None if fallback is None else dict(
                                     handler_type=type(fallback).__module__ + "." + type(fallback).__qualname__, level=fallback.level))
-                            slow_patch = patch.object(os, "fsync", GlobalSlowFsync(os.fsync, control))
+                            if deferred:
+                                real_fsync = os.fsync
+                                def deferred_slow_fsync(fd):
+                                    return deferred_fsync_call(recording, real_fsync, fd)
+                                control.data.update(global_fsync_calls=None,
+                                    fsync_observer_scope="deferred_unclassified_fd_no_inode_probe_or_eager_control_list")
+                                slow_patch = patch.object(os, "fsync", deferred_slow_fsync)
+                            else:
+                                slow_patch = patch.object(os, "fsync", GlobalSlowFsync(os.fsync, control))
                             control.data["global_fsync_install_begin_ns"] = time.monotonic_ns()
                             slow_patch.__enter__()
                             control.data["global_fsync_installed_ns"] = time.monotonic_ns()
@@ -556,6 +601,8 @@ def collect_case(directory, recipe, metadata):
                             return original_submit(event)
 
                         def producer(base):
+                            if deferred:
+                                prepare_recording_thread(recording, control)
                             count = recipe["events"] // recipe["producers"]
                             for offset in range(count):
                                 index = base * count + offset
@@ -674,11 +721,19 @@ def collect_case(directory, recipe, metadata):
                         recording_finish_begin_ns=time.monotonic_ns(),
                         recording_incomplete_before_finish=recording.incomplete,
                         process_cpu_scope="shared_process_including_overlapping_workers_and_idle_original_daemons")
+    if control.data.get("thread_preparation_errors"):
+        errors["thread_preparation"] = "explicit_thread_preparation_failed"
     if recipe["instrumented"]:
         if lifecycle["quiescent"] and not errors:
-            recording.finish()
+            if deferred:
+                recording.finish(quiescent=True)
+            else:
+                recording.finish()
         else:
-            recording.abort()
+            if deferred:
+                recording.abort(quiescent=lifecycle["quiescent"])
+            else:
+                recording.abort()
     control.data.update(recording_finish_end_ns=time.monotonic_ns(), recording_incomplete=recording.incomplete,
                         recording_lost_rows=recording.lost_rows, instrumented_workers_joined=lifecycle["workers_joined"],
                         callbacks_quiescent=lifecycle["quiescent"], recorder_close_error=getattr(recording, "close_error", None),
@@ -687,6 +742,8 @@ def collect_case(directory, recipe, metadata):
         errors["recording"] = "recorder_incomplete_after_finish"
     if control.data.get("fsync_probe_errors"):
         errors["fsync_probe"] = "target_identity_probe_failed_original_fsync_preserved"
+    if control.data.get("thread_preparation_errors"):
+        errors["thread_preparation"] = "explicit_thread_preparation_failed"
     if getattr(recording, "close_error", None) is not None:
         errors["recording_close"] = "recorder_descriptor_close_failed"
     result = dict(schema_version="edge-notification-original-result/v1", case_id=identifier,
