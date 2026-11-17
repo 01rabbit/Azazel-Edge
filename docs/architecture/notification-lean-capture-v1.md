@@ -51,6 +51,17 @@ recorder-global lock is allowed there. Original audit serialization/write/fsync
 under its own lock is retained exactly. Clock calls, Python allocations, GIL and
 buffer writes still perturb execution and are not zero-overhead.
 
+The lab wrappers themselves also contain observer work. For the deferred arm,
+omit eager FsyncProxy fstat/path inode probes and GlobalSlowFsync shared-control
+lock/list diagnostics while audit ownership is active. Retain the same requested
+50-ms sleep followed by the captured original fsync exactly once, with a raw
+`audit_fsync` span labelled `global.os.fsync.callsite.unclassified_fd`. It proves
+only this wrapped global callsite, not the destination inode, pure syscall or
+device latency. Original and v1 arms retain their exact existing wrappers. This
+declared capture difference is part of the new profile, not an assertion of
+exclusive profiler cost or equivalent timing instrumentation. Actual control
+installation/restoration and deferred call endpoints remain available.
+
 ## Bounds, completion and loss
 
 Maximum 16 logical threads, 120 original events, 8192 exported rows, 16 MiB trace,
