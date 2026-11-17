@@ -43,6 +43,10 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def descriptor(relative, raw):
+    return None if raw is None else dict(path=relative, bytes=len(raw), sha256=sha(raw))
+
+
 def save(path, raw):
     with Path(path).open("xb") as stream:
         stream.write(raw)
@@ -255,8 +259,11 @@ def run(output_dir):
     source = {key: os.environ.get("EDGE_CAPTURE_CLOSE_SOURCE_" + key.upper()) for key in ("head", "tree")}
     if not all(type(value) is str and re.fullmatch("[0-9a-f]{40}", value) for value in source.values()):
         raise ValueError("external_source_commit_tree_required")
-    inventory = canonical(dict(schema_version="edge-capture-close-source-inventory/v1",
-        files={name: dict(sha256=sha(read(ROOT / name)), bytes=(ROOT / name).stat().st_size) for name in SOURCES}))
+    source_files = {}
+    for name in SOURCES:
+        data = read(ROOT / name)
+        source_files[name] = dict(sha256=sha(data), bytes=len(data))
+    inventory = canonical(dict(schema_version="edge-capture-close-source-inventory/v1", files=source_files))
     for name, raw in (("protocol.json", raw_protocol), ("source-inventory.json", inventory),
                       ("process-boundary.json", canonical(process_boundary))):
         save(output / name, raw)
@@ -267,6 +274,7 @@ def run(output_dir):
         directory = output / case
         directory.mkdir(mode=0o700)
         save(directory / "source-inventory.json", inventory)
+        evaluated = {case + "/source-inventory.json": descriptor(case + "/source-inventory.json", inventory)}
         entry = dict(case_id=case, child=None, expected=None, analysis=None, expected_disposition=False)
         try:
             if halted:
@@ -285,13 +293,17 @@ def run(output_dir):
                 except (OSError, ValueError) as exc:
                     raw[name] = None
                     entry.setdefault("original_read_errors", {})[name] = type(exc).__name__
+                    blockers.append(case + "/" + name + ":original_unavailable_or_unverified")
                 expected[PINS[name]] = sha(raw[name]) if raw[name] is not None else None
+                evaluated[case + "/" + name] = descriptor(case + "/" + name, raw[name])
             entry["expected"] = expected
             if type(completion) is dict and canonical(completion.get("expected")) != canonical(expected):
                 blockers.append(case + ":completion_differs_from_closed_originals")
             analysis = evaluate_capture_close(raw["plan.json"], raw["admission.json"], raw["terminal.json"],
                 raw["collector.json"], raw["capture.raw"], expected=expected, enrollment_raw=raw["enrollment.json"])
-            save(directory / "analysis.json", canonical(analysis))
+            analysis_raw = canonical(analysis)
+            save(directory / "analysis.json", analysis_raw)
+            evaluated[case + "/analysis.json"] = descriptor(case + "/analysis.json", analysis_raw)
             entry["analysis"] = analysis
             entry["expected_disposition"] = disposition(case, analysis, raw)
             if not entry["expected_disposition"]:
@@ -309,12 +321,14 @@ def run(output_dir):
             relative = case + "/" + name
             try:
                 data = read(output / relative)
-                artifacts[relative] = dict(path=relative, bytes=len(data), sha256=sha(data))
+                artifacts[relative] = descriptor(relative, data)
             except FileNotFoundError:
                 artifacts[relative] = None
             except (OSError, ValueError) as exc:
                 artifacts[relative] = None
                 blockers.append(relative + ":artifact_unverified:" + type(exc).__name__)
+            if relative in evaluated and canonical(artifacts[relative]) != canonical(evaluated[relative]):
+                blockers.append(relative + ":changed_between_evaluation_and_inventory")
     report = dict(schema_version="edge-capture-close-study/v1", run_id=run_id, cases=entries, blockers=blockers,
         scope="FINITE_CONTROLLER_OWNED_TEST_CAPTURE_ONLY", **FLAGS)
     save(output / "report.json", canonical(report))

@@ -61,3 +61,44 @@ def test_nonfinite_reply_is_not_accepted():
     rows, error = runner._reply(b'{"kind":"bootstrap","pid":NaN}\n')
     assert rows == [] and error
     assert json.loads(runner.canonical(dict(data_kind="SYNTHETIC"))) == dict(data_kind="SYNTHETIC")
+
+
+def test_changed_one_original_blocks_even_when_evaluation_would_pass(tmp_path, monkeypatch):
+    """Fault-inject orchestration only; no processes or kernel capture exist."""
+    source = tmp_path / "source.py"
+    source.write_bytes(b"SYNTHETIC source\n")
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setattr(runner, "SOURCES", ("source.py",))
+    identity = dict(pid=123, data_kind="SYNTHETIC")
+    monkeypatch.setattr(runner, "boundary", lambda: dict(identity=identity))
+    monkeypatch.setenv("EDGE_CAPTURE_CLOSE_SOURCE_HEAD", "1" * 40)
+    monkeypatch.setenv("EDGE_CAPTURE_CLOSE_SOURCE_TREE", "2" * 40)
+    output = tmp_path / "study"
+
+    def launch(directory, case, run_id, inventory_hash):
+        raw = {name: b"{}\n" for name in runner.ORIGINALS}
+        raw["plan.json"] = runner.canonical(dict(controller_identity=identity, case_id=case,
+            run_id=run_id, source_inventory_sha256=inventory_hash))
+        for name, value in raw.items():
+            (directory / name).write_bytes(value)
+        expected = {runner.PINS[name]: runner.sha(value) for name, value in raw.items()}
+        return dict(returncode=0, timed_out=False, capture_errors=[], binding_errors=[], stdout_decode_error=None,
+            streams={}, bootstrap=dict(boundary=dict(identity=identity)), completion=dict(safe_to_continue=True, expected=expected))
+
+    called = []
+    def evaluate(*args, **kwargs):
+        called.append(1)
+        if len(called) == 1:
+            (output / "clean/collector.json").write_bytes(b"SYNTHETIC changed after evaluation input\n")
+        return dict(data_kind="SYNTHETIC_FAULT_INJECTION")
+
+    monkeypatch.setattr(runner, "launch", launch)
+    monkeypatch.setattr(runner, "evaluate_capture_close", evaluate)
+    monkeypatch.setattr(runner, "disposition", lambda *args: True)
+    result = runner.run(output)
+    assert all(entry["expected_disposition"] for entry in result["cases"])
+    assert "clean/collector.json:changed_between_evaluation_and_inventory" in result["blockers"]
+    assert len(result["blockers"]) == 1
+    manifest = json.loads((output / "manifest.json").read_bytes())
+    assert manifest["files"]["clean/plan.json"]["sha256"] == result["cases"][0]["expected"]["plan_sha256"]
+    assert manifest["files"]["clean/collector.json"]["sha256"] != result["cases"][0]["expected"]["collector_sha256"]
