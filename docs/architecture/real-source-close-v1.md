@@ -106,6 +106,20 @@ Output schema `edge-real-source-close-analysis/v1`, with original evaluations, r
 
 Always: `native_registry_authentication=not_exercised`, `actual_native_execution=false`, `actual_native_terminal_verified=null`, `source_immutability=false`, `native_atomic_close=null`, `upstream_produced=null`, `upstream_loss=null`, `runtime_inflight=null`, `whole_window_coverage=false`, `old_evaluation_modified=false`, `performance_acceptance=false`, old category counts/safety count null, and all comparison/whole-measurement/production/resume/authority flags false. Preserve original `normal_terminal_verified` only inside its unchanged original report; new labels must say authenticated DECLARED test terminal, not actual native end. Witness prefix may be shorter than final Source; report that boundary explicitly, never force final witnessing/equivalence or synthesize a v4 terminal receipt.
 
-Bounds:3 cases,10 attempts,128 Source rows in this annex,1MiB Source and each reference,32KiB trust, depth16,30s process watchdog. Keep old original API limits unchanged; reject overbounds before hash/parse and lazily decode at most129 rows.
+Bounds:3 cases,10 attempts,128 Source rows in this annex,1MiB Source and each reference,32KiB trust, depth16,30s process watchdog. Check dictionary shape/depth before canonical serialization or delegation. Old verifiers retain their own row limits inside the annex byte bounds; their unchanged replay may examine more rows. New ID matching decodes at most128 rows plus one overbound probe and cannot qualify accounting on an oversized stream. Byte bounds precede hashing or parsing.
+
+### Precollection feasibility clarification
+
+Under the existing cached Linux container capabilities, Root can read a
+different-UID child's `/proc/PID/stat`, status and time offsets, but following
+`/proc/PID/ns/time` returns EACCES (probe only; no Source trial). Do not add
+SYS_PTRACE or another capability. Root independently checks each actual Popen
+PID, start tick, UID and kernel boot ID. The pinned child's own bootstrap reads
+its time namespace identity; compare this with the controller's established
+inherited domain. Clock-domain provenance is explicitly a trusted-launcher and
+pinned-worker self-read premise, not a successful cross-UID namespace lookup.
+All child capabilities are dropped, groups cleared and NNP set before work.
+An absent or mismatched self-read/domain/incarnation keeps timing and accounting
+unqualified. Preserve the denied probe and the distinction in public state.
 
 Tests before collection: exact old Source/witness replay parity; clean/loss/ abrupt expected accounting; bad suffix preserving prefix4; missing receipt/pin; wrong actor/context/gate/token/Source FD/Source owner/nlink/mode; writable FD, partial/changed read, unknown fields/duplicate JSON/NaN/bool/byte/row/depth limits; missing/abnormal W, fake close/refusal, late-control absent/already-dead, wrong ordering or cloned source; unproved origin never native/APPLIED; no I/O in pure API and no target mutation/close/seek in reader. Actual virtual Linux captures all three assigned cases once after review; no favorable retry. Independent raw replay, mandatory positive CI, final-head/base/testmerge/tree and postmerge checks remain separate gates. Update #400/#393, keep both open. No new issue or admission.
