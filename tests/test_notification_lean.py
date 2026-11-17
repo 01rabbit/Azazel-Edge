@@ -634,3 +634,127 @@ def test_overlong_thread_name_is_refused_before_slot_claim_without_truncation(tm
     recorder.abort(quiescent=True)
     rows = [json.loads(line) for line in (tmp_path / "trace").read_bytes().splitlines()]
     assert not any(row["kind"] in ("thread", "end") for row in rows)
+
+
+def _reservation_span(base, local, parent, start, end):
+    return dict(
+        base,
+        span_id=local,
+        parent_id=parent,
+        start_ns=start,
+        end_ns=end,
+        thread_cpu_start_ns=start,
+        thread_cpu_end_ns=end,
+        process_cpu_start_ns=start,
+        process_cpu_end_ns=end,
+    )
+
+
+def test_reservation_preorder_cannot_reopen_earlier_child_after_later_sibling():
+    value = fixture()
+    base = value[0][3][1]
+    spans = [
+        _reservation_span(base, 1, None, 0, 200),
+        _reservation_span(base, 2, 1, 10, 50),
+        _reservation_span(base, 3, 1, 60, 100),
+        _reservation_span(base, 4, 2, 20, 30),
+    ]
+    value[0][3:4] = [("span", span) for span in spans]
+    result = analyze(value)
+    assert [span["span_id"] for span in result["completed_spans"]] == [1, 2, 3]
+    assert (
+        result["status"] == "partial_prefix"
+        and result["normal_return_confirmed"] is False
+    )
+    assert any(
+        "lean_reservation_start_regression" in reason for reason in result["reasons"]
+    )
+
+
+def test_equal_endpoint_does_not_resurrect_closed_parent_or_reject_valid_zero_child():
+    value = fixture()
+    base = value[0][3][1]
+    spans = [
+        _reservation_span(base, 1, None, 0, 200),
+        _reservation_span(base, 2, 1, 10, 100),
+        _reservation_span(base, 3, 1, 100, 150),
+        _reservation_span(base, 4, 2, 100, 100),
+    ]
+    value[0][3:4] = [("span", span) for span in spans]
+    result = analyze(value)
+    assert len(result["completed_spans"]) == 3
+    assert any("lean_parent_already_closed" in reason for reason in result["reasons"])
+    # A zero-duration child at its still-active parent's endpoint is legal.
+    value = fixture()
+    base = value[0][3][1]
+    value[0][3:4] = [
+        ("span", _reservation_span(base, 1, None, 0, 100)),
+        ("span", _reservation_span(base, 2, 1, 100, 100)),
+    ]
+    assert analyze(value)["status"] == "complete_descriptive_trace"
+
+
+def test_incomplete_clock_slot_does_not_invent_chronology_or_erase_next_own_fact():
+    value = fixture()
+    base = value[0][3][1]
+    incomplete = dict(
+        base,
+        complete=False,
+        error="end_clock_failure",
+        end_ns=None,
+        thread_cpu_end_ns=None,
+        process_cpu_end_ns=None,
+        native_tid_end=None,
+    )
+    later = dict(
+        base,
+        span_id=2,
+        start_ns=110,
+        end_ns=200,
+        thread_cpu_start_ns=30,
+        thread_cpu_end_ns=40,
+        process_cpu_start_ns=60,
+        process_cpu_end_ns=70,
+    )
+    value[0][3:4] = [("span", incomplete), ("span", later)]
+    result = analyze(value)
+    assert [span["span_id"] for span in result["completed_spans"]] == [2]
+    assert result["incomplete_intents"][0]["end_ns"] is None
+    assert "lean_incomplete_reservation_chronology_unavailable" in result["reasons"]
+    assert result["normal_return_confirmed"] is False
+
+
+def test_thread_cpu_exceeding_wall_is_explicit_clock_anomaly_without_tolerance():
+    value = fixture()
+    base = value[0][3][1]
+    later = dict(
+        base,
+        span_id=2,
+        start_ns=110,
+        end_ns=200,
+        thread_cpu_start_ns=30,
+        thread_cpu_end_ns=121,
+        process_cpu_start_ns=60,
+        process_cpu_end_ns=180,
+    )
+    value[0].insert(4, ("span", later))
+    result = analyze(value)
+    assert [span["span_id"] for span in result["completed_spans"]] == [1]
+    assert any(
+        "lean_thread_cpu_exceeds_wall_clock_anomaly" in reason
+        for reason in result["reasons"]
+    )
+    assert (
+        result["normal_return_confirmed"] is False
+        and result["historical_cause"] == "UNKNOWN"
+    )
+    assert result["completed_spans"][0]["residual_cause"] == "UNCLASSIFIED"
+
+
+def test_shared_process_cpu_can_exceed_wall_without_exclusive_cost_claim():
+    value = fixture()
+    value[0][3][1]["process_cpu_end_ns"] = 240
+    result = analyze(value)
+    assert result["status"] == "complete_descriptive_trace"
+    assert result["completed_spans"][0]["process_cpu_ns"] == 200
+    assert result["completed_spans"][0]["elapsed_ns"] == 90

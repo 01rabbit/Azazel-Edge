@@ -224,6 +224,7 @@ def analyze_notification_lean(
     header, ended = None, False
     consumed, previous = 0, "0" * 64
     threads, records, counts, bindings = {}, {}, {}, {}
+    ancestry, closed_parents, reservation_starts = {}, {}, {}
     last_thread = 0
     for sequence, line in enumerate(_bounded_lines(trace_raw), 1):
         try:
@@ -363,6 +364,37 @@ def analyze_notification_lean(
                         data["parent_id"] is None or parent is not None,
                         "lean_parent_missing",
                     )
+                    # Deferred rows are reservation preorder, not completion
+                    # order. A previously closed parent cannot be resurrected.
+                    starts = reservation_starts.setdefault(token, {})
+                    for start, _ in CLOCK_PAIRS:
+                        if data[start] is not None:
+                            _need(
+                                start not in starts or starts[start] <= data[start],
+                                "lean_reservation_start_regression:" + start,
+                            )
+                    stack = ancestry.setdefault(token, [])
+                    closed = closed_parents.setdefault(token, set())
+                    _need(data["parent_id"] not in closed, "lean_parent_already_closed")
+                    while stack and stack[-1] != data["parent_id"]:
+                        ancestor = records[token, stack[-1]]
+                        for start, end in CLOCK_PAIRS:
+                            if ancestor[end] is not None and data[start] is not None:
+                                _need(
+                                    ancestor[end] <= data[start],
+                                    "lean_reservation_ancestry_overlap",
+                                )
+                            else:
+                                reason = (
+                                    "lean_incomplete_reservation_chronology_unavailable"
+                                )
+                                if reason not in reasons:
+                                    reasons.append(reason)
+                        closed.add(stack.pop())
+                    _need(
+                        (stack[-1] if stack else None) == data["parent_id"],
+                        "lean_reservation_parent_not_active",
+                    )
                     if data["complete"]:
                         _need(
                             data["error"] is None
@@ -404,6 +436,7 @@ def analyze_notification_lean(
                                 )
                         wall = data["end_ns"] - data["start_ns"]
                         cpu = data["thread_cpu_end_ns"] - data["thread_cpu_start_ns"]
+                        _need(cpu <= wall, "lean_thread_cpu_exceeds_wall_clock_anomaly")
                         fact = dict(
                             deepcopy(data),
                             elapsed_ns=wall,
@@ -430,6 +463,10 @@ def analyze_notification_lean(
                             data["error"] is not None, "incomplete_slot_without_reason"
                         )
                         result["incomplete_intents"].append(deepcopy(data))
+                    for start, _ in CLOCK_PAIRS:
+                        if data[start] is not None:
+                            starts[start] = data[start]
+                    stack.append(local)
                     records[token, local] = data
                     counts[token], last_thread = local, token
                 elif kind == "end":
