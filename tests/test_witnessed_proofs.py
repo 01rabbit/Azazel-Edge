@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
+import stat
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -195,14 +197,51 @@ def test_pure_composition_does_not_open_files_endpoints_or_processes(tmp_path):
     assert result["source_witness"]["witness_prefix_authenticated"] is True
 
 
-def staged(tmp_path, monkeypatch):
+class BoundaryRootOS(SyntheticRootOS):
+    """SYNTHETIC external directory epochs for explicit witness phase tests only."""
+
+    def __init__(self, bundle, case, *, owned_root):
+        super().__init__(bundle, case)
+        self.owned_root = Path(owned_root)
+        self.external_epochs = {}
+        self.external_modes = {}
+
+    def metadata(self, info, path):
+        path = Path(path)
+        external = path != self.owned_root and self.owned_root not in path.parents
+        key = (info.st_dev, info.st_ino)
+        if external:
+            # Check raw mode BEFORE the shared fixture models protected ancestry.
+            if key in self.external_modes and info.st_mode != self.external_modes[key]:
+                raise OSError("synthetic external ancestor raw mode changed")
+            if stat.S_ISDIR(info.st_mode):
+                self.external_modes.setdefault(key, info.st_mode)
+        modeled = super().metadata(info, path)
+        if not external:
+            # Ownership remains modeled Root; owned permissions/epochs stay real.
+            modeled.st_mode = info.st_mode
+        if external and stat.S_ISDIR(info.st_mode):
+            fields = ("st_size", "st_nlink", "st_mtime_ns", "st_ctime_ns")
+            epochs = self.external_epochs.setdefault(
+                key, tuple(getattr(info, name) for name in fields)
+            )
+            for name, value in zip(fields, epochs):
+                setattr(modeled, name, value)
+        return modeled
+
+
+def staged(tmp_path, monkeypatch, *, isolate_external=False):
     directory = tmp_path / "sealed"
     directory.mkdir()
     bundle = make_witness_bundle(directory)
     for name, raw in bundle["files"].items():
         bundle["paths"][name].write_bytes(raw)
         bundle["paths"][name].chmod(0o444)
-    proxy = SyntheticRootOS(bundle, "complete")
+    proxy = (
+        BoundaryRootOS(bundle, "complete", owned_root=tmp_path)
+        if isolate_external
+        else SyntheticRootOS(bundle, "complete")
+    )
     monkeypatch.setattr(p.collection, "os", proxy)
     monkeypatch.setattr(p.proofs, "os", proxy)
     monkeypatch.setattr(p, "os", proxy)
@@ -397,9 +436,9 @@ def test_enrolled_matched_none_witness_bytes_stay_unknown_without_losing_base(
 def test_post_witness_evaluation_fences_block_result_and_close_all(
     tmp_path, monkeypatch, fault
 ):
-    bundle, proxy = staged(tmp_path, monkeypatch)
+    bundle, proxy = staged(tmp_path, monkeypatch, isolate_external=True)
     original = p._witness
-    changed = []
+    changed, phases = [], []
     if fault == "boot":
         monkeypatch.setattr(
             p.collection,
@@ -410,8 +449,11 @@ def test_post_witness_evaluation_fences_block_result_and_close_all(
         )
 
     def alter_after_verified_witness(*args, **kwargs):
+        phases.append("wrapper_entered")
         result = original(*args, **kwargs)
+        phases.append("original_returned")
         assert result["witness_prefix_authenticated"] is True
+        phases.append("prefix_authenticated")
         if fault == "mutation":
             path = bundle["paths"]["anchors"]
             path.chmod(0o644)
@@ -420,9 +462,25 @@ def test_post_witness_evaluation_fences_block_result_and_close_all(
         elif fault == "uid":
             proxy.case = "wrong-reader"
         changed.append(True)
+        phases.append("fault_injected")
         return result
 
     monkeypatch.setattr(p, "_witness", alter_after_verified_witness)
-    with pytest.raises(p.collection.SafetyCollectionError):
+    with pytest.raises(p.collection.SafetyCollectionError) as refused:
         collect(bundle)
-    assert changed == [True] and sorted(proxy.opened) == sorted(proxy.closed)
+    diagnostic = f"phases={phases!r}; exception={refused.value!r}; cause={refused.value.__cause__!r}"
+    assert phases == [
+        "wrapper_entered",
+        "original_returned",
+        "prefix_authenticated",
+        "fault_injected",
+    ], diagnostic
+    intended = (
+        "artifact or ancestor metadata changed"
+        if fault == "mutation"
+        else "witness reader changed"
+    )
+    assert str(refused.value) == "sealed witness intake failed: " + intended, diagnostic
+    assert changed == [True] and sorted(proxy.opened) == sorted(proxy.closed), (
+        diagnostic
+    )
