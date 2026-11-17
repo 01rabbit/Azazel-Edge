@@ -167,6 +167,9 @@ class LeanRecording:
             existing = getattr(self.local, "slot", None)
             if existing is not None and self.owners[existing] is current:
                 return existing + 1
+            name = current.name
+            if type(name) is not str or not 1 <= len(name) <= 128:
+                raise ValueError("lean thread name bound")
             # CPython list.pop is the single slot claim. No recorder-wide mutex.
             slot = self.free.pop()
             self.owners[slot] = current
@@ -174,7 +177,7 @@ class LeanRecording:
                 logical_thread_token=slot + 1,
                 native_tid=threading.get_native_id(),
                 task_start_ticks=None,
-                thread_name=current.name,
+                thread_name=name,
                 identity_scope="strong_python_Thread_object_native_tid_not_kernel_incarnation",
             )
             self.local.slot, self.local.stack, self.local.event_index = slot, [], None
@@ -311,8 +314,14 @@ class LeanRecording:
             return
         fd = None
         previous = "0" * 64
-        started = time.monotonic_ns()
-        self.finalization = dict(start_ns=started, end_ns=None, error=None)
+        started = None
+        self.finalization = dict(start_ns=None, end_ns=None, error=None)
+        try:
+            started = time.monotonic_ns()
+            self.finalization["start_ns"] = started
+        except BaseException:
+            self.finalization["error"] = "finish_start_clock_failure"
+            self.incomplete = True
 
         def emit(kind, data):
             nonlocal previous
@@ -416,7 +425,8 @@ class LeanRecording:
         except BaseException as exc:
             self.incomplete = True
             self._flush_lost_unknown = True
-            self.finalization["error"] = type(exc).__name__
+            if self.finalization["error"] is None:
+                self.finalization["error"] = type(exc).__name__
         finally:
             if fd is not None:
                 try:
@@ -432,7 +442,8 @@ class LeanRecording:
             try:
                 self.finalization["end_ns"] = time.monotonic_ns()
             except BaseException:
-                self.finalization["error"] = "finish_clock_failure"
+                if self.finalization["error"] is None:
+                    self.finalization["error"] = "finish_clock_failure"
                 self.incomplete = True
 
     def finish(self, *, quiescent=False):

@@ -566,3 +566,71 @@ def test_recorder_roundtrip_deferred_event_mutation_is_uncorrelated(tmp_path):
     assert result["status"] == "partial_prefix" and len(result["completed_spans"]) == 1
     assert result["completed_spans"][0]["event_correlation"] == "unavailable"
     assert "event_binding_differs:0" in result["reasons"]
+
+
+@pytest.mark.parametrize("failure_call", [1, 3])
+def test_finish_clock_failure_retains_null_endpoint_and_original_calls(
+    tmp_path, monkeypatch, failure_call
+):
+    recorder = r.LeanRecording(tmp_path / "trace", metadata=metadata())
+    recorder.prepare_thread()
+    token, calls = object(), []
+
+    def original():
+        calls.append(1)
+        return token
+
+    assert recorder.call("submit", original) is token
+    real_time = r.time
+    count = [0]
+
+    def monotonic():
+        count[0] += 1
+        if count[0] == failure_call:
+            raise OSError("SYNTHETIC finish clock failure")
+        return real_time.monotonic_ns()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(r, "time", Proxy(real_time, monotonic_ns=monotonic))
+        recorder.finish(quiescent=True)
+    assert (
+        recorder.incomplete and recorder.closed and recorder.descriptor_closed is True
+    )
+    assert recorder.finalization["start_ns" if failure_call == 1 else "end_ns"] is None
+    assert recorder.finalization["error"] == (
+        "finish_start_clock_failure" if failure_call == 1 else "finish_clock_failure"
+    )
+    rows = [json.loads(line) for line in (tmp_path / "trace").read_bytes().splitlines()]
+    assert any(row["kind"] == "span" for row in rows)
+    if failure_call == 1:
+        assert not any(row["kind"] == "end" for row in rows)
+    # The END of a successful write precedes close/final clock; that raw prefix
+    # is retained on a final-clock error and never upgraded via END alone.
+    assert recorder.call("submit", original) is token and calls == [1, 1]
+    failure = LookupError("exactoriginal")
+
+    def raised():
+        raise failure
+
+    with pytest.raises(LookupError) as seen:
+        recorder.call("submit", raised)
+    assert seen.value is failure
+
+
+def test_overlong_thread_name_is_refused_before_slot_claim_without_truncation(tmp_path):
+    recorder = r.LeanRecording(tmp_path / "trace", metadata=metadata())
+    calls = []
+
+    def worker():
+        assert recorder.prepare_thread() is None
+        assert recorder.call("submit", lambda: calls.append(1) or 8) == 8
+
+    thread = threading.Thread(target=worker, name="X" * 129)
+    thread.start()
+    thread.join()
+    assert recorder.incomplete and recorder.lost_rows is None
+    assert len(recorder.free) == 16 and all(owner is None for owner in recorder.owners)
+    assert calls == [1]
+    recorder.abort(quiescent=True)
+    rows = [json.loads(line) for line in (tmp_path / "trace").read_bytes().splitlines()]
+    assert not any(row["kind"] in ("thread", "end") for row in rows)
