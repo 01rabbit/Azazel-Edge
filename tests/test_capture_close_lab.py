@@ -209,3 +209,87 @@ def test_no_footer_ack_means_unavailable_d_not_a_claimed_terminal_receipt():
     digest = "a" * 64
     assert lab.footer_ack_receipt({"kind": "footer", "footer_sha256": digest}, 300, 400) == {
         "started_ns": 300, "finished_ns": 400, "footer_sha256": digest}
+
+
+def test_post_popen_registration_failure_tracks_and_reaps_owned_child(monkeypatch, tmp_path):
+    calls, registry = [], []
+    class Pipe(io.BytesIO):
+        def fileno(self):
+            return 123
+    class Process:
+        pid = 4242
+        returncode = None
+        stdin, stdout, stderr = Pipe(), Pipe(), Pipe()
+        def poll(self):
+            return self.returncode
+        def kill(self):
+            calls.append("kill")
+        def wait(self, timeout):
+            calls.append("wait")
+            self.returncode = -9
+            return -9
+    process = Process()
+    class Selector:
+        def register(self, *args):
+            assert registry[0].process is process
+            raise OSError(5, "SYNTHETIC registration failure")
+        def get_map(self):
+            return {}
+        def close(self):
+            calls.append("selector_close")
+    actual_os = lab.os
+    class ActorOS:
+        def __getattr__(self, name):
+            return getattr(actual_os, name)
+        def set_blocking(self, *args):
+            pass
+    monkeypatch.setattr(lab, "os", ActorOS())
+    monkeypatch.setattr(lab, "subprocess", SimpleNamespace(Popen=lambda *a, **k: process, PIPE=-1))
+    monkeypatch.setattr(lab, "selectors", SimpleNamespace(DefaultSelector=Selector, EVENT_READ=1))
+    with pytest.raises(OSError, match="registration failure"):
+        lab.Actor("source", 77, tmp_path, registry=registry)
+    assert len(registry) == 1 and registry[0].closed
+    assert calls == ["kill", "wait", "selector_close"]
+    assert all(getattr(process, name).closed for name in ("stdin", "stdout", "stderr"))
+    assert process.returncode == -9 and registry[0].cleanup_errors == {}
+    registry[0].cleanup()
+    assert calls == ["kill", "wait", "selector_close"]
+
+
+def test_cleanup_failure_is_retained_and_cannot_establish_safe_child_state(monkeypatch, tmp_path):
+    registry = []
+    class Pipe(io.BytesIO):
+        def fileno(self):
+            return 123
+    class Process:
+        pid = 4242
+        returncode = None
+        stdin, stdout, stderr = Pipe(), Pipe(), Pipe()
+        def poll(self):
+            return None
+        def kill(self):
+            raise PermissionError(1, "SYNTHETIC")
+        def wait(self, timeout):
+            raise TimeoutError("SYNTHETIC")
+    class Selector:
+        def register(self, *args):
+            raise OSError(5, "SYNTHETIC setup")
+        def get_map(self):
+            return {}
+        def close(self):
+            pass
+    actual_os = lab.os
+    class ActorOS:
+        def __getattr__(self, name):
+            return getattr(actual_os, name)
+        def set_blocking(self, *args):
+            pass
+    monkeypatch.setattr(lab, "os", ActorOS())
+    monkeypatch.setattr(lab, "subprocess", SimpleNamespace(Popen=lambda *a, **k: Process(), PIPE=-1))
+    monkeypatch.setattr(lab, "selectors", SimpleNamespace(DefaultSelector=Selector, EVENT_READ=1))
+    with pytest.raises(OSError, match="setup"):
+        lab.Actor("source", 77, tmp_path, registry=registry)
+    actor = registry[0]
+    assert actor.process.returncode is None
+    assert set(actor.cleanup_errors) == {"kill", "wait"}
+    assert all(getattr(actor.process, name).closed for name in ("stdin", "stdout", "stderr"))

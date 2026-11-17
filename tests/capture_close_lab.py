@@ -221,24 +221,35 @@ def collector_worker(fd, output):
 class Actor:
     """One owned child with bounded concurrent control/stdout/stderr draining."""
 
-    def __init__(self, role, fd, output):
+    def __init__(self, role, fd, output, *, registry=None):
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join([str(ROOT / "py"), str(ROOT / "tests")]),
                            PYTHONDONTWRITEBYTECODE="1")
         command = [sys.executable, str(Path(__file__).resolve()), "--role", role, "--fd", str(fd)]
         if role == "collector":
             command += ["--output", str(output)]
-        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, pass_fds=(fd,), env=environment, close_fds=True)
         self.role = role
         self.buffers = dict(stdout=bytearray(), stderr=bytearray())
         self.observed = dict(stdout=0, stderr=0)
         self.pending = bytearray()
         self.closed = False
+        self.cleanup_errors = {}
         self.selector = selectors.DefaultSelector()
-        for name in self.buffers:
-            pipe = getattr(self.process, name)
-            os.set_blocking(pipe.fileno(), False)
-            self.selector.register(pipe, selectors.EVENT_READ, name)
+        try:
+            self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, pass_fds=(fd,), env=environment, close_fds=True)
+        except BaseException:
+            self.selector.close()
+            raise
+        if registry is not None:
+            registry.append(self)  # Own the child BEFORE any fallible registration.
+        try:
+            for name in self.buffers:
+                pipe = getattr(self.process, name)
+                os.set_blocking(pipe.fileno(), False)
+                self.selector.register(pipe, selectors.EVENT_READ, name)
+        except BaseException:
+            self.cleanup()
+            raise
 
     def send(self, command):
         raw = wire(command)
@@ -297,17 +308,27 @@ class Actor:
     def cleanup(self):
         if self.closed:
             return
+
+        def attempt(name, function):
+            try:
+                return function()
+            except Exception as exc:
+                self.cleanup_errors[name] = dict(type=type(exc).__name__, errno=getattr(exc, "errno", None))
+                return None
+
         if self.process.poll() is None:
-            self.process.kill()
-            self.process.wait(timeout=30)
-        for _ in range(20):
-            if not self.selector.get_map():
-                break
-            self.pump(timeout=0.01)
-        self.selector.close()
+            attempt("kill", self.process.kill)
+            attempt("wait", lambda: self.process.wait(timeout=30))
+        def drain():
+            for _ in range(20):
+                if not self.selector.get_map():
+                    break
+                self.pump(timeout=0.01)
+        attempt("drain", drain)
         self.closed = True  # Never retry descriptor numbers after close errors.
+        attempt("selector_close", self.selector.close)
         for name in ("stdin", "stdout", "stderr"):
-            getattr(self.process, name).close()
+            attempt(name + "_close", getattr(self.process, name).close)
 
     def export(self, output):
         for name, raw in self.buffers.items():
@@ -370,10 +391,8 @@ def collect_case(outputdir, case_id, *, run_id, source_inventory_sha256):
         rofd = os.open(f"/proc/self/fd/{wfd}", os.O_RDONLY | os.O_CLOEXEC)
         if object_identity(rofd) != held or fcntl.fcntl(rofd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY:
             raise ValueError("read-only enrollment descriptor differs")
-        writer = Actor("source", wfd, output)
-        actors.append(writer)
-        collector = Actor("collector", rofd, output)
-        actors.append(collector)
+        writer = Actor("source", wfd, output, registry=actors)
+        collector = Actor("collector", rofd, output, registry=actors)
         for actor in actors:
             blocked = actor.receive("blocked")
             if blocked.get("pid") != actor.process.pid or blocked.get("role") != actor.role:
@@ -493,7 +512,7 @@ def collect_case(outputdir, case_id, *, run_id, source_inventory_sha256):
         for actor in actors:
             stage(actor.role + "_cleanup", actor.cleanup)
             stage(actor.role + "_logs", lambda actor=actor: actor.export(output))
-        safe = all(actor.process.returncode is not None for actor in actors)
+        safe = all(actor.process.returncode is not None and not actor.cleanup_errors for actor in actors)
         if busy_mapping is not None:
             stage("mapping_cleanup", busy_mapping.close)  # AFTER collector; never retry sealing.
         for name, fd in (("read_only", rofd), ("writer_alias", wfd)):
@@ -510,7 +529,9 @@ def collect_case(outputdir, case_id, *, run_id, source_inventory_sha256):
     state = dict(schema_version="edge-capture-close-lab-state/v1", case_id=case_id, run_id=run_id,
         capture_id=capture_id, boundary=own_boundary, errors=errors, safe_to_continue=safe, stage_facts=stage_facts,
         actors={actor.role: dict(pid=actor.process.pid, returncode=actor.process.returncode,
-            observed_bytes=actor.observed, retained_bytes={name: len(raw) for name, raw in actor.buffers.items()}) for actor in actors},
+            observed_bytes=actor.observed, retained_bytes={name: len(raw) for name, raw in actor.buffers.items()},
+            stream_truncated={name: actor.observed[name] > len(raw) for name, raw in actor.buffers.items()},
+            cleanup_errors=actor.cleanup_errors) for actor in actors},
         expected=expected, old_evaluations_modified=False)
     save(output / "case-state.json", wire(state))
     return dict(expected=expected, safe_to_continue=safe, actorfacts=state["actors"], errors=errors)
