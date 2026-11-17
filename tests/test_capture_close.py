@@ -620,3 +620,54 @@ def test_missing_seal_receipt_does_not_erase_independent_R_sealed_read_fact():
         and report["terminal_missing_count"] is None
     )
     assert report["finite_accounting_complete"] is False
+
+
+def test_bad_capture_pin_extra_DATA_is_unverified_diagnostic_not_verified_anomaly():
+    bundle = make_bundle("late_bypass")
+    pins = {key + "_sha256": sha(raw) for key, raw in bundle.items()}
+    pins["capture_sha256"] = "a" * 64
+    report = evaluate(bundle, pins)
+    assert report["raw_pin_verified"]["capture"] is False
+    assert (
+        report["unexpected_ids"]
+        == report["conflicting_ids"]
+        == report["known_matching_ids"]
+        == []
+    )
+    assert report["unverified_capture_diagnostics"]["unexpected_ids"] == ["late0"]
+    assert report["capture_provenance"] == "unverified_capture_raw_or_plan_context"
+    assert report["valid_capture_rows"] and all(
+        row["provenance"] == report["capture_provenance"]
+        for row in report["valid_capture_rows"]
+    )
+    assert (
+        report["terminal_missing_count"] is None
+        and report["finite_accounting_complete"] is False
+    )
+    assert report["qualified_safety_count"] is None and not any(
+        report["authority_flags"].values()
+    )
+
+
+def test_bad_capture_pin_payload_conflict_is_kept_only_as_unverified_diagnostic():
+    bundle = make_bundle()
+    rechain(bundle, lambda rows: rows[3].update(payload_hex=b"wrong".hex()))
+    pins = {key + "_sha256": sha(raw) for key, raw in bundle.items()}
+    pins["capture_sha256"] = "a" * 64
+    report = evaluate(bundle, pins)
+    assert report["conflicting_ids"] == []
+    assert report["unverified_capture_diagnostics"]["conflicting_ids"] == ["a03"]
+    assert any(
+        reason.startswith("unverified_capture_diagnostic:")
+        for reason in report["reasons"]
+    )
+
+
+def test_good_capture_pin_keeps_late_anomaly_in_verified_plan_context():
+    report = evaluate(make_bundle("late_bypass"))
+    assert report["raw_pin_verified"]["capture"] is True
+    assert report["capture_provenance"] == "raw_pin_and_plan_context_verified"
+    assert (
+        report["unexpected_ids"] == ["late0"]
+        and report["unverified_capture_diagnostics"] is None
+    )

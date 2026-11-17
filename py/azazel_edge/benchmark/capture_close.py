@@ -509,7 +509,10 @@ def evaluate_capture_close(
                 "resume_authorized",
             )
         },
-        known_data_provenance="pinned_raw_capture_prefix_independent_read_verified_separately",
+        raw_pin_verified={},
+        capture_provenance=None,
+        unverified_capture_diagnostics=None,
+        known_data_provenance="raw_pin_and_plan_binding_required_independent_read_verified_separately",
         trust_scope="finite_controller_owned_test_capture_same_UID_kernel_controller_premises_not_independent_production_custody",
     )
     reasons, legs = report["reasons"], report["legs"]
@@ -563,8 +566,24 @@ def evaluate_capture_close(
             reasons.append("plan:" + str(exc))
             legs["plan"] = False
             plan = None
+    report["raw_pin_verified"] = dict(pins)
+    trusted_capture = pins["capture"] and legs["plan"] is True
+    provenance = (
+        "raw_pin_and_plan_context_verified"
+        if trusted_capture
+        else "unverified_capture_raw_or_plan_context"
+    )
+    report["capture_provenance"] = provenance
+    diagnostic_start = len(reasons)
     capture = _capture(capture_raw, plan, pins["capture"], report)
-    report["valid_capture_rows"] = capture["rows"]
+    if not trusted_capture:
+        reasons[diagnostic_start:] = [
+            "unverified_capture_diagnostic:" + reason
+            for reason in reasons[diagnostic_start:]
+        ]
+    report["valid_capture_rows"] = [
+        dict(row, provenance=provenance) for row in capture["rows"]
+    ]
     report["terminal_footer"] = deepcopy(capture["footer"])
     report["terminal_footer_sha256"] = capture["footer_hash"]
     report["known_matching_ids"] = sorted(capture["matching"])
@@ -573,10 +592,18 @@ def evaluate_capture_close(
         for k in capture["matching"]
         if capture["occurrences"][k] == 1 and k not in capture["conflicts"]
     )
-    report["unexpected_ids"] = sorted(capture["unexpected"])
-    report["conflicting_ids"] = sorted(
+    unexpected = sorted(capture["unexpected"])
+    conflicting = sorted(
         capture["conflicts"] | {k for k, v in capture["occurrences"].items() if v > 1}
     )
+    report["unexpected_ids"] = unexpected if trusted_capture else []
+    report["conflicting_ids"] = conflicting if trusted_capture else []
+    if not trusted_capture:
+        report["unverified_capture_diagnostics"] = dict(
+            unexpected_ids=unexpected,
+            conflicting_ids=conflicting,
+            provenance="supplied_bytes_not_verified_against_capture_pin_and_plan_context",
+        )
     if plan is None:
         return report
     if (
