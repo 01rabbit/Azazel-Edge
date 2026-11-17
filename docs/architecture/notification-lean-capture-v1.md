@@ -69,6 +69,21 @@ Whole-process termination may lose in-memory evidence: mark missing, never
 claim durability before flush. Close failure is unknown, never retry a possibly
 reused numeric descriptor. Published originals are never overwritten.
 
+Both finish and abort require explicit actual outer quiescence/handover, not
+merely an instant with zero active spans. With live workers, neither may read,
+copy or serialize any still-worker-owned mutable buffer, including a purported
+partial prefix. Keep resources and references alive and halt later assignments.
+
+The new wire uses its own schema in a canonical LF sequence/hash-chain envelope.
+Header binds the six underlying fixture/source/run metadata pins and external
+process bootstrap, plus new study SHA, capture profile, limits and resolutions.
+Thread rows bind separate logical token, native TID and unknown kernel task
+start; slot rows bind local span ID/parent/token, event index/object/phase,
+genuine nullable start/end clocks and native TIDs, outcome, completion and error.
+Deferred event rows bind original index/key/hash. A normal end requires explicit
+quiescence, no active slots, and no collection loss. These are new-profile
+facts, never old v1 scheduler snapshots or a fabricated kernel task identity.
+
 ## Frozen assignments and interpretation
 
 Three prospective fresh same-authority children, fixed order original, v1,
