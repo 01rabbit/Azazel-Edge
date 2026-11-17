@@ -149,3 +149,83 @@ independent source review, one pinned virtual trial, independent original
 replay, complete final-head CI and exact base/head/test-merge/tree precede merge.
 After merge check the tree, update existing #400/#393 and retain unmeasured
 runtime/whole-window/production conditions. Do not create a duplicate issue.
+
+## Closed wire and implementation handoff
+
+The pure API is
+`evaluate_capture_close(plan_raw, admission_raw, terminal_raw, collector_raw,
+capture_raw, *, expected)`. All references are canonical JSON plus LF; capture
+is bounded canonical JSONL. `expected` has exactly plan_sha256,
+admission_sha256, terminal_sha256, collector_sha256 and capture_sha256, supplied
+by the outer enrollment/closed-original inventory, never inferred from a row.
+
+Closed field sets (nested objects below are also strict):
+
+```text
+plan: schema_version, run_id, capture_id, case_id, protocol_sha256,
+      source_inventory_sha256, controller_identity, writer_identity,
+      collector_identity, object_identity, gate_id, gate_token,
+      attempts, maximum_bytes
+plan attempt: id, seq, payload_sha256, payload_bytes, phase
+admission: schema_version, run_id, capture_id, controller_identity,
+           gate_id, gate_token, attempts, C, late_controls
+admission attempt: id, decision, attempt_started_ns, attempt_finished_ns
+C: started_ns, finished_ns, gate_id, gate_token, admitted_ids
+late control: id, gate_id, gate_token, started_ns, finished_ns,
+              poll_before_ns, poll_after_ns, poll_before_returncode,
+              poll_after_returncode
+terminal: schema_version, run_id, capture_id, controller_identity,
+          writer_identity, D, W, S, post_seal_write
+D: started_ns, finished_ns, footer_sha256 (or null if unavailable)
+W: started_ns, finished_ns, pid, process_start_ticks, returncode, waited
+S: started_ns, finished_ns, result, errno, seals_before, seals_after,
+   object_identity
+post_seal_write: attempted, started_ns, finished_ns, bytes_written, errno
+collector: schema_version, collector_identity, object_before, object_after,
+           access_mode, seals_before, seals_after, read_started_ns,
+           read_finished_ns, bytes_read, sha256, complete, errors
+identity: pid, uid, process_start_ticks, boot_id, clock_domain
+clock_domain: time_namespace_device, time_namespace_inode, timens_offsets,
+              established
+timens offset: clock, seconds, nanoseconds
+object: device, inode, owner_uid, mode, nlink, size
+object_identity (held enrollment): device, inode, owner_uid
+DATA: schema_version, kind, run_id, capture_id, attempt_id, seq,
+      payload_hex, prev_sha256
+footer: schema_version, kind, run_id, capture_id, last_seq,
+        declared_records, declared_lost, lost_ids, prev_sha256
+```
+
+Schemas are edge-capture-close-{plan,admission,terminal,collector,frame}/v1.
+DATA kind is data; footer kind is terminal. The capture prev_sha256 hashes the
+entire previous canonical LF row, initially 64 zeroes. DATA seq is the frozen
+attempt ordinal 0..17, strictly increasing, not a counter repaired across missing
+IDs. Footer last_seq names the last emitted DATA ordinal; explicit losses are
+checked against the admitted set and observed raw bytes. D brackets the actual
+read of the writer's footer ACK, not the unobserved kernel write instant. Its
+hash must match the actual raw footer; self-reported counts exist only inside
+that raw footer and are independently cross-checked.
+
+Admission decisions are admitted, rejected_closed or not_attempted. The latter
+has null attempt clocks and cannot qualify complete accounting. All fixed late
+controls must bind the same gate/token/IDs, have genuine enclosing clocks and
+actual Popen polls before/after the same invocation. A null returncode here is
+an actual measured not-exited result only when its non-null poll timestamp and
+the enrolled writer incarnation are established; an absent field is not a
+liveness result. Late controls occur after C and before D/W while the source
+retains its writable FD. A failed/partial admission does not enter a passing
+partition; classify it as unresolved with explicit original errors.
+
+For post_seal_write, known no-attempt is attempted=false and the other four
+fields null. Only an actual attempted write with genuine brackets and errno
+EPERM can establish the extra kernel control; no-attempt never implies success.
+S can truthfully be sealed even after abnormal W; preserve that leg while
+withholding complete normal terminal accounting. Collector complete=true is
+verified against actual descriptor/read facts, not accepted as an authority bit.
+
+`collect_sealed_fd(fd, *, expected_identity, maximum=1048576)` is a separate
+read-only API returning raw bytes and its collector receipt. It never closes or
+seeks the supplied descriptor. Invalid identity, writable access or missing
+required seals refuse unrelated/unsealed reads and retain an explicit unknown
+receipt; later read faults retain already-read bounded bytes. Fixed self-proc
+identity/clock reads are permitted; no caller-supplied filesystem paths are.
