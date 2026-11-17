@@ -465,6 +465,55 @@ jobs:
             capture-close-linux.log
           if-no-files-found: error
 
+      - name: Original signed Source close and independent readback (offline)
+        run: |
+          set -o pipefail
+          # Existing disposable Root/UID fixture only: no added capabilities,
+          # production services, live native-origin activation or Source chmod.
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_REAL_SOURCE_CLOSE_PUBLIC_DIR=$GITHUB_WORKSPACE/real-source-close-public" \
+            "EDGE_REAL_SOURCE_CLOSE_SOURCE_HEAD=$(git rev-parse HEAD)" "EDGE_REAL_SOURCE_CLOSE_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" \
+            unshare --net -- setpriv --no-new-privs \
+            .venv/bin/python -m pytest -q -rs -p no:cacheprovider tests/test_real_source_close_linux.py | tee real-source-close-linux.log
+          grep -Eq "^1 passed" real-source-close-linux.log
+          ! grep -Eq "skipped|failed|error" real-source-close-linux.log
+
+      - name: Retain every assigned real Source close original and unknown
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-source-close-public
+          path: |
+            real-source-close-public/report.json
+            real-source-close-public/manifest.json
+            real-source-close-public/protocol.json
+            real-source-close-public/source-inventory.json
+            real-source-close-public/process-boundary.json
+            real-source-close-public/*/source-inventory.json
+            real-source-close-public/*/plan.json
+            real-source-close-public/*/trust.json
+            real-source-close-public/*/controller.json
+            real-source-close-public/*/collection.json
+            real-source-close-public/*/source.raw
+            real-source-close-public/*/anchors.raw
+            real-source-close-public/*/prefix-source.raw
+            real-source-close-public/*/prefix-anchors.raw
+            real-source-close-public/*/journal.raw
+            real-source-close-public/*/source-arguments.json
+            real-source-close-public/*/witness-arguments.json
+            real-source-close-public/*/analysis.json
+            real-source-close-public/*/case-state.json
+            real-source-close-public/*/producer-stdout.raw
+            real-source-close-public/*/producer-stderr.raw
+            real-source-close-public/*/observer-stdout.raw
+            real-source-close-public/*/observer-stderr.raw
+            real-source-close-public/*/collector-stdout.raw
+            real-source-close-public/*/collector-stderr.raw
+            real-source-close-public/*/child-stdout.raw
+            real-source-close-public/*/child-stderr.raw
+            real-source-close-public/*/child-process.json
+            real-source-close-linux.log
+          if-no-files-found: error
+
       - name: Run tests
         run: |
           . .venv/bin/activate
