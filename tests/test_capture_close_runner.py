@@ -147,3 +147,13 @@ def test_only_actual_expected_abrupt_EOF_is_allowed():
     assert runner.state_errors("abrupt_writer", *values)
     healthy = state_fixture()
     assert runner.state_errors("clean", *healthy) == []
+
+
+def test_seal_refusal_disposition_is_boolean_not_truthy_error_list():
+    analysis = dict(schema_version="edge-capture-close-analysis/v1", known_matching_ids=[],
+        complete_finite_capture=False, finite_accounting_complete=False, terminal_missing_count=None, **runner.FLAGS)
+    raw = {"terminal.json": runner.canonical(dict(W=dict(returncode=0), S=dict(result="failed", errno=16))),
+        "collector.json": runner.canonical(dict(complete=False, errors=["required_seals_unavailable"])), "capture.raw": b""}
+    assert runner.disposition("seal_busy", analysis, raw) is True
+    raw["collector.json"] = runner.canonical(dict(complete=False, errors=[]))
+    assert runner.disposition("seal_busy", analysis, raw) is False

@@ -247,7 +247,7 @@ def disposition(case, analysis, raw):
             and "declared_lost" not in frames[-1])
     if case == "seal_busy":
         return (not matching and not read_complete and raw["capture.raw"] == b""
-            and sealed.get("result") == "failed" and sealed.get("errno") == 16 and collected.get("errors"))
+            and sealed.get("result") == "failed" and sealed.get("errno") == 16 and bool(collected.get("errors")))
     return False
 
 
