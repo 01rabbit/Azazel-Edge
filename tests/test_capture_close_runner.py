@@ -95,6 +95,7 @@ def test_changed_one_original_blocks_even_when_evaluation_would_pass(tmp_path, m
     monkeypatch.setattr(runner, "launch", launch)
     monkeypatch.setattr(runner, "evaluate_capture_close", evaluate)
     monkeypatch.setattr(runner, "disposition", lambda *args: True)
+    monkeypatch.setattr(runner, "state_errors", lambda *args: [])
     result = runner.run(output)
     assert all(entry["expected_disposition"] for entry in result["cases"])
     assert "clean/collector.json:changed_between_evaluation_and_inventory" in result["blockers"]
@@ -102,3 +103,47 @@ def test_changed_one_original_blocks_even_when_evaluation_would_pass(tmp_path, m
     manifest = json.loads((output / "manifest.json").read_bytes())
     assert manifest["files"]["clean/plan.json"]["sha256"] == result["cases"][0]["expected"]["plan_sha256"]
     assert manifest["files"]["clean/collector.json"]["sha256"] != result["cases"][0]["expected"]["collector_sha256"]
+
+
+def state_fixture(case="clean"):
+    logs = {role + "-" + stream + ".raw": b"abc" if stream == "stdout" else b""
+            for role in ("source", "collector") for stream in ("stdout", "stderr")}
+    actors = {role: dict(pid=pid, returncode=7 if role == "source" and case == "abrupt_writer" else 0,
+        cleanup_errors={}, observed_bytes=dict(stdout=3, stderr=0), retained_bytes=dict(stdout=3, stderr=0),
+        stream_truncated=dict(stdout=False, stderr=False)) for role, pid in (("source", 101), ("collector", 102))}
+    errors = {"terminal_ack": dict(type="EOFError", errno=None)} if case == "abrupt_writer" else {}
+    state = dict(schema_version="edge-capture-close-lab-state/v1", case_id=case, safe_to_continue=True,
+        old_evaluations_modified=False, errors=errors, actors=actors, stage_facts={})
+    terminal = dict(W=dict(returncode=actors["source"]["returncode"], started_ns=3), D={})
+    if case == "abrupt_writer":
+        terminal["D"] = None
+        state["stage_facts"]["footer_ack_read"] = dict(started_ns=1, finished_ns=2,
+            acknowledgment_received=False, error=errors["terminal_ack"])
+    completion = dict(errors=errors, actorfacts=actors, safe_to_continue=True)
+    plan = dict(writer_identity=dict(pid=101), collector_identity=dict(pid=102))
+    return state, completion, logs, terminal, plan
+
+
+@pytest.mark.parametrize("fault", ["stage", "truncation", "cleanup", "wrong_exit"])
+def test_unexpected_inner_actor_fault_is_not_excused_by_expected_negative(fault):
+    values = state_fixture("seal_busy")
+    state = values[0]
+    if fault == "stage":
+        state["errors"]["collector_wait"] = dict(type="TimeoutError", errno=None)
+    elif fault == "truncation":
+        state["actors"]["source"]["observed_bytes"]["stdout"] = 4
+        state["actors"]["source"]["stream_truncated"]["stdout"] = True
+    elif fault == "cleanup":
+        state["actors"]["collector"]["cleanup_errors"] = dict(close="SYNTHETIC")
+    else:
+        state["actors"]["collector"]["returncode"] = 7
+    assert runner.state_errors("seal_busy", *values)
+
+
+def test_only_actual_expected_abrupt_EOF_is_allowed():
+    values = state_fixture("abrupt_writer")
+    assert runner.state_errors("abrupt_writer", *values) == []
+    del values[0]["stage_facts"]["footer_ack_read"]["started_ns"]
+    assert runner.state_errors("abrupt_writer", *values)
+    healthy = state_fixture()
+    assert runner.state_errors("clean", *healthy) == []

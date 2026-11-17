@@ -251,6 +251,51 @@ def disposition(case, analysis, raw):
     return False
 
 
+def state_errors(case, state, completion, logs, terminal, plan):
+    """Only the frozen, evidenced negative error is expected; never blanket-ignore."""
+    problems = []
+    if (type(state) is not dict or state.get("schema_version") != "edge-capture-close-lab-state/v1"
+            or state.get("case_id") != case or state.get("safe_to_continue") is not True
+            or state.get("old_evaluations_modified") is not False):
+        return ["case_state_missing_or_unsafe"]
+    expected_errors = {"terminal_ack": dict(type="EOFError", errno=None)} if case == "abrupt_writer" else {}
+    if state.get("errors") != expected_errors:
+        problems.append("unexpected_or_missing_controller_stage_error")
+    if type(completion) is not dict or any(
+        canonical(completion.get(key)) != canonical(state.get(value))
+        for key, value in (("errors", "errors"), ("actorfacts", "actors"), ("safe_to_continue", "safe_to_continue"))
+    ):
+        problems.append("case_state_differs_from_supervised_completion")
+    if case == "abrupt_writer":
+        ack = state.get("stage_facts", {}).get("footer_ack_read", {})
+        if (type(terminal) is not dict or terminal.get("D") is not None
+                or terminal.get("W", {}).get("returncode") != 7
+                or ack.get("acknowledgment_received") is not False or ack.get("error") != expected_errors["terminal_ack"]
+                or any(type(ack.get(key)) is not int or ack[key] < 0 for key in ("started_ns", "finished_ns"))
+                or not ack["started_ns"] <= ack["finished_ns"] <= terminal.get("W", {}).get("started_ns", -1)):
+            problems.append("expected_abrupt_EOF_not_independently_supported")
+    actors = state.get("actors")
+    if type(actors) is not dict or set(actors) != {"source", "collector"}:
+        return problems + ["owned_actor_set_incomplete"]
+    for role, identity_name in (("source", "writer_identity"), ("collector", "collector_identity")):
+        actor = actors[role]
+        if (type(actor) is not dict or actor.get("cleanup_errors") != {}
+                or type(actor.get("returncode")) is not int
+                or actor["returncode"] != (7 if role == "source" and case == "abrupt_writer" else 0)
+                or type(plan) is not dict or actor.get("pid") != plan.get(identity_name, {}).get("pid")):
+            problems.append(role + ":unexpected_exit_identity_or_cleanup")
+            continue
+        for stream in ("stdout", "stderr"):
+            observed = actor.get("observed_bytes", {}).get(stream)
+            retained = actor.get("retained_bytes", {}).get(stream)
+            raw = logs.get(role + "-" + stream + ".raw")
+            if (type(observed) is not int or type(retained) is not int or observed < 0 or observed != retained
+                    or actor.get("stream_truncated", {}).get(stream) is not False
+                    or type(raw) is not bytes or len(raw) != retained):
+                problems.append(role + ":unverified_or_truncated_" + stream)
+    return problems
+
+
 def run(output_dir):
     output = Path(output_dir)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -312,6 +357,17 @@ def run(output_dir):
             if (type(plan) is not dict or plan.get("controller_identity") != child["bootstrap"].get("boundary", {}).get("identity")
                     or plan.get("case_id") != case or plan.get("run_id") != run_id or plan.get("source_inventory_sha256") != sha(inventory)):
                 blockers.append(case + ":plan_not_bound_to_external_controller_source_enrollment")
+            extra_raw = {}
+            for name in EXTRAS:
+                try:
+                    extra_raw[name] = read(directory / name)
+                except (OSError, ValueError):
+                    extra_raw[name] = None
+                evaluated[case + "/" + name] = descriptor(case + "/" + name, extra_raw[name])
+            state = json.loads(extra_raw["case-state.json"]) if extra_raw["case-state.json"] is not None else None
+            terminal = json.loads(raw["terminal.json"]) if raw["terminal.json"] is not None else None
+            entry["state_errors"] = state_errors(case, state, completion, extra_raw, terminal, plan)
+            blockers.extend(case + ":" + error for error in entry["state_errors"])
         except Exception as exc:
             entry["error"] = type(exc).__name__
             blockers.append(case + ":" + type(exc).__name__)
