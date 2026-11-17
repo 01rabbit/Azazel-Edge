@@ -158,3 +158,14 @@ does not fail evidence preservation or become performance acceptance. Missing
 hardware/APPLIED/comparison authority remains a blocker; do not create it here.
 Independent review and full final-head CI plus exact base/head/test-merge/tree
 are required before merge; update existing #400/#393, keep both open.
+
+## Pre-correction publication finding
+
+The first three-arm pilot at d0f324f retained all assigned originals but its
+Linux assertion failed: per-arm artifact descriptors use a filename relative to
+the arm directory, while inventory descriptors use `arm/filename` relative to
+the study directory. Comparing the path fields without mapping these bases
+incorrectly flagged unchanged files. Preserve that failed report and all bytes.
+The correction must explicitly map the enrolled arm prefix, and still require
+exact path, byte length and SHA-256 agreement. Validate the same originals
+read-only; do not recollect a more favorable pilot or rewrite its analysis.
