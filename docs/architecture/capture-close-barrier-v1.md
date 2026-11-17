@@ -267,3 +267,16 @@ the bounded prefix. Required normal actors exit 0; the writer exits 7 only in
 abrupt_writer. A constructor failure after Popen must clean up or retain/track
 that exact owned process and make safe continuation false if its state is
 unknown. An empty actor list must not hide a launched but untracked child.
+
+## First-trial result and pre-correction freeze
+
+The six-case actual trial at 4f18612 retained all 101 public files and every
+expected raw/evaluator result. It remains **1 failed in 1.06s**: the runner's
+seal_busy expected-disposition expression returned the reader's nonempty error
+list as a truthy operand rather than the required boolean true. The strict Linux
+assertion detected that publication/API type mismatch. The original report SHA
+is 33f26f769e9886792c853619094051e7326920659b6c2dc54be4aa4da746de0b.
+Freeze the correction as an explicit boolean conversion plus type regression;
+do not change the kernel collector, verifier, cases, thresholds, original files
+or negative acceptance meaning. Validate those same originals read-only, with
+no local recollection or replacement of the failed record.
