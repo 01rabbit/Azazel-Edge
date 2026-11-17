@@ -69,7 +69,12 @@ def test_six_finite_capture_controls_keep_kernel_and_unknown_evidence():
             assert len(analysis["known_matching_ids"]) == 15
         elif identifier == "abrupt_writer":
             assert terminal["W"]["returncode"] == 7 and terminal["W"]["waited"] is True
-            assert terminal["D"]["footer_sha256"] is None
+            assert terminal["D"] is None
+            state = json.loads((directory / "case-state.json").read_bytes())
+            attempted = state["stage_facts"]["footer_ack_read"]
+            assert attempted["acknowledgment_received"] is False
+            assert attempted["error"]["type"] == "EOFError"
+            assert attempted["started_ns"] <= attempted["finished_ns"]
             assert len(analysis["known_matching_ids"]) == 8 and analysis["terminal_missing_count"] is None
         elif identifier == "missing_loss_counter":
             footer = json.loads(capture.splitlines()[-1])

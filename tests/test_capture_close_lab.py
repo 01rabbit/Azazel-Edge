@@ -195,3 +195,17 @@ def test_closed_original_read_is_bounded_nofollow_and_does_not_overwrite(tmp_pat
     with pytest.raises(OSError):
         lab.read_closed(alias)
     assert path.read_bytes() == b'{"SYNTHETIC":true}\n'
+
+
+def test_new_gate_token_meets_closed_sha256_hex_contract():
+    tokens = [lab.new_gate_token() for _ in range(2)]
+    assert tokens[0] != tokens[1]
+    for token in tokens:
+        assert len(token) == 64 and bytes.fromhex(token).hex() == token
+
+
+def test_no_footer_ack_means_unavailable_d_not_a_claimed_terminal_receipt():
+    assert lab.footer_ack_receipt(None, 100, 200) is None
+    digest = "a" * 64
+    assert lab.footer_ack_receipt({"kind": "footer", "footer_sha256": digest}, 300, 400) == {
+        "started_ns": 300, "finished_ns": 400, "footer_sha256": digest}

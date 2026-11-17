@@ -7,6 +7,7 @@ import json
 import mmap
 import os
 from pathlib import Path
+import secrets
 import selectors
 import subprocess
 import sys
@@ -23,6 +24,16 @@ LIMIT = 1024 * 1024
 
 def wire(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+
+
+def new_gate_token():
+    return secrets.token_hex(32)
+
+
+def footer_ack_receipt(ack, started_ns, finished_ns):
+    if ack is None:
+        return None
+    return dict(started_ns=started_ns, finished_ns=finished_ns, footer_sha256=ack["footer_sha256"])
 
 
 def sha(raw):
@@ -337,7 +348,7 @@ def collect_case(outputdir, case_id, *, run_id, source_inventory_sha256):
     safe = False
     controller = actor_identity(os.getpid())
     capture_id = "capture-" + uuid.uuid4().hex
-    gate_id, token = "gate-" + uuid.uuid4().hex, uuid.uuid4().hex
+    gate_id, token = "gate-" + uuid.uuid4().hex, new_gate_token()
     stage_facts = {}
 
     def stage(name, function):
@@ -429,7 +440,10 @@ def collect_case(outputdir, case_id, *, run_id, source_inventory_sha256):
         stage("finish_permit", lambda: writer.send(dict(command="finish")))
         d_start = time.monotonic_ns()
         ack = stage("terminal_ack", lambda: writer.receive("footer"))
-        D = dict(started_ns=d_start, finished_ns=time.monotonic_ns(), footer_sha256=ack.get("footer_sha256") if ack else None)
+        d_finished = time.monotonic_ns()
+        stage_facts["footer_ack_read"] = dict(started_ns=d_start, finished_ns=d_finished,
+            acknowledgment_received=ack is not None, error=errors.get("terminal_ack"))
+        D = footer_ack_receipt(ack, d_start, d_finished)
         w_start = time.monotonic_ns()
         waited = stage("writer_wait", writer.wait)
         if waited is None:
