@@ -424,6 +424,47 @@ jobs:
             notification-lean-linux.log
           if-no-files-found: error
 
+      - name: Independent finite capture close, seal and loss accounting (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_CAPTURE_CLOSE_PUBLIC_DIR=$GITHUB_WORKSPACE/capture-close-public" \
+            "EDGE_CAPTURE_CLOSE_SOURCE_HEAD=$(git rev-parse HEAD)" "EDGE_CAPTURE_CLOSE_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" \
+            unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+            .venv/bin/python -m pytest -q -rs -p no:cacheprovider tests/test_capture_close_linux.py | tee capture-close-linux.log
+          grep -Eq "^1 passed" capture-close-linux.log
+          ! grep -Eq "skipped|failed|error" capture-close-linux.log
+
+      - name: Retain all assigned finite capture originals and unknowns
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-close-public
+          path: |
+            capture-close-public/report.json
+            capture-close-public/manifest.json
+            capture-close-public/protocol.json
+            capture-close-public/source-inventory.json
+            capture-close-public/process-boundary.json
+            capture-close-public/*/source-inventory.json
+            capture-close-public/*/plan.json
+            capture-close-public/*/enrollment.json
+            capture-close-public/*/admission.json
+            capture-close-public/*/terminal.json
+            capture-close-public/*/collector.json
+            capture-close-public/*/capture.raw
+            capture-close-public/*/analysis.json
+            capture-close-public/*/case-state.json
+            capture-close-public/*/source-stdout.raw
+            capture-close-public/*/source-stderr.raw
+            capture-close-public/*/collector-stdout.raw
+            capture-close-public/*/collector-stderr.raw
+            capture-close-public/*/child-stdout.raw
+            capture-close-public/*/child-stderr.raw
+            capture-close-public/*/child-process.json
+            capture-close-linux.log
+          if-no-files-found: error
+
       - name: Run tests
         run: |
           . .venv/bin/activate
