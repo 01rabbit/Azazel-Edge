@@ -389,6 +389,41 @@ jobs:
             notification-timing-linux.log
           if-no-files-found: error
 
+      - name: Deferred notification capture with original and v1 controls (offline)
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" PYTHONPATH=.:py:tests "EDGE_NOTIFICATION_LEAN_PUBLIC_DIR=$GITHUB_WORKSPACE/notification-lean-public" \
+            "EDGE_NOTIFICATION_SOURCE_HEAD=$(git rev-parse HEAD)" "EDGE_NOTIFICATION_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" \
+            unshare --net -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+            .venv/bin/python -m pytest -q -rs -p no:cacheprovider tests/test_notification_lean_linux.py | tee notification-lean-linux.log
+          grep -Eq "^1 passed" notification-lean-linux.log
+          ! grep -Eq "skipped|failed|error" notification-lean-linux.log
+
+      - name: Retain all three deferred-capture study arms
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notification-lean-public
+          path: |
+            notification-lean-public/report.json
+            notification-lean-public/manifest.json
+            notification-lean-public/protocol.json
+            notification-lean-public/source-inventory.json
+            notification-lean-public/process-boundary.json
+            notification-lean-public/*/source-inventory.json
+            notification-lean-public/*/*.original-result.json
+            notification-lean-public/*/*.event-index.json
+            notification-lean-public/*/*.trace.jsonl
+            notification-lean-public/*/*.audit.raw
+            notification-lean-public/*/*.queue.raw
+            notification-lean-public/*/*.analysis.json
+            notification-lean-public/*/*.child-stdout.raw
+            notification-lean-public/*/*.child-stderr.raw
+            notification-lean-public/*/*.child-process.json
+            notification-lean-linux.log
+          if-no-files-found: error
+
       - name: Run tests
         run: |
           . .venv/bin/activate

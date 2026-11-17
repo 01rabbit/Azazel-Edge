@@ -84,6 +84,33 @@ Deferred event rows bind original index/key/hash. A normal end requires explicit
 quiescence, no active slots, and no collection loss. These are new-profile
 facts, never old v1 scheduler snapshots or a fabricated kernel task identity.
 
+Closed field sets for this version (unknown keys are rejected):
+
+```text
+envelope: schema_version, seq, prev, kind, data
+header: run_id, case_id, protocol_sha256, source_inventory_sha256,
+        fixture_sha256, interpreter_sha256, pid, process_start_ticks, boot_id,
+        clock_domain, study_protocol_sha256, capture_profile, resolutions, limits
+thread: logical_thread_token, native_tid, task_start_ticks, thread_name,
+        identity_scope
+event: index, event_sha256, core_event_key, trace_id
+span: span_id, parent_id, logical_thread_token, phase, object_id, event_index,
+      start_ns, thread_cpu_start_ns, process_cpu_start_ns, native_tid_start,
+      end_ns, thread_cpu_end_ns, process_cpu_end_ns, native_tid_end,
+      outcome, complete, error
+end: normal_return, active_spans, incomplete, quiescent, flush_start_ns,
+     flush_before_end_ns
+```
+
+Each of 16 preallocated thread buffers has 480 span slots (7680 total), leaving
+room for header/thread/event/end records under the separate 8192-row cap. Span
+IDs and parents are local to their logical thread token; output uses reservation
+order and validates nesting/clock consistency, not cross-thread chronological
+sorting. Thread task_start_ticks is null; identity_scope is
+`strong_python_Thread_object_native_tid_not_kernel_incarnation`. Incomplete
+endpoints/outcome are null with an explicit error. Original finish begin/end
+clocks enclose final serialization and close; footer clocks do not replace them.
+
 ## Frozen assignments and interpretation
 
 Three prospective fresh same-authority children, fixed order original, v1,
