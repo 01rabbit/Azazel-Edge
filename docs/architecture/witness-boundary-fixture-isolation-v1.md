@@ -28,8 +28,9 @@ Use a module-local synthetic Root OS adapter for these phase tests only. Outside
 the test-owned `tmp_path`, stabilize only directory size, link count and mtime/
 ctime epochs, keyed by actual device/inode. These are explicitly SYNTHETIC
 ancestor epochs. Preserve actual device/inode/type and the existing modeled
-owner/mode protections. Keep all metadata of owned directories and enrolled
-files real. A replaced ancestor's actual inode or changed type/mode must still
+owner/mode protections. Within owned directories and enrolled files, keep the
+existing explicitly SYNTHETIC Root UID/GID premise, but preserve actual mode,
+device/inode/type, size, link count and timestamps. A replaced ancestor's actual inode or changed type/mode must still
 reject. Do not change the shared adapter or product `_HeldFiles` logic.
 
 Observe these phases explicitly: wrapper entry, original witness return,
