@@ -80,3 +80,19 @@ def test_footer_alone_cannot_qualify_originals_or_opportunities(analysis):
     arm = study.load_protocol()[1]["arms"][2]
     result = study._original_acceptance(analysis, arm, b'{"events":[]}')
     assert result["valid"] is False and result["reasons"]
+
+
+def test_closed_artifact_comparison_maps_only_enrolled_arm_namespace():
+    per_arm = dict(path="evidence.raw", sha256="1" * 64, bytes=10)
+    rooted = dict(per_arm, path="deferred/evidence.raw")
+    assert study._same_closed_artifact("deferred", per_arm, rooted)
+    assert not study._same_closed_artifact("v1", per_arm, rooted)
+    assert not study._same_closed_artifact("deferred", per_arm, dict(rooted, sha256="2" * 64))
+    assert not study._same_closed_artifact("deferred", per_arm, dict(rooted, bytes=11))
+    assert not study._same_closed_artifact("deferred", per_arm, dict(rooted, path="deferred/other.raw"))
+
+
+def test_closed_artifact_missing_sibling_is_never_filled():
+    assert study._same_closed_artifact("deferred", None, None)
+    assert not study._same_closed_artifact("deferred", dict(path="x", sha256="1" * 64, bytes=0), None)
+    assert not study._same_closed_artifact("deferred", None, dict(path="deferred/x", sha256="1" * 64, bytes=0))

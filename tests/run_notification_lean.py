@@ -174,6 +174,12 @@ def _safe_artifact(output, name, errors):
         return None
 
 
+def _same_closed_artifact(arm_id, per_arm, study_relative):
+    if per_arm is None:
+        return study_relative is None
+    return canonical(dict(per_arm, path=arm_id + "/" + per_arm["path"])) == canonical(study_relative)
+
+
 def run(output_dir):
     output = Path(output_dir)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -242,7 +248,7 @@ def run(output_dir):
     for entry in arms:
         for suffix, descriptor in entry["artifacts"].items():
             name = entry["arm"]["id"] + "/" + entry["arm"]["fixture_case"] + "." + suffix
-            if canonical(files[name]) != canonical(descriptor):
+            if not _same_closed_artifact(entry["arm"]["id"], descriptor, files[name]):
                 inventory_errors.append(name + ":artifact_changed_between_closed_reads")
     blockers.extend(inventory_errors)
     report = dict(schema_version="edge-notification-lean-study-result/v1", arms=arms, blockers=blockers,
