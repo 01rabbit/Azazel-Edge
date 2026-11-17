@@ -154,10 +154,19 @@ runtime/whole-window/production conditions. Do not create a duplicate issue.
 
 The pure API is
 `evaluate_capture_close(plan_raw, admission_raw, terminal_raw, collector_raw,
-capture_raw, *, expected)`. All references are canonical JSON plus LF; capture
+capture_raw, *, expected, enrollment_raw=None)`. All references are canonical JSON plus LF; capture
 is bounded canonical JSONL. `expected` has exactly plan_sha256,
-admission_sha256, terminal_sha256, collector_sha256 and capture_sha256, supplied
+admission_sha256, terminal_sha256, collector_sha256, capture_sha256 and
+enrollment_sha256, supplied
 by the outer enrollment/closed-original inventory, never inferred from a row.
+
+A pin is null only when its corresponding raw input is absent (`None`). Missing,
+malformed, hash-mismatched or otherwise invalid references are quarantined per
+leg, not turned into a global return that discards valid siblings. Preserve
+bounded known raw DATA and admission facts, explicitly labelling any unavailable
+seal/collector provenance; terminal/loss/full accounting remains unknown unless
+all mandatory legs verify. An empty refused read is unavailable evidence, not
+zero captured events. No source-retained bytes become independent read facts.
 
 Closed field sets (nested objects below are also strict):
 
@@ -167,6 +176,10 @@ plan: schema_version, run_id, capture_id, case_id, protocol_sha256,
       collector_identity, object_identity, gate_id, gate_token,
       attempts, maximum_bytes
 plan attempt: id, seq, payload_sha256, payload_bytes, phase
+enrollment: schema_version, plan_sha256, source_inventory_sha256,
+            controller_identity, writer_identity, collector_identity,
+            object_identity, started_ns, finished_ns, plan_bytes_read,
+            source_inventory_bytes_read
 admission: schema_version, run_id, capture_id, controller_identity,
            gate_id, gate_token, attempts, C, late_controls
 admission attempt: id, decision, attempt_started_ns, attempt_finished_ns
@@ -196,7 +209,7 @@ footer: schema_version, kind, run_id, capture_id, last_seq,
         declared_records, declared_lost, lost_ids, prev_sha256
 ```
 
-Schemas are edge-capture-close-{plan,admission,terminal,collector,frame}/v1.
+Schemas are edge-capture-close-{plan,enrollment,admission,terminal,collector,frame}/v1.
 DATA kind is data; footer kind is terminal. The capture prev_sha256 hashes the
 entire previous canonical LF row, initially 64 zeroes. DATA seq is the frozen
 attempt ordinal 0..17, strictly increasing, not a counter repaired across missing
@@ -215,6 +228,16 @@ the enrolled writer incarnation are established; an absent field is not a
 liveness result. Late controls occur after C and before D/W while the source
 retains its writable FD. A failed/partial admission does not enter a passing
 partition; classify it as unresolved with explicit original errors.
+
+The separate enrollment receipt brackets actual controller readback of the
+already-closed plan and source inventory, fresh kernel actor-incarnation and
+held-FD identity checks. Its identities/plan hash must match the enrolled plan;
+the completed read/check bracket precedes the first admission attempt. The
+controller persists the receipt EXCL and closes it before enabling its first
+gate call. Source and collector stay blocked through this step. This receipt is
+external to the writer, under the explicit trusted-controller premise; it is not
+an independent host/principal attestation and does not authenticate arbitrary
+controller claims. A self-hash alone supplies no chronology.
 
 For post_seal_write, known no-attempt is attempted=false and the other four
 fields null. Only an actual attempted write with genuine brackets and errno
