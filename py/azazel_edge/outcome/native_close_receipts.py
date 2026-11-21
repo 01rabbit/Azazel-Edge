@@ -40,6 +40,15 @@ def ingress_enabled(registration):
     return True
 
 
+def load_cost_enabled(registration):
+    env = registration["environment"]
+    if "AZAZEL_LIVE_ORIGIN_LOAD_COST" not in env:
+        return False
+    if env["AZAZEL_LIVE_ORIGIN_LOAD_COST"] != "v1" or not ingress_enabled(registration):
+        raise OutcomeJournalError("invalid registered load cost profile")
+    return True
+
+
 def emit(value, limit):
     try:
         raw = _json(value) + b"\n"

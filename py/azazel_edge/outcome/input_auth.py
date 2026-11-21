@@ -457,9 +457,10 @@ class SignedCaptureWriter:
     Caller emits origin events; no automatic re-signing/tailing untrusted logs.
     """
 
-    def __init__(self, policy, key_path, *, boot_ref):
+    def __init__(self, policy, key_path, *, boot_ref, cost_meter=None):
         if os.geteuid() != policy.data["producer_uid"]:
             raise OutcomeJournalError("producer uid required")
+        self.cost_meter = cost_meter
         self.policy = policy
         self.key = private_key(key_path, policy.data["producer_public_key"])
         self.boot_ref = _ref(boot_ref)
@@ -484,13 +485,18 @@ class SignedCaptureWriter:
             pinned = os.fstat(self.fd)
             if (pinned.st_dev, pinned.st_ino) != (info.st_dev, info.st_ino):
                 raise OutcomeJournalError("producer path changed")
-            self.verifier.verify(raw)
+            self._cost_call("source_verify", self.verifier.verify, raw)
         except BaseException:
             self.close()
             raise
         finally:
             os.close(parent)
         self.poisoned = False
+
+    def _cost_call(self, phase, function, *args):
+        if self.cost_meter is None:
+            return function(*args)
+        return self.cost_meter.call(phase, function, *args)
 
     def append(self, event):
         if self.fd is None or self.poisoned:
@@ -505,7 +511,17 @@ class SignedCaptureWriter:
             prev=v.head,
             event=event,
         )
-        line = _json({**core, "signature": sign(self.key, SOURCE_DOMAIN, core)}) + b"\n"
+        line = (
+            _json(
+                {
+                    **core,
+                    "signature": self._cost_call(
+                        "source_sign", sign, self.key, SOURCE_DOMAIN, core
+                    ),
+                }
+            )
+            + b"\n"
+        )
         if (
             type(event) is not dict
             or len(line) > 65536
@@ -518,7 +534,7 @@ class SignedCaptureWriter:
         checked.raw, checked.seq, checked.head = v.raw, v.seq, v.head
         checked.origin_offset = v.origin_offset
         checked.live_state = v.live_state
-        checked.verify(v.raw + line)
+        self._cost_call("source_verify", checked.verify, v.raw + line)
         try:
             raw, info = read_regular(
                 p["source_path"],
@@ -536,7 +552,7 @@ class SignedCaptureWriter:
                 if n <= 0:
                     raise OutcomeJournalError("capture short write")
                 view = view[n:]
-            os.fsync(self.fd)
+            self._cost_call("source_fsync", os.fsync, self.fd)
             self.verifier = checked
         except BaseException:
             self.poisoned = True
