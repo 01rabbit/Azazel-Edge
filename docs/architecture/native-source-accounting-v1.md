@@ -284,3 +284,14 @@ Qualification clarifications before annex implementation:
 - Existing managed launch uses systemd `%b` as Source boot_ref, i.e. the kernel
   UUID without hyphens. Require `source_boot_ref == boot_id.replace('-', '')`
   for this declared CI profile, then exact signed session boot-ref agreement.
+
+The unchanged observer profile may deny its own proc-stat path. Do not add a
+rule or capability for that measurement. The existing transient observer-role
+command may use a bounded fixed stdin/stdout handshake: Root binds the returned
+PID to that actual transient unit MainPID, samples its existing proc status/stat/
+label while it is alive, and releases a nonce-bound read permission. Identity
+must match the role's own UID/group/capability/label observations. No arbitrary
+PID, command, path, new socket or role grant is accepted. This is a trusted Root
+controller process observation, not an observer self-read or remote attestation.
+Timeout/mismatch/unreadable metadata remains a failed/unknown leg with retained
+public diagnostics; it never authorizes a fallback or changed confinement.
