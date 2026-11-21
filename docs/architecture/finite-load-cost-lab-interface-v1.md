@@ -38,6 +38,7 @@ rewritten or repaired. Each copy uses original stable metadata brackets.
 - `observer`: observer receipt below or null;
 - `resources`: `{native_before,native_after,receiver_before,receiver_after,
   observer_before,observer_after}`; each null or resource snapshot below;
+- `audits`: actual independent audit receipt list described below;
 - `errors`: bounded list of `{stage,type,message}` (message at most 4096 chars).
 
 A clock anchor is exactly `{monotonic_before_ns,epoch_ns,monotonic_after_ns}`,
@@ -145,3 +146,30 @@ retained controller evidence by the new evaluator. An interrupted process gains
 no end/footer/completion. Absence of fresh observe_event/APPLIED is explicit,
 and absent phase costs are null. Existing unchanged 5ms clock qualifier alone
 judges complete real brackets after genuine ON resource closure.
+
+## Independent post-window audit and initial journal context
+
+OFF means no measured observer during the offered load interval, not absence of
+independent audit actors for the lifetime of the lab. Initial journal creation,
+minimal handoff recovery and post-window SourceEnd witnessing use a fixed audit
+entry of the same existing observer role. From the first journal creation these
+new-flavor actors use the unchanged existing fixture
+`tests/fixtures/signed_network_observer_policy.json` (its actual physical path as
+policy source_ref), interface `lo`, sample interval 0.05 seconds. The measured
+observer uses exactly that same context. The initial journal is never replaced,
+reset or rewritten to accept another context. Original legacy g.observer paths
+remain unchanged outside this explicit flavor.
+
+Each audit receipt has exactly `{stage,unit,actor,started_ns,finished_ns,exit,error}`;
+stage is `warmup_before` or `post_window`. Actor and exit have the same Root-bound
+shapes described above. The audit uses the same bootstrap/RootGO identity binding,
+then only opens authenticated BoundedInput/ObservationJournal and calls original
+recover_input, closing both before return. It does not emit measured phase/call/
+clock/completion sidecars. Audit actors may advance the original durable cursor
+and witness SourceEnd only after measured observer-journal.raw and all other
+measured originals are copied, after the native load interval and native stop.
+The final independent read-only Source collector remains a separate actor.
+Audits cannot upgrade original measured ON/KILL callback or clock evidence.
+
+The governing corpus protocol pin is
+`9764ea4b3d907f63d53f3526cfeef9f91895af6d8a0de44cc10236f636f8beec`.
