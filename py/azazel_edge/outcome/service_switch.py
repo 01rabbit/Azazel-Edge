@@ -565,6 +565,17 @@ def _trusted_package():
     return Path(__file__).resolve().parent
 
 
+
+class UnclosedSignedHistory(OutcomeJournalError):
+    """Public context already verified at the unchanged managed readiness gate."""
+
+    def __init__(self, policy, registration, verifier):
+        super().__init__("unclosed signed history; no connected restart")
+        self.policy = policy
+        self.registration = registration
+        self.source_checkpoint = verifier.tip()
+        self.prior_session_ref = verifier.live_state.session
+
 def ready(bundle, python, system):
     p, r = verify(bundle)
     raw, _ = read_regular(
@@ -575,7 +586,7 @@ def ready(bundle, python, system):
     v = SourceVerifier(p)
     v.verify(raw)
     if not v.live_state.closed:
-        raise OutcomeJournalError("unclosed signed history; no connected restart")
+        raise UnclosedSignedHistory(p, r, v)
     python = Path(python).absolute()
     parent, name = open_parent(python, trusted_owner=0)
     try:

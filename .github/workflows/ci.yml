@@ -910,7 +910,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [baseline, apparmor, native-apparmor, provider-apparmor, legacy-tc-apparmor]
+        flavor: [baseline, apparmor, native-apparmor, native-close-fault, provider-apparmor, legacy-tc-apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -958,6 +958,7 @@ jobs:
           if [ '${{ matrix.flavor }}' = legacy-tc-apparmor ]; then driver=legacy_tc.py; fi
           native_args=
           if [ '${{ matrix.flavor }}' = native-apparmor ]; then native_args=--native-core; fi
+          if [ '${{ matrix.flavor }}' = native-close-fault ]; then native_args='--native-core --receipt-fault receiver-kill'; fi
           for phase in prepare exercise smoke-finish; do
             sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
               /opt/edge400-runtime/bin/python -I "/opt/edge400-src/tests/real_systemd/$driver" \
@@ -1028,6 +1029,83 @@ jobs:
         with:
           name: native-source-accounting-public
           path: native-source-accounting-public
+          if-no-files-found: error
+      - name: Collect every native close receipt and failed assignment
+        if: always() && (matrix.flavor == 'native-apparmor' || matrix.flavor == 'native-close-fault')
+        env:
+          CLOSE_FLAVOR: ${{ matrix.flavor }}
+        run: |
+          sudo --preserve-env=CLOSE_FLAVOR /usr/bin/python3 -I - <<'PYCODE'
+          import hashlib, json, os, pathlib, stat
+          fault = os.environ['CLOSE_FLAVOR'] == 'native-close-fault'
+          cases = (('receiver-killed-prefix', 'receiver-restart-refused') if fault else
+                   ('normal-four', 'restart-one', 'witness-stopped-close',
+                    'interrupted-prefix', 'interrupted-restart-refused'))
+          names = ('protocol.json', 'trust.json', 'registration.json', 'close-controller.json',
+                   'root-custody.raw', 'root-custody-object.json', 'actor-fd-custody.json',
+                   'native-close.raw', 'receiver-close.raw', 'launcher-systemd.json',
+                   'unit-exec-start.raw', 'launcher-journal.raw',
+                   'source-before.raw', 'source-after.raw', 'anchors-before.raw',
+                   'anchors-after.raw', 'journal-before.raw', 'journal-after.raw',
+                   'readback-source.raw', 'reader-binding.json', 'witness-boundary.json',
+                   'code-pins.json', 'failure.json', 'evaluation.json')
+          source = pathlib.Path('/var/lib/edge400-systemd-lab/native-close-receipts-public')
+          target = pathlib.Path('native-close-receipts-public')
+          target.mkdir(mode=0o755)
+          files, missing, errors = {}, [], []
+          def metadata(info):
+              return tuple(getattr(info, key) for key in (
+                  'st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_nlink', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns'))
+          for case in cases:
+              (target / case).mkdir(mode=0o755)
+              for name in names:
+                  fd = None
+                  relative = case + '/' + name
+                  try:
+                      path = source / case / name
+                      before = path.lstat()
+                      assert stat.S_ISREG(before.st_mode) and before.st_uid == 0
+                      assert before.st_nlink == 1 and not before.st_mode & 0o022
+                      assert 0 <= before.st_size <= 8 * 1024 * 1024
+                      fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+                      assert metadata(os.fstat(fd)) == metadata(before)
+                      with os.fdopen(fd, 'rb', closefd=False) as stream:
+                          raw = stream.read(8 * 1024 * 1024 + 1)
+                      assert len(raw) == before.st_size
+                      assert metadata(os.fstat(fd)) == metadata(path.lstat()) == metadata(before)
+                      with (target / relative).open('xb') as output:
+                          output.write(raw)
+                      (target / relative).chmod(0o644)
+                      files[relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                  except FileNotFoundError:
+                      missing.append(relative)
+                  except Exception as error:
+                      errors.append({'path': relative, 'error': type(error).__name__})
+                  finally:
+                      if fd is not None:
+                          os.close(fd)
+          manifest = {'schema_version': 'edge-native-close-public-inventory/v1',
+                      'flavor': os.environ['CLOSE_FLAVOR'], 'cases': list(cases),
+                      'files': files, 'missing': missing, 'errors': errors,
+                      'private_keys_exported': False}
+          with (target / 'manifest.json').open('x') as output:
+              json.dump(manifest, output, sort_keys=True, separators=(',', ':'))
+              output.write('\n')
+          (target / 'manifest.json').chmod(0o644)
+          required_names = set(names) - {'failure.json', 'reader-binding.json', 'readback-source.raw',
+                                        'native-close.raw', 'receiver-close.raw'}
+          required = {case + '/' + name for case in cases for name in required_names}
+          required |= {case + '/' + name for case in cases if not case.endswith('restart-refused')
+                       for name in ('reader-binding.json', 'readback-source.raw', 'native-close.raw', 'receiver-close.raw')}
+          assert not errors and required <= files.keys(), 'native close originals missing or rejected'
+          PYCODE
+      - name: Retain native close originals separately per fresh lab
+        if: always() && (matrix.flavor == 'native-apparmor' || matrix.flavor == 'native-close-fault')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-close-receipts-${{ matrix.flavor }}
+          path: native-close-receipts-public
           if-no-files-found: error
       - name: Retain exact public provider-restoration artifacts
         if: always() && matrix.flavor == 'provider-apparmor'

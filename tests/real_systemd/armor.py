@@ -148,6 +148,7 @@ def configure():
     if NATIVE:
         # Enrolled bytes pin this optional protocol only in the native flavor.
         g.ENV["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] = "v1"
+        g.ENV["AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS"] = "v1"
     original = g.write
 
     def write(path, data, mode=0o644):
@@ -456,7 +457,10 @@ def main():
     )
     parser.add_argument("--allow-disposable-vm", action="store_true", required=True)
     parser.add_argument("--native-core", action="store_true")
+    parser.add_argument("--receipt-fault", choices=["receiver-kill"])
     args = parser.parse_args()
+    if args.receipt_fault and not args.native_core:
+        parser.error("receipt fault requires the existing native-core profile")
     global NATIVE
     NATIVE = args.native_core
     g.guard()
@@ -486,8 +490,13 @@ def main():
         if NATIVE:
             native_checks()
             import native_accounting
+            from native_close_receipts import CloseReceiptLab
 
-            native_accounting.exercise(g, role_command)
+            close_lab = CloseReceiptLab(g, role_command)
+            if args.receipt_fault:
+                close_lab.receiver_fault()
+            else:
+                native_accounting.exercise(g, role_command, close_lab=close_lab)
     elif args.phase == "smoke-finish" and NATIVE:
         import native_accounting
 

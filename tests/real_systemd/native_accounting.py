@@ -36,6 +36,7 @@ ACTOR_FIELDS = (
 )
 SOURCE_FIELDS = ("device", "inode", "owner_uid", "mode", "nlink")
 CASES = ("normal-four", "restart-one", "interrupted-prefix")
+READBACK_CASES = frozenset((*CASES, "witness-stopped-close", "receiver-killed-prefix"))
 PUBLIC_FILES = frozenset(
     (
         "trust.json",
@@ -199,7 +200,7 @@ def readonly_source(challenge):
 
 def observed_readback(g, role_command, case_id, files):
     """Root binds an owned transient role before releasing its public FD read."""
-    assert case_id in CASES
+    assert case_id in READBACK_CASES
     challenge = secrets.token_hex(16)
     unit = "edge400-accounting-reader-" + case_id + "-" + challenge + ".service"
     command = role_command(
@@ -491,7 +492,7 @@ def _export(g, case_id, files):
     return directory
 
 
-def _case(g, role_command, protocol, case, *, downtime_sid=None):
+def _case(g, role_command, protocol, case, *, downtime_sid=None, close_lab=None):
     case_id = case["case_id"]
     raw_prefix = g.source()
     receipt = dict(
@@ -525,6 +526,8 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None):
     failure = None
     try:
         receipt["prefix_checkpoint"] = checkpoint(g, raw_prefix)
+        if close_lab is not None:
+            close_lab.begin(case_id)
         if downtime_sid is not None:
             g.alert(downtime_sid)
         g.systemctl("start", g.UNIT)
@@ -533,6 +536,8 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None):
         )  # Existing actual v4, signed start, native/receiver gates.
         receipt.update(process_receipt(g, native_pid))
         receipt["session_ref"] = g.events()[-1]["capture_origin"]["session_ref"]
+        if close_lab is not None:
+            close_lab.started(case_id, native_pid, receipt["session_ref"])
         await_input_start(g)
         for sid in case["challenge_sids"]:
             g.alert(sid)
@@ -542,11 +547,20 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None):
             g.wait_for(lambda: not g.Systemd().cores())
             g.wait_for(lambda: g.Systemd().snapshot()["ActiveState"] == "failed")
             receipt["wait"] = wait_receipt(g)
+            if close_lab is not None:
+                close_lab.stopped(case_id)
             before = g.source()
-            g.failed_start("native-accounting-interrupted-connected-relaunch-refused")
+            if close_lab is None:
+                g.failed_start(
+                    "native-accounting-interrupted-connected-relaunch-refused"
+                )
+            else:
+                close_lab.refuse_restart(case_id)
             assert g.source() == before
         else:
             g.stop()
+            if close_lab is not None:
+                close_lab.stopped(case_id)
             g.observer()  # Existing exclusion/recovery advances protected boundary.
         if receipt["wait"] is None:
             receipt["wait"] = wait_receipt(g)
@@ -672,6 +686,13 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None):
     assert result["finite_accounting_verified"] is (case_id != "interrupted-prefix"), (
         result
     )
+    if close_lab is not None:
+        close_lab.finalized(
+            case_id,
+            reader=receipt["reader"],
+            readback=readback,
+            reader_binding=files.get("reader-binding.json"),
+        )
     g.record(
         "native-accounting-" + case_id,
         public_directory=str(directory),
@@ -680,7 +701,7 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None):
     )
 
 
-def exercise(g, role_command):
+def exercise(g, role_command, *, close_lab=None):
     protocol = (Path(__file__).with_name(PROTOCOL_NAME)).read_bytes()
     assert sha256(protocol) == PROTOCOL_SHA256
     declaration = json.loads(protocol)
@@ -690,18 +711,23 @@ def exercise(g, role_command):
     g.observer()
     try:
         for case in declaration["cases"]:
+            if close_lab is not None and case["case_id"] == "interrupted-prefix":
+                close_lab.witness_stopped_close()
             _case(
                 g,
                 role_command,
                 protocol,
                 case,
                 downtime_sid=case.get("downtime_challenge_sid"),
+                close_lab=close_lab,
             )
-    except BaseException:
+    except BaseException as exc:
         # Includes an annex qualification refusal after raw export. Stop only
         # these existing lab units; keep every original/checkpoint untouched.
         g.systemctl("disable", g.UNIT, check=False)
         g.systemctl("stop", g.UNIT, g.WITNESS, check=False)
+        if close_lab is not None:
+            close_lab.retain_failures(exc)
         raise
 
 

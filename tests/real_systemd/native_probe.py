@@ -5,11 +5,18 @@ import errno
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
 
-assert sys.argv[1:] in ([], ["--provider"], ["--tc"])
+close_sink = len(sys.argv) == 3 and sys.argv[1] == "--close-sink-name"
+if close_sink:
+    assert re.fullmatch(
+        r"(?:normal-four|restart-one|witness-stopped-close|interrupted-prefix|interrupted-restart-refused|receiver-killed-prefix|receiver-restart-refused)-[0-9a-f]{32}\.raw",
+        sys.argv[2],
+    )
+assert close_sink or sys.argv[1:] in ([], ["--provider"], ["--tc"])
 profile = {"--provider": "edge400-provider", "--tc": "edge400-tc"}.get(
     sys.argv[1] if len(sys.argv) > 1 else "", "edge400-native"
 )
@@ -36,6 +43,22 @@ def expect(name, operation):
 
 
 base = Path("/var/lib/edge400-systemd-lab")
+if close_sink:
+    expect(
+        "root-exclusive-sink",
+        lambda: os.open(base / "close-custody" / sys.argv[2], os.O_RDONLY),
+    )
+    print(
+        json.dumps(
+            dict(
+                uid=os.getuid(),
+                profile=profile + " (enforce)",
+                denied=denied,
+                probe="independent-helper-policy-not-core-activity",
+            )
+        )
+    )
+    raise SystemExit(0)
 for name in [
     "aa-denied",
     "bundle/producer/key.raw",
