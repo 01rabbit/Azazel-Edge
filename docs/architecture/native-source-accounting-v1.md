@@ -303,3 +303,22 @@ PID, command, path, new socket or role grant is accepted. This is a trusted Root
 controller process observation, not an observer self-read or remote attestation.
 Timeout/mismatch/unreadable metadata remains a failed/unknown leg with retained
 public diagnostics; it never authorizes a fallback or changed confinement.
+
+### First native CI failure and bounded harness correction
+
+PR #620 head `afab2e61a9bfd340bf0eb8310838986e12469c1a`, run
+`44862449329`, native job `136718636539` reached the four activity events and
+signed End, then failed before observer bootstrap. Its public artifact
+`14690197948` has ZIP SHA256
+`75aec89edfa6070a413c4b3571095b0762fd48d3a12604591a408d36c548a303`.
+That trial remains incomplete, without readback or finite-accounting acceptance;
+restart and interruption cases were not reached. These originals are retained.
+
+The new reader branch imports a sibling module, but isolated Python (`-I`)
+excludes the script directory. The role entrypoint must explicitly add only its
+existing trusted repository directory. This is a harness import correction,
+without profile, role, capability or production changes. The failure path must
+also retain bounded bootstrap text and runner stderr even when the runner has
+already exited. Missing/invalid bootstrap must continue to refuse qualification.
+Verify the isolated import and malformed/empty bootstrap diagnostics before
+collecting a new code revision; do not rerun the unchanged failed trial.
