@@ -8,6 +8,7 @@ import hashlib
 from .input_auth import SourceVerifier
 from .input_cursor import BoundedInput
 from .input_live import registration
+from .live_protocol import validate_lifecycle
 from .input_witness import InputAuthentication
 from .journal import OutcomeJournalError, _parse, _json
 
@@ -170,9 +171,15 @@ def prepare_terminal_stop(line, journal, *, registration_sha256):
         type(origin) is dict
         and origin.get("kind") == "session_end"
         and event.get("pipeline") == "rust_live_origin_v1"
-        and event.get("source") == "rust_core"
-        and event.get("capture_lifecycle") == {"state": "end"},
+        and event.get("source") == "rust_core",
         "only normal-core session_end may stop input",
+    )
+    validate_lifecycle(
+        event, "session_end",
+        activity_count=(
+            verifier.live_state.activity_count
+            if verifier.live_state.accounting_profile else None
+        ),
     )
     _need(
         verifier.live_state.closed

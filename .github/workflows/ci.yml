@@ -970,6 +970,65 @@ jobs:
             sudo cat /var/lib/edge400-systemd-lab/results.jsonl > outcome-systemd-results.jsonl
           fi
           sudo journalctl -u azazel-edge-core.service -u edge400-lab-witness.service --no-pager -n 160
+      - name: Collect exact registered-native accounting originals
+        if: always() && matrix.flavor == 'native-apparmor'
+        run: |
+          # Fixed public copies only. Never export a bundle/key/private lab tree.
+          sudo /usr/bin/python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, stat
+          cases = ('normal-four', 'restart-one', 'interrupted-prefix')
+          names = ('trust.json', 'registration.json', 'source.raw', 'anchors.raw',
+                   'controller.json', 'readback-source.raw', 'protocol.json',
+                   'code-pins.json', 'failure.json', 'evaluation.json', 'reader-binding.json')
+          source = pathlib.Path('/var/lib/edge400-systemd-lab/native-accounting-public')
+          target = pathlib.Path('native-source-accounting-public')
+          target.mkdir(mode=0o755)
+          files, missing, errors = {}, [], []
+          def metadata(info):
+              return (info.st_dev, info.st_ino, info.st_uid, info.st_mode,
+                      info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+          for case in cases:
+              (target / case).mkdir(mode=0o755)
+              for name in names:
+                  path, relative = source / case / name, case + '/' + name
+                  try:
+                      before = path.lstat()
+                      assert stat.S_ISREG(before.st_mode) and before.st_uid == 0
+                      assert before.st_nlink == 1 and not before.st_mode & 0o022
+                      assert 0 <= before.st_size <= 8 * 1024 * 1024
+                      fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                      try:
+                          assert metadata(os.fstat(fd)) == metadata(before)
+                          with os.fdopen(fd, 'rb', closefd=False) as stream:
+                              raw = stream.read(8 * 1024 * 1024 + 1)
+                          assert len(raw) == before.st_size
+                          assert metadata(os.fstat(fd)) == metadata(path.lstat()) == metadata(before)
+                      finally:
+                          os.close(fd)
+                      with (target / relative).open('xb') as output:
+                          output.write(raw)
+                      (target / relative).chmod(0o644)
+                      files[relative] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                  except FileNotFoundError:
+                      missing.append(relative)
+                  except Exception as error:
+                      errors.append({'path': relative, 'error': type(error).__name__})
+          manifest = {'schema_version': 'edge-native-accounting-public-inventory/v1',
+                      'files': files, 'missing': missing, 'errors': errors, 'private_keys_exported': False}
+          with (target / 'manifest.json').open('x') as output:
+              json.dump(manifest, output, sort_keys=True, separators=(',', ':'))
+              output.write('\n')
+          (target / 'manifest.json').chmod(0o644)
+          required = {case + '/' + name for case in cases for name in names if name != 'failure.json'}
+          assert not errors and required <= files.keys(), 'mandatory native accounting case evidence missing or rejected'
+          PY
+      - name: Retain every native accounting case and available failure original
+        if: always() && matrix.flavor == 'native-apparmor'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-source-accounting-public
+          path: native-source-accounting-public
+          if-no-files-found: error
       - name: Retain exact public provider-restoration artifacts
         if: always() && matrix.flavor == 'provider-apparmor'
         run: |

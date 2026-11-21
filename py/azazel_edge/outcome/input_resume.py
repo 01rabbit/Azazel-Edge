@@ -7,6 +7,7 @@ from datetime import datetime
 import math
 import time
 
+from .live_protocol import validate_lifecycle
 from .adapter import from_rust_event
 from .contracts import ExecutionStatus
 from .input_cursor import BoundedInput
@@ -43,16 +44,9 @@ def decode_input(raw, *, allow_live_lifecycle=False):
                 or kind not in ("session_prepare", "session_start", "session_end")
                 or origin.get("schema_version") != "outcome-registered-origin/v2"
                 or origin.get("mode") != "live-core"
-                or event.get("capture_lifecycle")
-                != {
-                    "state": {
-                        "session_prepare": "prepare",
-                        "session_start": "start",
-                        "session_end": "end",
-                    }.get(kind)
-                }
             ):
                 raise ValueError("unverified live lifecycle input")
+            validate_lifecycle(event, kind)
         elif event.get("pipeline") == "rust_release_engine_v1":
             from_rust_release_event(event)
         elif (
