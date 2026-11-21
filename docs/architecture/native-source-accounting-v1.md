@@ -262,3 +262,22 @@ without separate proof. Interrupted/malformed/unregistered/missing legs retain
 null qualified totals. All authority, safety, performance, comparison, production
 and resume flags stay false. Legacy start/end receive `legacy_unmeasured`, never
 implicit counted values or a schema conversion.
+
+Qualification clarifications before annex implementation:
+
+- The required protocol SHA256 is exactly
+  `ddf6d2babb348e2d43307ec4c78cbd5d628778b14a273cb9d7e964f84c4fd445`.
+  The three case IDs, clean/interrupted outcomes and challenge/excluded SID
+  combinations must match that fixed protocol, not merely a self-consistent
+  controller digest. Normal-four means four actual activity records and the
+  prescribed four SIDs; restart-one means one and excludes the downtime SID.
+- Qualified finite accounting requires the selected protected witness Source
+  checkpoint to reach the selected session's authenticated End (at least that
+  exact byte boundary). A shorter valid witnessed prefix stays a positive prefix
+  fact but cannot qualify the final cohort. The anchor checkpoint remains exact.
+- All mode fields contain full actual `st_mode`; check regular type and
+  `S_IMODE(mode)==0o500` for native image / `0o644` for Source. Do not confuse
+  permission bits with the complete mode value.
+- Existing managed launch uses systemd `%b` as Source boot_ref, i.e. the kernel
+  UUID without hyphens. Require `source_boot_ref == boot_id.replace('-', '')`
+  for this declared CI profile, then exact signed session boot-ref agreement.
