@@ -520,6 +520,9 @@ def evaluate_finite_load_cost_comparison(cases):
                     if start is None or end is None
                     else {k: end[k] - start[k] for k in start}
                 )
+            if not any(value is not None for value in values.values()):
+                delta["reasons"].append(role + ":no_shared_measured_phase")
+                continue
             delta[role] = values
         if not delta["reasons"]:
             delta["status"] = "descriptive_measured_difference"

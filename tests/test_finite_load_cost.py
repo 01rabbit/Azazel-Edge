@@ -567,3 +567,20 @@ def test_frozen_artifact_and_recording_bounds_remain_exact():
     assert r["pins"]["observer-phase.raw"] is True
     assert r["pins"]["observer-calls.raw"] is False
     assert r["observer"] is None and r["status"] == "withheld"
+
+
+@pytest.mark.parametrize("role", ["native_cost", "receiver_cost"])
+@pytest.mark.parametrize("arm_index", [0, 1])
+def test_all_null_role_is_unmeasured_and_other_role_facts_survive(role, arm_index):
+    a, _, _, _ = fixture()
+    base = evaluate(a)
+    cases = [deepcopy(base) for _ in cost.ARMS]
+    for case, arm in zip(cases, cost.ARMS):
+        case["case_id"] = arm
+    cases[arm_index][role]["phases"] = dict.fromkeys(cases[arm_index][role]["phases"])
+    result = cost.evaluate_finite_load_cost_comparison(cases)
+    first = result["differences"][0]
+    other = "receiver_cost" if role == "native_cost" else "native_cost"
+    assert first["status"] == "withheld" and first[role] is None
+    assert role + ":no_shared_measured_phase" in first["reasons"]
+    assert first[other] is not None
