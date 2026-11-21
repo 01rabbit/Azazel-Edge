@@ -45,6 +45,11 @@ validation later fails. Reuse original protected-anchor verifier/checkpoints.
 
 Fixed cases/actions/custody modes are exactly the seven protocol entries; no
 posthoc case selection, outcome substitution or implicit old-format upgrade.
+Controller outcome is exactly `collected` for completed collection (including
+expected negative trials), or `failure` with a retained error. Only collected
+with error=null qualifies; it is not a claim of successful runtime completion.
+attempt_ref is exactly32 lowercase hex digits. Canonical protocol has the fixed
+complete base commit, and its exact raw bytes must match the frozen digest.
 Check live normal challenge SIDs and downtime exclusion against signed activity,
 not intended denominator. Witness-stop has its original shorter checkpoint;
 native/receiver fault has no signed End. Refusal selects the actual prior unclosed
