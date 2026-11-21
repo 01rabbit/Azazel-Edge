@@ -811,9 +811,7 @@ def test_observer_config_refuses_old_observer_owned_location_before_read(monkeyp
 
 def test_observer_root_config_keeps_owner_mode_and_pin_guards(monkeypatch):
     path = Path(
-        "/opt/edge400-src/tests/real_systemd/finite-load-configs/load-"
-        + "a" * 32
-        + "-config.json"
+        "/opt/edge400-runtime/finite-load-configs/load-" + "a" * 32 + "-config.json"
     )
     raw = lab.accounting.canonical(dict(metadata=dict(run_id="a" * 32)))
     calls = []
@@ -856,3 +854,64 @@ def test_authentication_read_still_refuses_other_role_ancestor(tmp_path, monkeyp
         OutcomeJournalError, match="ancestor is writable by another role"
     ):
         input_auth.read_regular(path, owner=os.getuid(), mode=0o444, max_bytes=65536)
+
+
+def test_all_trusted_observer_parent_walk_components_have_existing_read_grants():
+    import fnmatch
+    import re
+
+    profile = (
+        (REAL / "edge400.apparmor")
+        .read_text()
+        .split("profile edge400-observer ", 1)[1]
+        .split("profile edge400-native ", 1)[0]
+    )
+    reads = []
+    for line in profile.splitlines():
+        match = re.fullmatch(r"\s*(/\S*)\s+([a-z]+),\s*", line)
+        if match and "r" in match[2]:
+            reads.append(match[1])
+
+    def missing(path):
+        return [
+            str(parent) + "/" if str(parent) != "/" else "/"
+            for parent in reversed(Path(path).parents)
+            if not any(
+                fnmatch.fnmatchcase(
+                    str(parent) + "/" if str(parent) != "/" else "/", pattern
+                )
+                for pattern in reads
+            )
+        ]
+
+    paths = (
+        "/opt/edge400-runtime/finite-load-configs/load-" + "a" * 32 + "-config.json",
+        "/var/lib/edge400-systemd-lab/bundle/trust.json",
+        "/var/lib/edge400-systemd-lab/bundle/origin.json",
+        "/var/lib/edge400-systemd-lab/bundle/observer/load-" + "a" * 32 + "-calls",
+        "/var/lib/edge400-systemd-lab/bundle/observer/load-" + "a" * 32 + "-context",
+        "/var/lib/edge400-systemd-lab/bundle/observer/load-" + "a" * 32 + "-phase",
+    )
+    assert all(not missing(path) for path in paths)
+    assert "/opt/edge400-src/" in missing(
+        "/opt/edge400-src/tests/real_systemd/finite-load-configs/config.json"
+    )
+    assert '"/proc/self/stat"' not in (REAL / "finite_load_observer.py").read_text()
+    assert (
+        "/proc/self/timens_offsets"
+        not in (REAL / "finite_load_observer.py").read_text()
+    )
+
+
+def test_source_tree_config_is_rejected_before_any_trusted_walk(monkeypatch):
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("superseded source path cannot be used")
+
+    monkeypatch.setattr(observer.input_auth, "read_regular", unexpected_read)
+    with pytest.raises(ValueError, match="fixed Root config path"):
+        observer.load_config(
+            "/opt/edge400-src/tests/real_systemd/finite-load-configs/load-"
+            + "a" * 32
+            + "-config.json",
+            "0" * 64,
+        )

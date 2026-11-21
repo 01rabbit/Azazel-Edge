@@ -51,11 +51,11 @@ def error_value(error):
 
 
 def stage_observer_config(g, nonce, raw):
-    """Root-only source ancestors, exclusive immutable config, existing read grant."""
+    """Root-only runtime ancestors, exclusive immutable config, existing read grant."""
     from azazel_edge.outcome.input_auth import open_parent, read_regular
 
     assert re.fullmatch("[0-9a-f]{32}", nonce) and len(raw) <= 65536
-    directory = g.SRC / "tests/real_systemd/finite-load-configs"
+    directory = g.PYTHON.parent.parent / "finite-load-configs"
     directory.mkdir(mode=0o555, exist_ok=True)
     info = directory.lstat()
     assert (

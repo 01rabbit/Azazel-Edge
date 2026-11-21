@@ -185,7 +185,7 @@ class LoadPhaseRecording(phase.PhaseRecording):
 def load_config(path, digest):
     path = Path(path)
     need(
-        path.parent == Path("/opt/edge400-src/tests/real_systemd/finite-load-configs")
+        path.parent == Path("/opt/edge400-runtime/finite-load-configs")
         and re.fullmatch(r"load-[0-9a-f]{32}-config\.json", path.name),
         "fixed Root config path required",
     )
