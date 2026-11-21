@@ -365,12 +365,53 @@ class CoreReadsNoAdvice(unittest.TestCase):
             self.assertFalse(listener in joined, f"the core's non-test source uses {listener}")
         self.assertIn("UnixStream::connect", joined)
 
+    def _function_body(self, text: str, name: str) -> str:
+        definitions = list(re.finditer(r"(?m)^fn " + re.escape(name) + r"\s*\(", text))
+        self.assertEqual(len(definitions), 1, f"expected one actual {name} definition")
+        tail = text[definitions[0].start():]
+        self.assertIn("\n}\n", tail, f"unterminated {name} source body")
+        return tail[:tail.index("\n}\n")]
+
+    def _assert_decision_before_forwarding(self, text: str) -> None:
+        legacy = self._function_body(text, "process_value")
+        shared = self._function_body(text, "process_value_with_span")
+        poll = self._function_body(text, "poll_iteration")
+        # The legacy entry must delegate only, with no forwarding before it.
+        self.assertRegex(
+            legacy,
+            r"\{\s*let _\s*=\s*process_value_with_span\(\s*cfg\s*,\s*parsed\s*,\s*None\s*\);\s*$",
+        )
+        self.assertNotIn("send_to_ai_socket(", poll)
+        self.assertRegex(poll, r"if\s+live_origin::ingress_session\(\)\.is_some\(\)")
+        self.assertRegex(
+            poll,
+            r"ingress\.poll_with_span\([\s\S]*?\|\s*v\s*,\s*span\s*\|\s*"
+            r"process_value_with_span\(\s*cfg\s*,\s*v\s*,\s*Some\(\s*span\s*\)\s*\)",
+        )
+        self.assertRegex(
+            poll,
+            r"else\s*\{\s*ingress\.poll\([\s\S]*?\|\s*v\s*\|\s*"
+            r"process_value\(\s*cfg\s*,\s*v\s*\)",
+        )
+        for call in ("decide_defense(", "maybe_enforce(", "send_to_ai_socket("):
+            self.assertIn(call, shared)
+        self.assertLess(shared.index("decide_defense("), shared.index("maybe_enforce("))
+        self.assertLess(shared.index("maybe_enforce("), shared.index("send_to_ai_socket("))
+
     def test_decision_happens_before_forwarding(self) -> None:
+        self._assert_decision_before_forwarding(_core_non_test_source(CORE_SRC / "main.rs"))
+
+    def test_decision_order_audit_rejects_forwarding_before_enforcement(self) -> None:
         text = _core_non_test_source(CORE_SRC / "main.rs")
-        body = text[text.index("fn process_value("):]
-        body = body[: body.index("\n}\n")]
-        self.assertLess(body.index("decide_defense("), body.index("maybe_enforce("))
-        self.assertLess(body.index("maybe_enforce("), body.index("send_to_ai_socket("))
+        shared = self._function_body(text, "process_value_with_span")
+        mutated = shared.replace(
+            "let enforcement = maybe_enforce(",
+            'send_to_ai_socket(&cfg.ai_socket_path, &json!({}));\n    let enforcement = maybe_enforce(',
+            1,
+        )
+        self.assertNotEqual(mutated, shared)
+        with self.assertRaises(AssertionError):
+            self._assert_decision_before_forwarding(text.replace(shared, mutated, 1))
 
 
 class CanonicalDocument(unittest.TestCase):
