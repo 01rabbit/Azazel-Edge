@@ -10,7 +10,11 @@ import subprocess
 import sys
 
 SRC = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(SRC / "py"), str(SRC / "tests")]
+sys.path[:0] = [
+    str(SRC / "py"),
+    str(SRC / "tests"),
+    str(Path(__file__).resolve().parent),
+]
 from azazel_edge.outcome.confinement import enforce_capture  # noqa: E402
 
 BASE = Path("/var/lib/edge400-systemd-lab")

@@ -1,9 +1,12 @@
 """Mocked role handshake binding; no native process, Source or systemd launch."""
 
 import importlib.util
+import base64
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -53,15 +56,23 @@ def handshake(monkeypatch, fault=None):
 
     class Process:
         def __init__(self, *args, **kwargs):
-            self.stdout = io.StringIO(json.dumps(bootstrap) + "\n")
-            self.returncode = 0
+            self.stdout = io.BytesIO(
+                b""
+                if fault == "import_error"
+                else json.dumps(bootstrap).encode() + b"\n"
+            )
+            self.returncode = 1 if fault == "import_error" else 0
 
         def poll(self):
             return 0
 
         def communicate(self, data=None, timeout=None):
             calls.append(data)
-            return json.dumps(dict(receipt=dict(actor=own), source_base64="")), ""
+            if fault == "import_error":
+                return b"", b"ModuleNotFoundError: native_accounting\n" + b"x" * 40000
+            return json.dumps(
+                dict(receipt=dict(actor=own), source_base64="")
+            ).encode(), b""
 
     def systemctl(*args, **kwargs):
         if "--property=LoadState" in args:
@@ -118,7 +129,7 @@ def handshake(monkeypatch, fault=None):
 def test_observer_root_binding_supplies_only_actually_observed_start_tick(monkeypatch):
     g, command, calls, files, actual = handshake(monkeypatch)
     result = lab.observed_readback(g, command, "normal-four", files)
-    assert calls == ["GO " + "a" * 32 + "\n"]
+    assert calls == [("GO " + "a" * 32 + "\n").encode()]
     assert result["receipt"]["actor"] == actual
     binding = json.loads(files["reader-binding.json"])
     assert binding["status"] == "verified_root_observed_role"
@@ -143,6 +154,39 @@ def test_observer_binding_rejection_never_releases_read_and_retains_diagnostic(
     g, command, calls, files, _ = handshake(monkeypatch, fault)
     with pytest.raises((AssertionError, OSError)):
         lab.observed_readback(g, command, "normal-four", files)
-    assert calls == []
+    assert not any(data is not None for data in calls)
     binding = json.loads(files["reader-binding.json"])
     assert binding["status"] == "failure" and binding["error"] is not None
+
+
+def test_fast_exit_before_bootstrap_retains_bounded_original_stderr(monkeypatch):
+    g, command, calls, files, _ = handshake(monkeypatch, "import_error")
+    with pytest.raises(OSError, match="bootstrap EOF"):
+        lab.observed_readback(g, command, "normal-four", files)
+    assert calls == [None]  # Already exited runner must still be drained.
+    binding = json.loads(files["reader-binding.json"])
+    stderr = base64.b64decode(binding["runner_stderr_base64"], validate=True)
+    assert stderr.startswith(b"ModuleNotFoundError: native_accounting\n")
+    assert len(stderr) == 32768 and binding["runner_stderr_truncated"] is True
+    assert binding["runner_stderr_bytes"] == 40000 + len(
+        b"ModuleNotFoundError: native_accounting\n"
+    )
+    assert binding["runner_returncode"] == 1
+    assert binding["runner_stdout_base64"] == "" and binding["bootstrap"] is None
+
+
+def test_isolated_role_script_resolves_trusted_sibling_without_running_role():
+    script = Path(__file__).parent / "real_systemd/role_probe.py"
+    probe = (
+        "import pathlib,runpy,sys;"
+        "runpy.run_path(sys.argv[1],run_name='isolated_import_probe');"
+        "import native_accounting;"
+        "assert pathlib.Path(native_accounting.__file__).resolve()"
+        "==pathlib.Path(sys.argv[1]).resolve().with_name('native_accounting.py')"
+    )
+    subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(script)],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )

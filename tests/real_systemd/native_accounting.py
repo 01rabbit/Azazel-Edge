@@ -225,9 +225,31 @@ def observed_readback(g, role_command, case_id, files):
         status="failure",
         error=None,
         runner_stderr=None,
+        runner_stdout_base64=None,
+        runner_stderr_base64=None,
+        runner_stdout_bytes=None,
+        runner_stderr_bytes=None,
+        runner_stdout_truncated=None,
+        runner_stderr_truncated=None,
+        runner_returncode=None,
         cleanup=None,
     )
     process = None
+    bootstrap_raw = b""
+    drained = False
+
+    def retain_output(stdout, stderr):
+        stdout = bootstrap_raw + (stdout or b"")
+        stderr = stderr or b""
+        binding["runner_stdout_base64"] = base64.b64encode(stdout[:32768]).decode()
+        binding["runner_stderr_base64"] = base64.b64encode(stderr[:32768]).decode()
+        binding["runner_stdout_bytes"] = len(stdout)
+        binding["runner_stderr_bytes"] = len(stderr)
+        binding["runner_stdout_truncated"] = len(stdout) > 32768
+        binding["runner_stderr_truncated"] = len(stderr) > 32768
+        binding["runner_stderr"] = stderr[:32768].decode("utf-8", errors="replace")
+        binding["runner_returncode"] = process.returncode
+
     try:
         prior = g.systemctl(
             "show", unit, "--property=LoadState", "--value", check=False
@@ -238,14 +260,15 @@ def observed_readback(g, role_command, case_id, files):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
         )
         if not select.select([process.stdout], [], [], 20)[0]:
             raise OSError("reader bootstrap timeout")
-        line = process.stdout.readline(4097)
-        if len(line) > 4096:
+        bootstrap_raw = process.stdout.readline(4097)
+        if not bootstrap_raw:
+            raise OSError("reader bootstrap EOF before identity binding")
+        if len(bootstrap_raw) > 4096:
             raise OSError("reader bootstrap bound")
-        bootstrap = json.loads(line)
+        bootstrap = json.loads(bootstrap_raw)
         binding["bootstrap"] = bootstrap
         assert set(bootstrap) == {
             "schema_version",
@@ -291,8 +314,11 @@ def observed_readback(g, role_command, case_id, files):
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
         assert cmdline == expected_argv
         binding["command_verified"] = True
-        stdout, stderr = process.communicate("GO " + challenge + "\n", timeout=20)
-        binding["runner_stderr"] = stderr[:32768]
+        stdout, stderr = process.communicate(
+            ("GO " + challenge + "\n").encode(), timeout=20
+        )
+        drained = True
+        retain_output(stdout, stderr)
         assert process.returncode == 0, stderr
         assert len(stdout) <= (MAX_SOURCE * 4 // 3) + 65536
         result = json.loads(stdout)
@@ -306,32 +332,34 @@ def observed_readback(g, role_command, case_id, files):
         binding["error"] = dict(type=type(exc).__name__, message=str(exc))
         raise
     finally:
-        if process is not None and process.poll() is None:
+        if process is not None and not drained:
             # Stop only a unit whose actual MainPID still has this command and
             # fresh challenge. An untrusted bootstrap PID is never a target.
-            try:
-                owned_pid = int(
-                    g.systemctl(
-                        "show", unit, "--property=MainPID", "--value", check=False
-                    ).stdout.strip()
-                )
-                assert owned_pid > 1
-                assert (
-                    Path(f"/proc/{owned_pid}/cmdline")
-                    .read_bytes()
-                    .rstrip(b"\0")
-                    .split(b"\0")
-                    == expected_argv
-                )
-                g.systemctl("stop", unit, check=False)
-                binding["cleanup"] = "stopped_verified_owned_unit"
-            except (OSError, ValueError, AssertionError) as exc:
-                binding["cleanup"] = "unverified_unit_not_stopped:" + str(exc)
+            if process.poll() is None:
+                try:
+                    owned_pid = int(
+                        g.systemctl(
+                            "show", unit, "--property=MainPID", "--value", check=False
+                        ).stdout.strip()
+                    )
+                    assert owned_pid > 1
+                    assert (
+                        Path(f"/proc/{owned_pid}/cmdline")
+                        .read_bytes()
+                        .rstrip(b"\0")
+                        .split(b"\0")
+                        == expected_argv
+                    )
+                    g.systemctl("stop", unit, check=False)
+                    binding["cleanup"] = "stopped_verified_owned_unit"
+                except (OSError, ValueError, AssertionError) as exc:
+                    binding["cleanup"] = "unverified_unit_not_stopped:" + str(exc)
             try:
                 # The trusted reader independently expires its GO wait at20s.
-                _, stderr = process.communicate(timeout=25)
-                binding["runner_stderr"] = stderr[:32768]
-            except subprocess.TimeoutExpired:
+                stdout, stderr = process.communicate(timeout=25)
+                retain_output(stdout, stderr)
+            except subprocess.TimeoutExpired as exc:
+                retain_output(exc.output, exc.stderr)
                 binding["error"] = binding["error"] or dict(
                     type="TimeoutExpired",
                     message="owned transient runner did not return after unit stop",
