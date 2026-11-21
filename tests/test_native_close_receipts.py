@@ -1118,3 +1118,59 @@ def test_pid_and_image_integer_types_cannot_be_replaced_by_equal_python_numbers(
     result = evaluate(artifact)
     assert result["status"] == "unknown", result
     assert result["source_authenticated"] is result["selected_end_present"] is True
+
+
+@pytest.mark.parametrize(
+    "trust_schema", ["outcome-input-trust/v3", "outcome-input-trust/v4"]
+)
+@pytest.mark.parametrize("native_registration_v4", [True, False])
+def test_existing_trust_versions_require_actual_native_v4_registration(
+    trust_schema, native_registration_v4
+):
+    artifact, c, root, original_policy = fixture()
+    registration = json.loads(artifact["registration.json"])
+    if not native_registration_v4:
+        registration["schema_version"] = "outcome-live-origin-registration/v3"
+        registration.pop("native_apparmor_profile")
+    artifact["registration.json"] = _json(registration)
+    policy_data = {
+        **dict(original_policy.data),
+        "schema_version": trust_schema,
+        "origin_registration_sha256": digest(artifact["registration.json"]),
+    }
+    if trust_schema == "outcome-input-trust/v3":
+        policy_data.pop("witness_transport")
+    policy = TrustPolicy(policy_data)
+    artifact["trust.json"] = _json(dict(policy.data))
+    for record in (c, root):
+        record.update(
+            trust_sha256=policy.digest,
+            registration_sha256=policy.data["origin_registration_sha256"],
+        )
+    events = [
+        json.loads(line)["event"] for line in artifact["source-after.raw"].splitlines()
+    ]
+    for event in events:
+        event["capture_origin"]["registration_sha256"] = policy.data[
+            "origin_registration_sha256"
+        ]
+    receiver = json.loads(artifact["receiver-close.raw"][15:])
+    receiver.update(
+        trust_sha256=policy.digest,
+        registration_sha256=policy.data["origin_registration_sha256"],
+    )
+    child_bytes(artifact, root, "receiver", b'{"ready":true}\n' + wire(receiver))
+    replace_source(artifact, c, root, policy, events)
+    result = evaluate(artifact)
+    assert result["legs"]["trust"] is True
+    assert result["source_authenticated"] is True
+    assert result["source_tip"] == SourceVerifier(policy).verify(
+        artifact["source-after.raw"]
+    )
+    if native_registration_v4:
+        assert result["status"] == "bound_finite_close", result["reasons"]
+        assert result["legs"]["registration"] is True
+    else:
+        assert result["status"] == "unknown", result
+        assert result["legs"]["registration"] is False
+    assert not any(result["authority_flags"].values())

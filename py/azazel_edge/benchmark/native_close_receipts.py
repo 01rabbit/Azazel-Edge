@@ -105,7 +105,7 @@ def evaluate_native_close_receipts(artifacts, *, expected):
     def trust():
         policy = TrustPolicy(data("trust.json"))
         p = policy.data
-        _need(p["schema_version"] == "outcome-input-trust/v4"
+        _need(p["schema_version"] in ("outcome-input-trust/v3", "outcome-input-trust/v4")
               and p["producer_uid"] == 61001 and p["observer_uid"] == 61002
               and p["witness_uid"] == 0, "fixed_v4_CI_roles")
         return policy
