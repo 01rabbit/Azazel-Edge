@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import threading
 import time
 
@@ -245,10 +246,15 @@ class FiniteIngressLab(CloseReceiptLab):
             )
         assert set(self.cases) == CASE_IDS
         self.contexts = {}
+        self._case_manager_clients = {}
 
     def _reset_case_counter(self, case_id, previous_session, expected_tip):
         client, referenced, failure = None, False, None
+        held = False
         cleanup_errors = []
+        if not hasattr(self, "_case_manager_clients"):
+            self._case_manager_clients = {}
+        assert case_id not in self._case_manager_clients
         try:
             client = SystemdUnitClient()
             client.open()
@@ -261,10 +267,12 @@ class FiniteIngressLab(CloseReceiptLab):
                 "Source changed while acquiring manager reference"
             )
             client.call("ResetFailedUnit", self.g.UNIT)
+            self._case_manager_clients[case_id] = client
+            held = True  # Pending ownership exists even before case context.
         except BaseException as error:
             failure = error
         finally:
-            if client is not None:
+            if client is not None and not held:
                 if referenced:
                     try:
                         client.call("UnrefUnit", self.g.UNIT)
@@ -286,12 +294,99 @@ class FiniteIngressLab(CloseReceiptLab):
                 unit=self.g.UNIT,
                 timeout_usec=CALL_TIMEOUT_USEC,
                 methods=client.trace if client is not None else [],
+                reference_held=held,
                 error=dict(type=type(failure).__name__, message=str(failure)[:4096])
                 if failure
                 else None,
                 cleanup_errors=cleanup_errors,
             )
         if failure is not None:
+            raise failure
+
+    def release_case_reference(self, case_id, *, original=None):
+        clients = getattr(self, "_case_manager_clients", {})
+        client = clients.get(case_id)
+        if client is None:
+            return
+        if original is None:
+            context = self.contexts.get(case_id)
+            assert (
+                context is not None
+                and context["exported"]
+                and context["analysis_accepted"]
+            ), "case originals must be archived before releasing manager reference"
+        clients.pop(case_id)
+        failure, cleanup_errors = None, []
+        try:
+            client.call("UnrefUnit", self.g.UNIT)
+        except BaseException as error:
+            failure = error
+            cleanup_errors.append(
+                dict(type=type(error).__name__, message=str(error)[:4096])
+            )
+        finally:
+            try:
+                client.close()
+            except BaseException as error:
+                failure = failure or error
+                cleanup_errors.append(
+                    dict(type=type(error).__name__, message=str(error)[:4096])
+                )
+        if failure is not None:
+            context = self.contexts.get(case_id)
+            if (
+                context is not None
+                and context["exported"]
+                and "failure.json" not in context["files"]
+            ):
+                raw = accounting.canonical(
+                    dict(type=type(failure).__name__, message=str(failure)[:4096])
+                )
+                try:
+                    self.g.write(
+                        self.g.BASE / self.public_directory / case_id / "failure.json",
+                        raw,
+                    )
+                    context["files"]["failure.json"] = raw
+                except BaseException as error:
+                    cleanup_errors.append(
+                        dict(type=type(error).__name__, message=str(error)[:4096])
+                    )
+        try:
+            self.g.record(
+                "finite-ingress-manager-reference-released",
+                case_id=case_id,
+                unit=self.g.UNIT,
+                methods=client.trace,
+                cleanup_errors=cleanup_errors,
+                primary_error_preserved=original is not None,
+            )
+        except BaseException as error:
+            failure = failure or error
+            cleanup_errors.append(
+                dict(type=type(error).__name__, message=str(error)[:4096])
+            )
+            # Existing stderr is diagnostic only; do not overwrite the archived
+            # failure slot or lose the first API error when publication fails.
+            diagnostic = dict(
+                case_id=case_id, methods=client.trace, cleanup_errors=cleanup_errors
+            )
+            if not hasattr(self, "_manager_cleanup_diagnostics"):
+                self._manager_cleanup_diagnostics = {}
+            self._manager_cleanup_diagnostics[case_id] = diagnostic
+            try:
+                sys.stderr.write(accounting.canonical(diagnostic).decode())
+                sys.stderr.flush()
+            except BaseException as stderr_error:
+                cleanup_errors.append(
+                    dict(
+                        type=type(stderr_error).__name__,
+                        message=str(stderr_error)[:4096],
+                    )
+                )
+        if failure is not None and original is None:
+            failure.manager_cleanup_errors = cleanup_errors
+            failure.manager_method_trace = client.trace
             raise failure
 
     def eve_path(self):
@@ -848,6 +943,7 @@ class FiniteIngressLab(CloseReceiptLab):
                 "main_sequence" if self.variant == "main" else "fault_sequence"
             ]:
                 self.case(case_id)
+                self.release_case_reference(case_id)
         except BaseException as exc:
             self.teardown_failure(exc)
             raise
@@ -878,4 +974,25 @@ class FiniteIngressLab(CloseReceiptLab):
                 self.g.systemctl(*operation, check=False)
             except Exception as error:
                 note("teardown-manager", error)
-        self.retain_failures(original)
+        try:
+            self.retain_failures(original)
+        except BaseException as error:
+            note("failure-preservation", error)
+            self.g.record(
+                "finite-ingress-failure-preservation-error",
+                type=type(error).__name__,
+                message=str(error)[:4096],
+            )
+        finally:
+            for case_id in list(getattr(self, "_case_manager_clients", {})):
+                try:
+                    self.release_case_reference(case_id, original=original)
+                except BaseException as error:
+                    note("manager-reference-cleanup", error)
+                    # Never replace the original experiment failure.
+                    self.g.record(
+                        "finite-ingress-reference-cleanup-error",
+                        case_id=case_id,
+                        type=type(error).__name__,
+                        message=str(error)[:4096],
+                    )

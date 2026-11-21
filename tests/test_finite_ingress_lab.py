@@ -299,7 +299,12 @@ def test_persistent_counter_transaction_holds_reference_through_guards_and_one_r
     instance.g = SimpleNamespace(
         UNIT="azazel-edge-core.service",
         record=lambda name, **fields: records.append((name, fields)),
+        BASE=Path("/synthetic"),
+        write=lambda path, raw: records.append(
+            ("append_failure", dict(path=str(path)))
+        ),
     )
+    instance.public_directory = "finite-ingress-source-public"
     guard_count = 0
 
     def guards(case_id, *, previous_session=None):
@@ -315,7 +320,7 @@ def test_persistent_counter_transaction_holds_reference_through_guards_and_one_r
         ), False
 
     monkeypatch.setattr(instance, "verify_case_start", guards)
-    if fault is None:
+    if fault in (None, "UnrefUnit", "close"):
         instance.prepare_case_start("case")
         assert calls == [
             "initial_guard",
@@ -324,10 +329,19 @@ def test_persistent_counter_transaction_holds_reference_through_guards_and_one_r
             "RefUnit",
             "held_guard",
             "ResetFailedUnit",
-            "UnrefUnit",
-            "close",
         ]
         assert len(records) == 2 and records[0][1]["error"] is None
+        instance.contexts["case"] = dict(
+            exported=True, analysis_accepted=True, files={}
+        )
+        calls.append("archive")
+        if fault is None:
+            instance.release_case_reference("case")
+        else:
+            with pytest.raises(OSError):
+                instance.release_case_reference("case")
+        assert calls[-3:] == ["archive", "UnrefUnit", "close"]
+        assert not instance._case_manager_clients
     else:
         with pytest.raises((AssertionError, OSError)):
             instance.prepare_case_start("case")
@@ -348,6 +362,59 @@ def test_persistent_counter_transaction_holds_reference_through_guards_and_one_r
         ):
             assert calls.count("UnrefUnit") == 1
     assert calls.count("ResetFailedUnit") <= 1
+
+
+def test_reference_cannot_release_before_archive_and_is_released_only_once():
+    calls = []
+    client = SimpleNamespace(
+        call=lambda method, unit: calls.append(method),
+        close=lambda: calls.append("close"),
+        trace=[],
+    )
+    instance = object.__new__(lab.FiniteIngressLab)
+    instance._case_manager_clients = {"case": client}
+    instance.contexts = {}
+    instance.g = SimpleNamespace(
+        UNIT="azazel-edge-core.service", record=lambda *args, **kwargs: None
+    )
+    with pytest.raises(AssertionError, match="archived"):
+        instance.release_case_reference("case")
+    assert calls == [] and instance._case_manager_clients["case"] is client
+    instance.contexts["case"] = dict(exported=True, analysis_accepted=True)
+    instance.release_case_reference("case")
+    instance.release_case_reference("case")
+    assert calls == ["UnrefUnit", "close"]
+
+
+def test_pending_reference_cleanup_follows_failure_preservation_even_without_context(
+    monkeypatch,
+):
+    calls = []
+    client = SimpleNamespace(
+        call=lambda method, unit: calls.append(method),
+        close=lambda: calls.append("close"),
+        trace=[],
+    )
+    instance = object.__new__(lab.FiniteIngressLab)
+    instance._case_manager_clients = {"pending-case": client}
+    instance.contexts = {}
+    instance.g = SimpleNamespace(
+        UNIT="azazel-edge-core.service",
+        WITNESS="owned-witness",
+        systemctl=lambda *args, **kwargs: calls.append(args[0]),
+        record=lambda *args, **kwargs: None,
+    )
+    original = AssertionError("original failure before context")
+
+    def retain(failure):
+        assert failure is original
+        calls.append("preserve-originals")
+        raise OSError("export unavailable")
+
+    monkeypatch.setattr(instance, "retain_failures", retain)
+    instance.teardown_failure(original)
+    assert calls == ["disable", "stop", "preserve-originals", "UnrefUnit", "close"]
+    assert not instance._case_manager_clients
 
 
 def test_libsystemd_binding_uses_same_bus_fixed_target_and_bounded_timeout(monkeypatch):
@@ -417,3 +484,58 @@ def test_libsystemd_binding_uses_same_bus_fixed_target_and_bounded_timeout(monke
         "unref",
     ]
     assert not client.bus
+
+
+@pytest.mark.parametrize("trace_failure", [False, True])
+def test_release_sidecar_failure_still_attempts_trace_and_preserves_first_api_error(
+    trace_failure, capsys
+):
+    calls = []
+    api_error = OSError("original UnrefUnit error")
+
+    def api(method, unit):
+        calls.append(method)
+        raise api_error
+
+    client = SimpleNamespace(
+        call=api,
+        close=lambda: calls.append("close"),
+        trace=[dict(method="UnrefUnit", returncode=-5)],
+    )
+    instance = object.__new__(lab.FiniteIngressLab)
+    instance._case_manager_clients = {"case": client}
+    instance.contexts = {"case": dict(exported=True, analysis_accepted=True, files={})}
+    instance.public_directory = "finite-ingress-source-public"
+
+    def write(path, raw):
+        calls.append("sidecar")
+        raise OSError("sidecar unavailable")
+
+    def record(name, **fields):
+        calls.append("trace")
+        assert fields["methods"] == client.trace
+        assert fields["cleanup_errors"][-1]["message"] == "sidecar unavailable"
+        if trace_failure:
+            raise OSError("trace unavailable")
+
+    instance.g = SimpleNamespace(
+        UNIT="azazel-edge-core.service",
+        BASE=Path("/synthetic"),
+        write=write,
+        record=record,
+    )
+    with pytest.raises(OSError) as raised:
+        instance.release_case_reference("case")
+    assert raised.value is api_error
+    assert calls == ["UnrefUnit", "close", "sidecar", "trace"]
+    assert "failure.json" not in instance.contexts["case"]["files"]
+    assert any(
+        error["message"] == "sidecar unavailable"
+        for error in api_error.manager_cleanup_errors
+    )
+    if trace_failure:
+        assert any(
+            error["message"] == "trace unavailable"
+            for error in api_error.manager_cleanup_errors
+        )
+        assert json.loads(capsys.readouterr().err)["methods"] == client.trace

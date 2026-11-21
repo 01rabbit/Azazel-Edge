@@ -85,6 +85,7 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
     )
     if ingress:
         result["native_ingress"] = None
+        result["collection_completed"] = None
     if type(artifacts) is not dict or set(artifacts) != FILES or type(expected) is not dict or set(expected) != FILES:
         result["reasons"].append("exact_artifact_pin_envelope")
         return result
@@ -152,9 +153,20 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
         _fields(c, CONTROL)
         _need(c["schema_version"] == "edge-native-close-controller/v1"
               and c["case_id"] in cases and c["protocol_sha256"] == protocol_sha
-              and c["action"] == cases[c["case_id"]][0]
-              and c["outcome"] == "collected" and c["error"] is None, "fixed_collected_case")
-        _need(artifacts["failure.json"] is None, "retained_collection_failure")
+              and c["action"] == cases[c["case_id"]][0], "fixed_case_selector" if ingress else "fixed_collected_case")
+        if ingress:
+            if c["outcome"] == "failure":
+                _fields(c["error"], {"type", "message"})
+                _need(all(type(v) is str and len(v) <= 4096 for v in c["error"].values())
+                      and data("failure.json") == c["error"], "pinned_typed_collection_failure")
+                result["collection_completed"] = False
+            else:
+                _need(c["outcome"] == "collected" and c["error"] is None
+                      and artifacts["failure.json"] is None, "fixed_collected_case")
+                result["collection_completed"] = True
+        else:
+            _need(c["outcome"] == "collected" and c["error"] is None, "fixed_collected_case")
+            _need(artifacts["failure.json"] is None, "retained_collection_failure")
         _need(_hash(c["attempt_ref"], 32) and _hash(c["source_revision"], 40)
               and _hash(c["session_ref"], 32)
               and _uint(c["started_ns"]) and _uint(c["finished_ns"])
@@ -539,7 +551,7 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
     check("managed_refusal", managed_refusal) if refusal else None
 
     common = ("trust", "source_before", "source_after", "context", "registration", "store_snapshots", "selected_session", "manager", "root_output")
-    if all_supplied_pins_valid and all(legs.get(k) is True for k in common):
+    if all_supplied_pins_valid and (not ingress or result["collection_completed"] is True) and all(legs.get(k) is True for k in common):
         if refusal and legs.get("managed_refusal") is True:
             result["status"] = "bound_prelaunch_refusal"
         elif not refusal and all(legs.get(k) is True for k in ("live_custody", "child_waits", "readback", "witness")):

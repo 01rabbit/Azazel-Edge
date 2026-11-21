@@ -349,3 +349,38 @@ def test_missing_witness_is_unknown_whole_completion_without_observed_incomplete
     r = evaluate(a)
     assert r["status"] == "bound_consumed_prefix"
     assert r["whole_input_complete"] is None
+
+
+def test_typed_failed_collection_retains_independent_facts_but_never_qualifies():
+    a, c, root, _ = fixture()
+    c.update(outcome="failure", error=dict(type="AssertionError", message="final manager unavailable"))
+    a["failure.json"] = wire(c["error"])
+    rewrite(a, c, root)
+    r = evaluate(a)
+    assert r["close"]["collection_completed"] is False
+    assert r["source_decisions"] == r["matched_decision_spans"] == 4
+    assert r["raw_population"]["complete_lf_records"] == 9
+    assert r["status"] != "bound_complete_input" and r["whole_input_complete"] is None
+    assert r["close"]["status"] == "unknown"
+    original = deepcopy(a)
+    assert evaluate(a) == r and a == original
+
+
+def test_failed_collection_requires_matching_pinned_failure_object():
+    a, c, root, _ = fixture()
+    c.update(outcome="failure", error=dict(type="AssertionError", message="actual"))
+    a["failure.json"] = wire(dict(type="AssertionError", message="different"))
+    rewrite(a, c, root)
+    r = evaluate(a)
+    assert r["close"]["legs"]["context"] is False
+    assert r["status"] == "unknown"
+
+
+def test_v1_failure_analysis_stays_fail_closed_after_v2_addition():
+    a, c, root, _ = close_fixture()
+    c.update(outcome="failure", error=dict(type="AssertionError", message="failure"))
+    a["failure.json"] = wire(c["error"])
+    rewrite(a, c, root)
+    pins = {k: digest(v) if type(v) is bytes else None for k, v in a.items()}
+    r = annex.close.evaluate_native_close_receipts(a, expected=pins)
+    assert r["status"] == "unknown" and "collection_completed" not in r
