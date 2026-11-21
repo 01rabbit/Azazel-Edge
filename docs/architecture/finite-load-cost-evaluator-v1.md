@@ -67,3 +67,15 @@ Synthetic negatives must cover missing/bad pins, changed corpus, partial native
 prefix, missing End, wrong session, absent phase/CPU, counter overflow, wrong
 rate/duration and below-98-percent. ActualLinux is a separate required path;
 synthetic fixture success is never reported as Linux measurement.
+
+## Pre-collection independent-review amendment
+
+The lab interface now adds one original `observer-fault-anchors.raw`, bounded by
+the existing 8 MiB witness limit. The exact evaluator map is therefore 45 files,
+not 44. It is null for OFF/ON. FAULTED independently verifies this actual
+pre-kill witness chain against its Source/journal prefix and fixed deadline;
+the controller cannot substitute a claimed refusal or progress boolean. Phase
+recordings retain their existing 4,096-row bound and call recordings their
+existing 900 total-row bound. ON actual-Linux acceptance requires genuine close
+and unchanged 5ms qualification. Withheld/failed clocks preserve originals and
+block acceptance; they are never converted into an expected passing metric.
