@@ -58,6 +58,9 @@ newly consumed bytes; saturating subtraction must not prove EOF.
 
 Reuse the SAME existing startup metadata sample to bind offset/device/inode.
 Fold actual existing PollReport transitions with checked lifetime arithmetic.
+`polls` counts all attempted calls, including early missing/open/metadata/seek
+failures; those actual zero-count reports are folded once. Existing periodic
+summary/Pending counters keep their old meaning.
 E=examined, A=admitted, S=sum shed, O=oversize starts; blank=E-A-S-O.
 N counts actual normalized decision callbacks; A-N is only an aggregate of
 admitted inputs without Source decisions. It is not a parse failure count.
@@ -132,3 +135,10 @@ Actual Linux case acceptance is original preservation plus correctly bounded
 facts/unknowns, not a requirement that every case be complete. Mandatory Linux
 CI cannot pass through skip. No successful fallback, retry unchanged, permission
 increase, history reset, or missing-value backfill is permitted.
+
+Independent raw classification counts LF records, blank records and oversized
+records before bounded parse classification. `raw_parseable_records` in the
+fixed protocol counts nonblank records within the unchanged1MiB line bound;
+oversized records are separately excluded before that classification. It never
+measures actual callback invocation. Case recipe pins are trial controls only;
+all reported populations still derive from saved actual raw bytes.
