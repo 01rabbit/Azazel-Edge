@@ -26,6 +26,8 @@ IDENTITY = set(
 
 
 def _limit(name):
+    if name == "root-custody.raw":
+        return 16384
     if name not in EXTRA_FILES:
         return (
             finite.EVE_LIMIT
