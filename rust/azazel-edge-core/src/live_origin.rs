@@ -66,6 +66,7 @@ struct Capture {
     session: String,
     close_receipts: bool,
     ingress_accounting: bool,
+    load_cost: bool,
     receipt_attempted: AtomicBool,
 }
 struct Admission<'a>(&'a AtomicU64);
@@ -211,7 +212,7 @@ fn start_profile(mut stream: UnixStream, session: String, accounting: bool) -> i
         }
         let _ = stream.shutdown(Shutdown::Both);
     });
-    Ok(Capture { tx, failed, gate, counts, shutdown, session: capture_session, close_receipts: false, ingress_accounting: false, receipt_attempted: AtomicBool::new(false) })
+    Ok(Capture { tx, failed, gate, counts, shutdown, session: capture_session, close_receipts: false, ingress_accounting: false, load_cost:false, receipt_attempted: AtomicBool::new(false) })
 }
 
 /// Only a supervising trusted launcher supplies the private connected fd.
@@ -251,10 +252,16 @@ pub fn install(args: &[String]) -> Result<(), String> {
         Ok(value) if value=="v1" && accounting && close_receipts=>true,
         _=>return Err("live origin ingress accounting profile refused".into()),
     };
+    let load_cost=match std::env::var("AZAZEL_LIVE_ORIGIN_LOAD_COST") {
+        Err(std::env::VarError::NotPresent)=>false,
+        Ok(value) if value=="v1" && ingress_accounting=>true,
+        _=>return Err("live origin load cost profile refused".into()),
+    };
     if close_receipts { prepare_receipt_stdout()?; }
     let mut capture = start_profile(stream, args[4].clone(), accounting).map_err(|_| "live origin unavailable")?;
     capture.close_receipts = close_receipts;
     capture.ingress_accounting=ingress_accounting;
+    capture.load_cost=load_cost;
     CAPTURE.set(capture).map_err(|_| "live origin already configured".into())
 }
 pub fn record(kind: &'static str, event: &Value) {
@@ -263,6 +270,7 @@ pub fn record(kind: &'static str, event: &Value) {
 pub fn ingress_session()->Option<&'static str> {
     CAPTURE.get().filter(|c|c.ingress_accounting).map(|c|c.session.as_str())
 }
+pub fn load_cost_enabled()->bool {CAPTURE.get().is_some_and(|c|c.load_cost)}
 fn ingress_event(event:&Value,session:&str,span:crate::ingress::IngressSpan<'_>)->Value {
     let mut copy=event.clone();
     copy["ingress_origin"]=json!({"schema_version":"azazel-edge/ingress-origin/v1","range_ref":session,
@@ -308,13 +316,22 @@ fn close_receipt_v2(session:&str,acknowledged:bool,ingress:Value)->Vec<u8> {
         "local_worker_ack_observed":acknowledged,"ingress":ingress})).unwrap_or_default();
     bytes.push(b'\n');bytes
 }
+fn close_receipt_v3(session:&str,acknowledged:bool,ingress:Value,cost:Value)->Vec<u8> {
+    let mut bytes=serde_json::to_vec(&json!({"schema_version":"outcome-native-close-receipt/v3",
+        "session_ref":session,"native_pid":std::process::id(),
+        "local_worker_ack_observed":acknowledged,"ingress":ingress,"cost":cost})).unwrap_or_default();
+    bytes.push(b'\n');bytes
+}
 pub fn finish() {finish_with_ingress(None);}
-pub fn finish_with_ingress(ingress:Option<Value>) {
+pub fn finish_with_ingress(ingress:Option<Value>) {finish_with_cost(ingress,None);}
+pub fn finish_with_cost(ingress:Option<Value>,cost:Option<Value>) {
     if let Some(capture) = CAPTURE.get() {
         let report = capture.close_receipts && !capture.receipt_attempted.swap(true, Ordering::SeqCst);
         let acknowledged = capture.finish();
         if report {
-            let bytes=if capture.ingress_accounting {
+            let bytes=if capture.load_cost {
+                close_receipt_v3(&capture.session,acknowledged,ingress.unwrap_or(Value::Null),cost.unwrap_or(Value::Null))
+            } else if capture.ingress_accounting {
                 close_receipt_v2(&capture.session,acknowledged,ingress.unwrap_or(Value::Null))
             } else {close_receipt(&capture.session, acknowledged)};
             if bytes.len() <= if capture.ingress_accounting {4096} else {1024} {
@@ -428,7 +445,7 @@ mod tests {
         let (tx, rx) = sync_channel(capacity);
         (Capture { tx, shutdown, failed:Arc::new(AtomicBool::new(false)),
             gate:Arc::new(AtomicU64::new(0)), counts:Arc::new(Counts::default()),
-            session:"a".repeat(32), close_receipts:false, ingress_accounting:false, receipt_attempted:AtomicBool::new(false) }, rx, recv)
+            session:"a".repeat(32), close_receipts:false, ingress_accounting:false, load_cost:false, receipt_attempted:AtomicBool::new(false) }, rx, recv)
     }
     #[test]
     fn deterministic_queue_full_and_checked_overflow_leave_no_terminal() {
@@ -572,6 +589,17 @@ mod tests {
         assert_eq!(receipt["schema_version"],"outcome-native-close-receipt/v2");
         let old:Value=serde_json::from_slice(&close_receipt(&"a".repeat(32),false)).unwrap();
         assert_eq!(old.as_object().unwrap().len(),4);assert!(old.get("ingress").is_none());
+    }
+
+    #[test]
+    fn load_cost_uses_only_explicit_v3_receipt_and_existing_bound() {
+        let meter=crate::load_cost::Meter::new();
+        let raw=close_receipt_v3(&"a".repeat(32),true,Value::Null,meter.snapshot());
+        let receipt:Value=serde_json::from_slice(&raw).unwrap();
+        assert_eq!(receipt.as_object().unwrap().len(),6);assert_eq!(receipt["schema_version"],"outcome-native-close-receipt/v3");
+        assert!(receipt["cost"]["phases"]["poll_total"].is_null());assert!(raw.len()<=4096);
+        let legacy:Value=serde_json::from_slice(&close_receipt(&"a".repeat(32),true)).unwrap();
+        assert!(legacy.get("cost").is_none());
     }
 
 }

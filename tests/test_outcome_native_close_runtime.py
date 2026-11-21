@@ -177,6 +177,7 @@ def test_generic_managed_failure_is_never_reclassified(monkeypatch):
     "fault",
     [
         "normal",
+        "normal_cost",
         "writer_close",
         "terminal_fsync",
         "extra_tail",
@@ -192,6 +193,11 @@ def test_receiver_report_follows_verified_eof_append_and_successful_writer_close
     from azazel_edge.outcome.live_protocol import LiveState, signed_live_event
 
     r = registration()
+    if fault == "normal_cost":
+        r["environment"].update(
+            AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING="v1",
+            AZAZEL_LIVE_ORIGIN_LOAD_COST="v1",
+        )
     r["launcher_uid"] = 0
     policy = SimpleNamespace(
         data={"producer_uid": 61001, "origin_registration_sha256": "a" * 64},
@@ -285,7 +291,10 @@ def test_receiver_report_follows_verified_eof_append_and_successful_writer_close
             return self.verifier.tip()
 
     def report(value):
-        if value["schema_version"] == "outcome-live-receiver-close-receipt/v1":
+        if value["schema_version"] in (
+            "outcome-live-receiver-close-receipt/v1",
+            "outcome-live-receiver-close-receipt/v2",
+        ):
             assert state["closed"]
         state["reports"].append(deepcopy(value))
         return True
@@ -299,12 +308,12 @@ def test_receiver_report_follows_verified_eof_append_and_successful_writer_close
     monkeypatch.setattr(os, "getppid", lambda: 42)
     monkeypatch.setattr(os, "set_inheritable", lambda *args: None)
     monkeypatch.setattr(receipts, "emit_pipe", report)
-    if fault == "normal":
+    if fault in ("normal", "normal_cost"):
         input_live.receive(policy, r, None, "boot", 91, "c" * 32)
     else:
         with pytest.raises(OSError):
             input_live.receive(policy, r, None, "boot", 91, "c" * 32)
-    if fault == "normal":
+    if fault in ("normal", "normal_cost"):
         assert capsys.readouterr().out == '{"ready":true}\n'
         assert len(state["reports"]) == 1
         report = state["reports"][0]
@@ -315,6 +324,13 @@ def test_receiver_report_follows_verified_eof_append_and_successful_writer_close
             is True
         )
         assert report["source_checkpoint"]["seq"] == 3
+        if fault == "normal_cost":
+            assert report["schema_version"] == "outcome-live-receiver-close-receipt/v2"
+            assert report["cost"]["complete"] is True
+            assert report["cost"]["phases"]["source_append"]["count"] == 3
+            assert report["cost"]["phases"]["receive_wait"]["count"] == 2
+        else:
+            assert "cost" not in report
     elif fault == "unclean":
         assert capsys.readouterr().out == ""
         assert state["appends"] == []

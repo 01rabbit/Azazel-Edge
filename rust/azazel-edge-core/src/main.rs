@@ -3,6 +3,7 @@ mod ingress;
 mod instance;
 mod confinement;
 mod live_origin;
+mod load_cost;
 mod release;
 mod safety;
 mod undelivered;
@@ -2144,6 +2145,7 @@ fn main() {
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
     if let Some(session)=live_origin::ingress_session() {ingress.enable_finite(session,startup_metadata.as_ref());}
+    if live_origin::load_cost_enabled() {ingress.enable_cost();}
     stop_signal::install();
     let sweeper = spawn_release_sweeper(cfg.clone(), stop_signal::requested);
     while !stop_signal::requested() {
@@ -2175,7 +2177,7 @@ fn main() {
         }
     }
     let _ = sweeper.join();
-    if live_origin::ingress_session().is_some() {live_origin::finish_with_ingress(ingress.finite_snapshot());}
+    if live_origin::ingress_session().is_some() {live_origin::finish_with_cost(ingress.finite_snapshot(),ingress.cost_snapshot());}
     else {live_origin::finish();}
     eprintln!("azazel-edge-core stopping: {} ingress summary record(s) written for the last interval", written);
 }

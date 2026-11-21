@@ -136,6 +136,15 @@ fn clock_ns(clock_id: std::os::raw::c_int) -> Option<u64> {
         .and_then(|s| s.checked_add(ts.tv_nsec as u64))
 }
 
+pub fn process_cpu_ns()->Option<u64> {
+    #[cfg(target_os="linux")] {clock_ns(2)}
+    #[cfg(not(target_os="linux"))] {None}
+}
+pub fn thread_cpu_ns()->Option<u64> {
+    #[cfg(target_os="linux")] {clock_ns(3)}
+    #[cfg(not(target_os="linux"))] {None}
+}
+
 /// The wall clock in nanoseconds since the Unix epoch.
 pub fn wall_epoch_ns() -> Option<i64> {
     SystemTime::now()
