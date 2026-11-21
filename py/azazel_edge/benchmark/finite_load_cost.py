@@ -27,7 +27,8 @@ IDENTITY = set(
 
 def _limit(name):
     if name == "root-custody.raw":
-        return 16384
+        # Existing header+report stream cap; the inner report remains <=16KiB.
+        return 32768
     if name not in EXTRA_FILES:
         return (
             finite.EVE_LIMIT
