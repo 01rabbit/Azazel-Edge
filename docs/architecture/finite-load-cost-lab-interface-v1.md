@@ -236,3 +236,18 @@ report retains its unchanged 16384-byte inner bound. These are distinct bounds;
 no report capacity is increased. Trust and registration originals retain
 32768-byte caps. This correction supersedes the earlier outer-bound tightening
 before any collection.
+
+## Root-owned observer configuration staging correction
+
+The first original Linux ON bootstrap correctly refused Root configuration under
+an observer-owned ancestor. Preserve that failure and the completed OFF arm;
+FAULTED remained not run. A changed candidate stages each immutable config only
+at `/opt/edge400-src/tests/real_systemd/finite-load-configs/load-<32hex>-config.json`.
+The staging directory is Root-owned0555, a real directory, beneath existing
+Root-protected source ancestors. Each config is exclusively created Root0444,
+fsynced and pinned byte-for-byte as before. The observer helper accepts only this
+fixed parent and filename/run-id binding, then applies unchanged read_regular
+owner0/mode0444 and trusted-ancestor checks. Measured sidecars remain under the
+existing observer-owned writable directory. No open_parent relaxation, new
+AppArmor rule, account or capability is introduced. This prospective correction
+precedes any new capture; it does not repair or overwrite the first failed arm.
