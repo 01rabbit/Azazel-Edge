@@ -59,8 +59,22 @@ def _same_object(a, b):
 
 def evaluate_native_close_receipts(artifacts, *, expected):
     """Retain independent authenticated facts when another leg is unavailable."""
+    return _evaluate_close_profile(artifacts, expected=expected)
+
+
+def _evaluate_close_profile(artifacts, *, expected, profile=None):
+    """Shared custody checks; only explicit versioned callers select a profile."""
+    ingress = profile is not None
+    protocol_sha = profile["protocol_sha256"] if ingress else PROTOCOL_SHA256
+    protocol_schema = "edge-finite-ingress-source-protocol/v1" if ingress else "edge-native-close-receipts-protocol/v1"
+    cases = profile["cases"] if ingress else CASES
+    native_limit = 4096 if ingress else 1024
+
+    def limit(name):
+        return native_limit if name == "native-close.raw" else _limit(name)
+
     result = dict(
-        schema_version="edge-native-close-analysis/v1", case_id=None, status="unknown",
+        schema_version="edge-native-close-analysis/v2" if ingress else "edge-native-close-analysis/v1", case_id=None, status="unknown",
         raw_sha256={}, pins={}, legs={}, reasons=[],
         native_local_worker_ack_observed=None, receiver_close_report=None,
         source_authenticated=None, source_tip=None, authenticated_prefix_tip=None,
@@ -69,13 +83,16 @@ def evaluate_native_close_receipts(artifacts, *, expected):
         native_returncode=None, receiver_returncode=None, launcher_exit=None,
         managed_refusal_verified=None, stores_unchanged=None, authority_flags=AUTHORITY.copy(),
     )
+    if ingress:
+        result["native_ingress"] = None
+        result["collection_completed"] = None
     if type(artifacts) is not dict or set(artifacts) != FILES or type(expected) is not dict or set(expected) != FILES:
         result["reasons"].append("exact_artifact_pin_envelope")
         return result
     all_supplied_pins_valid = True
     for name in sorted(FILES):
         raw, pin = artifacts[name], expected[name]
-        digest = _sha(raw) if type(raw) is bytes and len(raw) <= _limit(name) else None
+        digest = _sha(raw) if type(raw) is bytes and len(raw) <= limit(name) else None
         result["raw_sha256"][name] = digest
         result["pins"][name] = bool(_hash(pin) and digest == pin)
         if not (raw is None and pin is None) and not result["pins"][name]:
@@ -100,7 +117,7 @@ def evaluate_native_close_receipts(artifacts, *, expected):
         return artifacts[name]
 
     def data(name):
-        return _decode(raw(name), _limit(name), lf=name not in ("trust.json", "registration.json"))
+        return _decode(raw(name), limit(name), lf=name not in ("trust.json", "registration.json"))
 
     def trust():
         policy = TrustPolicy(data("trust.json"))
@@ -130,15 +147,26 @@ def evaluate_native_close_receipts(artifacts, *, expected):
 
     def context():
         protocol = data("protocol.json")
-        _need(_sha(raw("protocol.json")) == PROTOCOL_SHA256
-              and protocol["schema_version"] == "edge-native-close-receipts-protocol/v1", "fixed_protocol")
+        _need(_sha(raw("protocol.json")) == protocol_sha
+              and protocol["schema_version"] == protocol_schema, "fixed_protocol")
         c = data("close-controller.json")
         _fields(c, CONTROL)
         _need(c["schema_version"] == "edge-native-close-controller/v1"
-              and c["case_id"] in CASES and c["protocol_sha256"] == PROTOCOL_SHA256
-              and c["action"] == CASES[c["case_id"]][0]
-              and c["outcome"] == "collected" and c["error"] is None, "fixed_collected_case")
-        _need(artifacts["failure.json"] is None, "retained_collection_failure")
+              and c["case_id"] in cases and c["protocol_sha256"] == protocol_sha
+              and c["action"] == cases[c["case_id"]][0], "fixed_case_selector" if ingress else "fixed_collected_case")
+        if ingress:
+            if c["outcome"] == "failure":
+                _fields(c["error"], {"type", "message"})
+                _need(all(type(v) is str and len(v) <= 4096 for v in c["error"].values())
+                      and data("failure.json") == c["error"], "pinned_typed_collection_failure")
+                result["collection_completed"] = False
+            else:
+                _need(c["outcome"] == "collected" and c["error"] is None
+                      and artifacts["failure.json"] is None, "fixed_collected_case")
+                result["collection_completed"] = True
+        else:
+            _need(c["outcome"] == "collected" and c["error"] is None, "fixed_collected_case")
+            _need(artifacts["failure.json"] is None, "retained_collection_failure")
         _need(_hash(c["attempt_ref"], 32) and _hash(c["source_revision"], 40)
               and _hash(c["session_ref"], 32)
               and _uint(c["started_ns"]) and _uint(c["finished_ns"])
@@ -174,6 +202,8 @@ def evaluate_native_close_receipts(artifacts, *, expected):
                       and type(v) is str and len(v) <= 1024 and "\x00" not in v for k, v in env.items())
               and env.get("AZAZEL_LIVE_ORIGIN_ACCOUNTING") == env.get("AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS") == "v1"
               and env.get("AZAZEL_EVENT_STDOUT") == "off" and env.get("AZAZEL_EVE_FROM_START") == "0", "registered_receipts_profile")
+        if ingress:
+            _need(env.get("AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING") == "v1", "registered_ingress_profile")
         _need(type(r["binary_path"]) is str and r["binary_path"].startswith("/")
               and len(r["binary_path"]) <= 1024 and "\x00" not in r["binary_path"]
               and all(part not in ("", ".", "..") for part in r["binary_path"].split("/")[1:])
@@ -249,9 +279,9 @@ def evaluate_native_close_receipts(artifacts, *, expected):
               and starts[0]["capture_lifecycle"].get("accounting_profile") == "v1", "counted_native_profile_required")
         activity = [e for e in rows if e["capture_origin"]["kind"] in ("decision_execution", "release")]
         actual_sids = [e["normalized"]["sid"] for e in activity if "normalized" in e]
-        wanted = ([90121007] if case == "interrupted-restart-refused" else [90122002]) if refusal else CASES[case][1]
-        _need(actual_sids == wanted and all(type(v) is int for v in actual_sids)
-              and len(activity) == len(actual_sids), "actual_challenge_activity")
+        wanted = ([90121007] if case == "interrupted-restart-refused" else [90122002]) if refusal else cases[case][1]
+        _need((wanted is None or actual_sids == wanted) and all(type(v) is int for v in actual_sids)
+              and (ingress or len(activity) == len(actual_sids)), "actual_challenge_activity")
         if ends:
             _need(len(ends) == 1 and ends[0]["capture_lifecycle"].get("schema_version") == "outcome-live-origin-lifecycle/v2"
                   and ends[0]["capture_lifecycle"].get("accounting_profile") == "v1", "counted_End_required")
@@ -261,6 +291,12 @@ def evaluate_native_close_receipts(artifacts, *, expected):
                   and all(counts[k] == len(activity) for k in ("produced", "admitted", "enqueued", "written"))
                   and counts["dropped"] == counts["inflight"] == 0, "authentic_counter_agreement")
         for event in activity:
+            if ingress and event["capture_origin"]["kind"] == "release":
+                posture = event["enforcement_status"]
+                _need(event.get("ingress_origin") is None and posture["enforce_enabled"] is False
+                      and posture["dry_run"] is True and posture["high_impact_auto"] is False,
+                      "release_not_ingress_decision_and_unchanged_posture")
+                continue
             enforcement, posture = event["enforcement"], event["enforcement_status"]
             _need(enforcement["mode"] in ("disabled", "dry_run", "policy_gated")
                   and enforcement["result"] == ("no_disruptive_action" if enforcement["mode"] == "disabled" else "planned_not_applied")
@@ -324,7 +360,7 @@ def evaluate_native_close_receipts(artifacts, *, expected):
               and report["trust_sha256"] == control["trust_sha256"]
               and _same_object(report["root_stdout"], value["prepared"]), "exclusive_Root_report_binding")
         if not refusal:
-            _need(report["schema_version"] == "outcome-live-close-custody/v1" and report["session_ref"] == control["session_ref"]
+            _need(report["schema_version"] == ("outcome-live-close-custody/v2" if ingress else "outcome-live-close-custody/v1") and report["session_ref"] == control["session_ref"]
                   and _uint(report["core_pid"]) and _uint(report["receiver_pid"]), "Root_live_custody")
         return report
 
@@ -398,7 +434,7 @@ def evaluate_native_close_receipts(artifacts, *, expected):
 
     def waits():
         _need(actors is not None and type(parent["receiver_wait_timed_out"]) is bool, "actual_parent_waits")
-        child_stream("native", 1024)
+        child_stream("native", native_limit)
         child_stream("receiver", 4096)
         for key in ("core_returncode", "receiver_returncode"):
             _need(type(parent[key]) is int and -(2**31) <= parent[key] < 2**31, "actual_raw_returncode")
@@ -408,14 +444,16 @@ def evaluate_native_close_receipts(artifacts, *, expected):
     check("child_waits", waits) if not refusal else None
 
     def native_report():
-        body = child_stream("native", 1024)
-        value = _decode(body, 1024, lf=True)
-        _fields(value, NATIVE)
-        _need(value["schema_version"] == "outcome-native-close-receipt/v1"
+        body = child_stream("native", native_limit)
+        value = _decode(body, native_limit, lf=True)
+        _fields(value, NATIVE | {"ingress"} if ingress else NATIVE)
+        _need(value["schema_version"] == ("outcome-native-close-receipt/v2" if ingress else "outcome-native-close-receipt/v1")
               and value["session_ref"] == control["session_ref"]
               and type(value["native_pid"]) is int and value["native_pid"] == actors["native"]["pid"]
               and type(value["local_worker_ack_observed"]) is bool, "actual_native_report")
         result["native_local_worker_ack_observed"] = value["local_worker_ack_observed"]
+        if ingress:
+            result["native_ingress"] = value["ingress"]
     check("native_report", native_report) if not refusal else None
 
     def receiver_report():
@@ -513,7 +551,7 @@ def evaluate_native_close_receipts(artifacts, *, expected):
     check("managed_refusal", managed_refusal) if refusal else None
 
     common = ("trust", "source_before", "source_after", "context", "registration", "store_snapshots", "selected_session", "manager", "root_output")
-    if all_supplied_pins_valid and all(legs.get(k) is True for k in common):
+    if all_supplied_pins_valid and (not ingress or result["collection_completed"] is True) and all(legs.get(k) is True for k in common):
         if refusal and legs.get("managed_refusal") is True:
             result["status"] = "bound_prelaunch_refusal"
         elif not refusal and all(legs.get(k) is True for k in ("live_custody", "child_waits", "readback", "witness")):
@@ -522,16 +560,16 @@ def evaluate_native_close_receipts(artifacts, *, expected):
                            and invocation["active_state"] == "inactive" and invocation["result"] == "success"
                            and parent["receiver_wait_timed_out"] is False)
             complete_reports = legs.get("native_report") is True and result["native_local_worker_ack_observed"] is True and legs.get("receiver_report") is True
-            if case in ("normal-four", "restart-one") and normal_exit and complete_reports and result["witness_covers_selected_end"] is True:
+            if (cases[case][0] == "normal_stop" if ingress else case in ("normal-four", "restart-one")) and normal_exit and complete_reports and result["witness_covers_selected_end"] is True:
                 result["status"] = "bound_finite_close"
             elif case == "witness-stopped-close" and normal_exit and complete_reports and result["witness_covers_selected_end"] is False:
                 result["status"] = "bound_partial_close"
-            elif (case == "interrupted-prefix" and result["native_returncode"] == -9
+            elif ((case == "ingress-native-killed" if ingress else case == "interrupted-prefix") and result["native_returncode"] == -9
                   and result["selected_end_present"] is False and parent["receiver_wait_timed_out"] is False
                   and invocation["exec_main_code"] == 1 and invocation["exec_main_status"] == 1
                   and invocation["active_state"] == "failed" and invocation["result"] == "exit-code"):
                 result["status"] = "bound_partial_close"
-            elif (case == "receiver-killed-prefix" and result["receiver_returncode"] == -9
+            elif ((case == "ingress-receiver-killed" if ingress else case == "receiver-killed-prefix") and result["receiver_returncode"] == -9
                   and result["selected_end_present"] is False and parent["receiver_wait_timed_out"] is False
                   and invocation["exec_main_code"] == 1 and invocation["exec_main_status"] == 1
                   and invocation["active_state"] == "failed" and invocation["result"] == "exit-code"):

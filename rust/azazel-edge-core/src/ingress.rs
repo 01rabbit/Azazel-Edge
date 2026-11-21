@@ -37,6 +37,7 @@
 //! there is no environment variable to raise or disable them.
 
 use serde_json::{json, Value};
+use crate::audit_chain::{Sha256, sha256_hex};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -248,6 +249,87 @@ impl Pending {
     }
 }
 
+/// Actual complete raw line, borrowed only for the existing callback.
+#[derive(Clone, Copy)]
+pub struct IngressSpan<'a> {
+    pub device:u64, pub inode:u64, pub start_offset:u64, pub end_offset:u64,
+    pub raw:&'a [u8],
+}
+#[derive(Debug, Clone, Default)]
+struct FiniteCounts {
+    polls:u64, examined:u64, admitted:u64, alerts_admitted:u64, shed:[u64;5],
+    shed_rate:u64, shed_backlog:u64, oversized_started:u64, oversized_possible_alerts:u64,
+    file_replacements:u64, truncation_resets:u64, unread_bytes_lost_observed:u64,
+    normalized_decisions:u64,
+}
+const FINITE_MAX:u64=(1u64<<63)-1;
+fn finite_add(target:&mut u64, n:u64)->Result<(),()> {
+    *target=target.checked_add(n).filter(|v| *v<=FINITE_MAX).ok_or(())?; Ok(())
+}
+#[derive(Debug)]
+struct FiniteIngress {
+    range_ref:String, identity:Option<(u64,u64)>, start:u64, bytes:u64,
+    hash:Sha256, reason:Option<&'static str>, counts:Option<FiniteCounts>,
+    tail:Option<Value>, last_stop:Option<PollStop>,
+}
+impl FiniteIngress {
+    fn invalidate(&mut self, reason:&'static str) { if self.reason.is_none() { self.reason=Some(reason); } }
+    fn arithmetic_fault(&mut self, reason:&'static str) { self.invalidate(reason); self.counts=None; }
+    fn consume(&mut self, raw:&[u8]) {
+        if finite_add(&mut self.bytes,raw.len() as u64).is_err() { self.invalidate("hash_overflow"); return; }
+        if self.hash.update(raw).is_err() { self.invalidate("hash_overflow"); }
+    }
+    fn reset(&mut self,replaced:bool,lost:u64) {
+        self.invalidate(if replaced {"identity_changed"} else {"truncation_observed"});
+        if let Some(c)=self.counts.as_mut() {
+            let target=if replaced {&mut c.file_replacements} else {&mut c.truncation_resets};
+            if finite_add(target,1).and_then(|_|finite_add(&mut c.unread_bytes_lost_observed,lost)).is_err() {
+                self.arithmetic_fault("counter_overflow");
+            }
+        }
+    }
+    fn fold(&mut self,r:&PollReport, normalized:u64, possible:u64) {
+        self.last_stop=r.stop;
+        if r.stop==Some(PollStop::NoFile) {self.invalidate("io_error");}
+        let Some(mut c)=self.counts.clone() else {return;};
+        let result=(||->Result<(),()> {
+            finite_add(&mut c.polls,1)?; finite_add(&mut c.examined,r.examined)?;
+            finite_add(&mut c.admitted,r.admitted)?; finite_add(&mut c.alerts_admitted,r.alerts_admitted)?;
+            finite_add(&mut c.shed_rate,r.shed_rate)?; finite_add(&mut c.shed_backlog,r.shed_backlog)?;
+            finite_add(&mut c.oversized_started,r.oversized)?; finite_add(&mut c.oversized_possible_alerts,possible)?;
+            finite_add(&mut c.normalized_decisions,normalized)?;
+            for (to,from) in c.shed.iter_mut().zip(r.shed) {finite_add(to,from)?;}
+            Ok(())
+        })();
+        if result.is_err() {self.arithmetic_fault("counter_overflow"); return;}
+        let shed=c.shed.iter().try_fold(0u64,|a,n|a.checked_add(*n));
+        if shed.and_then(|n| c.examined.checked_sub(c.admitted)?.checked_sub(n)?.checked_sub(c.oversized_started)).is_none()
+            || c.admitted.checked_sub(c.normalized_decisions).is_none() {
+            self.arithmetic_fault("invariant_failure");return;
+        }
+        self.counts=Some(c);
+    }
+    fn snapshot(&self,end:u64,len:u64,skipping:bool)->Value {
+        let counts=self.counts.as_ref().map(|c| {
+            let shed:u64=c.shed.iter().sum();
+            json!({"polls":c.polls,"examined":c.examined,"admitted":c.admitted,"alerts_admitted":c.alerts_admitted,
+                "shed_by_type":{"flow":c.shed[0],"dns":c.shed[1],"stats":c.shed[2],"other":c.shed[3],"unparseable":c.shed[4]},
+                "shed_rate":c.shed_rate,"shed_backlog":c.shed_backlog,"oversized_started":c.oversized_started,
+                "oversized_possible_alerts":c.oversized_possible_alerts,"file_replacements":c.file_replacements,
+                "truncation_resets":c.truncation_resets,"unread_bytes_lost_observed":c.unread_bytes_lost_observed,
+                "normalized_decisions":c.normalized_decisions,"blank":c.examined-c.admitted-shed-c.oversized_started,
+                "admitted_without_source":c.admitted-c.normalized_decisions})
+        });
+        json!({"schema_version":"azazel-edge/finite-ingress/v1","range_ref":self.range_ref,
+            "measurement_valid":self.reason.is_none(),"invalid_reason":self.reason,
+            "input_identity":self.identity.map(|(device,inode)|json!({"device":device,"inode":inode})),
+            "start_offset":self.start,"committed_end_offset":end,"last_observed_length":len,
+            "committed_bytes":self.bytes,"committed_sha256":if self.reason.is_none() {Some(self.hash.hex())} else {None},
+            "last_stop":self.last_stop.map(|s|format!("{:?}",s)),"unfinished_tail":self.tail,
+            "oversized_in_progress":skipping,"counts":counts})
+    }
+}
+
 #[derive(Debug)]
 pub struct IngressReader {
     pub offset: u64,
@@ -267,6 +349,7 @@ pub struct IngressReader {
     cumulative_resets: u64,
     /// The last interval was written at shutdown; nothing more is emitted.
     shutdown_flushed: bool,
+    finite:Option<FiniteIngress>,
 }
 
 const ALERT_MARKER: &[u8] = b"\"event_type\":\"alert\"";
@@ -293,8 +376,20 @@ impl IngressReader {
             cumulative_alert_backlog_polls: 0,
             cumulative_resets: 0,
             shutdown_flushed: false,
+            finite:None,
         }
     }
+
+    pub fn enable_finite(&mut self, session:&str, metadata:Option<&fs::Metadata>) {
+        let identity=metadata.map(|m|(m.dev(),m.ino()));
+        self.finite=Some(FiniteIngress {range_ref:session.to_string(),identity,start:self.offset,bytes:0,
+            hash:Sha256::new(),reason:if metadata.is_some() {None} else {Some("initial_metadata_unavailable")},
+            counts:Some(FiniteCounts::default()),tail:None,last_stop:None});
+    }
+    pub fn finite_snapshot(&self)->Option<Value> { self.finite.as_ref().map(|f|f.snapshot(self.offset,self.last_len,self.skipping)) }
+    fn committed(&mut self,raw:&[u8]) {if let Some(f)=self.finite.as_mut() {f.consume(raw);}}
+    // Finite polls count every attempted call; legacy Pending still counts only its original completed polls.
+    fn finite_io_error(&mut self,report:&PollReport) {if let Some(f)=self.finite.as_mut() {f.fold(report,0,0);}}
 
     fn refill(&mut self, now: Instant) {
         let cap = self.limits.non_alert_burst as f64;
@@ -314,6 +409,7 @@ impl IngressReader {
         } else {
             self.pending.truncation_resets += 1;
         }
+        if let Some(f)=self.finite.as_mut() {f.reset(replaced,self.last_len.saturating_sub(self.offset));}
         self.cumulative_resets += 1;
         self.pending.unread_bytes_lost += self.last_len.saturating_sub(self.offset);
         self.offset = 0;
@@ -331,14 +427,21 @@ impl IngressReader {
 
     /// Read at most one poll's worth of the EVE file at `path`, handing each
     /// admitted, parseable line to `decide`. Returns what was done.
-    pub fn poll<F: FnMut(&Value)>(&mut self, path: &Path, now: Instant, mut decide: F) -> PollReport {
+    pub fn poll<F: FnMut(&Value)>(&mut self,path:&Path,now:Instant,mut decide:F)->PollReport {
+        self.poll_with_span(path,now,|value,_|{decide(value);false})
+    }
+    pub fn poll_with_span<F: FnMut(&Value,IngressSpan<'_>)->bool>(&mut self,path:&Path,now:Instant,mut decide:F)->PollReport {
         let started = Instant::now();
         let mut report = PollReport::default();
+        let mut normalized=0u64;
+        let mut possible=0u64;
+        if let Some(f)=self.finite.as_mut() {f.tail=None;}
         self.refill(now);
         let file = match File::open(path) {
             Ok(f) => f,
             Err(_) => {
                 report.stop = Some(PollStop::NoFile);
+                self.finite_io_error(&report);
                 return report;
             }
         };
@@ -346,11 +449,16 @@ impl IngressReader {
             Ok(m) => m,
             Err(_) => {
                 report.stop = Some(PollStop::NoFile);
+                self.finite_io_error(&report);
                 return report;
             }
         };
         let len = meta.len();
         let id = (meta.dev(), meta.ino());
+        // Measurement provenance cannot initialize or change the legacy reader's rotation state.
+        if let Some(f)=self.finite.as_mut() {
+            if f.identity.is_some_and(|initial|initial!=id) {f.invalidate("identity_changed");}
+        }
         match self.inode {
             Some(old) if old != id => self.restart(true),
             _ if self.offset > len => self.restart(false),
@@ -366,6 +474,7 @@ impl IngressReader {
         let mut reader = BufReader::new(file);
         if reader.seek(SeekFrom::Start(self.offset)).is_err() {
             report.stop = Some(PollStop::NoFile);
+            self.finite_io_error(&report);
             return report;
         }
 
@@ -395,6 +504,7 @@ impl IngressReader {
                     },
                     Err(_) => break PollStop::NoFile,
                 };
+                if let Ok(bytes)=reader.fill_buf() {self.committed(&bytes[..used]);}
                 reader.consume(used);
                 self.offset += used as u64;
                 skipped_bytes += used as u64;
@@ -413,19 +523,24 @@ impl IngressReader {
             }
             if buf.last() != Some(&b'\n') {
                 if (n as u64) <= max_line {
-                    // Still being written: leave it, offset unchanged.
+                    // Observation only: a repeated partial read is never consumed twice.
+                    if let Some(f)=self.finite.as_mut() {f.tail=Some(json!({"start_offset":self.offset,"observed_bytes":n,"raw_sha256":sha256_hex(&buf)}));}
                     break PollStop::PartialLine;
                 }
                 // Longer than any line we read: skip it, count it.
+                self.committed(&buf);
                 self.offset += n as u64;
                 self.skipping = true;
                 report.examined += 1;
                 report.oversized += 1;
                 if contains(&buf, ALERT_MARKER) {
                     self.pending.oversized_possible_alerts += 1;
+                    possible+=1;
                 }
                 continue;
             }
+            let start_offset=self.offset;
+            self.committed(&buf);
             self.offset += n as u64;
             let text = String::from_utf8_lossy(&buf);
             let text = text.trim();
@@ -439,7 +554,7 @@ impl IngressReader {
                     report.admitted += 1;
                     report.alerts_admitted += 1;
                     if let Some(v) = parsed.as_ref() {
-                        decide(v);
+                        if decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf}) {normalized+=1;}
                     }
                 }
                 Some(class) => {
@@ -449,7 +564,7 @@ impl IngressReader {
                         self.tokens -= 1.0;
                         report.admitted += 1;
                         if let Some(v) = parsed.as_ref() {
-                            decide(v);
+                            if decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf}) {normalized+=1;}
                         }
                     } else {
                         self.shed(&mut report, class, false);
@@ -460,6 +575,7 @@ impl IngressReader {
         report.stop = Some(stop);
         report.backlog_after = len.saturating_sub(self.offset);
 
+        if let Some(f)=self.finite.as_mut() {f.fold(&report,normalized,possible);}
         let p = &mut self.pending;
         p.polls += 1;
         p.admitted += report.admitted;
@@ -1498,4 +1614,110 @@ mod tests {
         assert_eq!(q["audit_log_cap_bytes"].as_u64(), Some(d.audit_log_cap_bytes));
         assert_eq!(q["status"], "provisional");
     }
+    fn finite_reader(path:&Path,limits:IngressLimits)->IngressReader {
+        File::create(path).unwrap();let metadata=fs::metadata(path).unwrap();
+        let mut r=IngressReader::new(0,limits);r.enable_finite(&"a".repeat(32),Some(&metadata));r
+    }
+    #[test]
+    fn finite_reuses_counts_and_raw_spans_without_equating_admitted_to_decisions() {
+        let path=temp_path("finite-mixed");let mut r=finite_reader(&path,open_limits());
+        let alert=line("alert",7);
+        let body=format!("\n{{bad}}\n{}{}{{\"event_type\":\"alert\"}}\n{}",line("flow",1),alert,alert);
+        write_bytes(&path,body.as_bytes());let mut spans=Vec::new();
+        r.poll_with_span(&path,Instant::now(),|v,span| {
+            let decision=v["event_type"]=="alert" && v["alert"].is_object();
+            if decision {spans.push((span.start_offset,span.end_offset,sha256_hex(span.raw)));}decision
+        });
+        let snapshot=r.finite_snapshot().unwrap();let c=&snapshot["counts"];
+        assert_eq!(c["examined"],6);assert_eq!(c["admitted"],5);assert_eq!(c["normalized_decisions"],2);
+        assert_eq!(c["blank"],1);assert_eq!(c["admitted_without_source"],3);
+        assert_eq!(snapshot["committed_sha256"],sha256_hex(body.as_bytes()));
+        assert_eq!(spans.len(),2);assert_ne!(spans[0].0,spans[1].0);assert_eq!(spans[0].2,spans[1].2);
+        let before=snapshot.clone();r.shutdown_records(Instant::now(),1.0);
+        assert_eq!(r.finite_snapshot().unwrap(),before);fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn finite_partial_rereads_never_duplicate_committed_hash() {
+        let path=temp_path("finite-tail");let mut r=finite_reader(&path,open_limits());
+        let raw=line("alert",1);let partial=&raw.as_bytes()[..raw.len()-1];write_bytes(&path,partial);
+        for _ in 0..2 {r.poll_with_span(&path,Instant::now(),|_,_|panic!("partial was decided"));}
+        let snapshot=r.finite_snapshot().unwrap();assert_eq!(snapshot["committed_bytes"],0);
+        assert_eq!(snapshot["committed_sha256"],sha256_hex(b""));
+        assert_eq!(snapshot["unfinished_tail"]["raw_sha256"],sha256_hex(partial));
+        write_bytes(&path,b"\n");r.poll_with_span(&path,Instant::now(),|_,_|true);
+        let snapshot=r.finite_snapshot().unwrap();assert_eq!(snapshot["counts"]["normalized_decisions"],1);
+        assert_eq!(snapshot["committed_sha256"],sha256_hex(raw.as_bytes()));assert!(snapshot["unfinished_tail"].is_null());
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn finite_oversized_continuation_hashes_each_committed_byte_once() {
+        let path=temp_path("finite-oversize");let mut r=finite_reader(&path,IngressLimits {max_line_bytes:20,..open_limits()});
+        let mut body=vec![b'x';200];write_bytes(&path,&body);
+        r.poll_with_span(&path,Instant::now(),|_,_|false);
+        assert_eq!(r.finite_snapshot().unwrap()["oversized_in_progress"],true);
+        let suffix=b"\n{\"event_type\":\"x\"}\n";body.extend_from_slice(suffix);write_bytes(&path,suffix);
+        r.poll_with_span(&path,Instant::now(),|_,_|false);
+        let snapshot=r.finite_snapshot().unwrap();assert_eq!(snapshot["committed_sha256"],sha256_hex(&body));
+        assert_eq!(snapshot["counts"]["oversized_started"],1);assert_eq!(snapshot["counts"]["examined"],2);
+        assert_eq!(snapshot["oversized_in_progress"],false);fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn finite_reset_retains_observed_counts_but_refuses_contiguous_hash() {
+        for replaced in [false,true] {
+            let path=temp_path("finite-reset");let mut r=finite_reader(&path,open_limits());
+            write_bytes(&path,line("alert",1).as_bytes());r.poll_with_span(&path,Instant::now(),|_,_|true);
+            let old=path.with_extension("old");
+            if replaced {fs::rename(&path,&old).unwrap();}
+            fs::write(&path,b"\n").unwrap();r.poll_with_span(&path,Instant::now(),|_,_|false);
+            let snapshot=r.finite_snapshot().unwrap();assert_eq!(snapshot["measurement_valid"],false);
+            assert!(snapshot["committed_sha256"].is_null());assert_eq!(snapshot["counts"]["normalized_decisions"],1);
+            assert_eq!(snapshot["invalid_reason"],if replaced {"identity_changed"} else {"truncation_observed"});
+            fs::remove_file(path).unwrap();if replaced {fs::remove_file(old).unwrap();}
+        }
+    }
+    #[test]
+    fn finite_checked_overflow_and_missing_initial_metadata_never_change_callbacks() {
+        let path=temp_path("finite-overflow");let mut r=finite_reader(&path,open_limits());
+        r.finite.as_mut().unwrap().counts.as_mut().unwrap().examined=FINITE_MAX;
+        write_bytes(&path,line("alert",1).as_bytes());let mut called=0;
+        r.poll_with_span(&path,Instant::now(),|_,_|{called+=1;true});assert_eq!(called,1);
+        let snapshot=r.finite_snapshot().unwrap();assert!(snapshot["counts"].is_null());
+        assert_eq!(snapshot["invalid_reason"],"counter_overflow");
+        let mut r=IngressReader::new(0,open_limits());r.enable_finite(&"b".repeat(32),None);
+        r.poll_with_span(&path,Instant::now(),|_,_|true);
+        assert_eq!(r.finite_snapshot().unwrap()["invalid_reason"],"initial_metadata_unavailable");fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn finite_startup_identity_and_nonzero_frontier_are_not_reconstructed_later() {
+        let path=temp_path("finite-initial");write_bytes(&path,b"old excluded data\n");
+        let metadata=fs::metadata(&path).unwrap();let mut r=IngressReader::new(metadata.len(),open_limits());
+        r.enable_finite(&"a".repeat(32),Some(&metadata));let alert=line("alert",1);write_bytes(&path,alert.as_bytes());
+        r.poll_with_span(&path,Instant::now(),|_,span| {assert_eq!(span.start_offset,metadata.len());true});
+        let snapshot=r.finite_snapshot().unwrap();assert_eq!(snapshot["start_offset"],metadata.len());
+        assert_eq!(snapshot["committed_bytes"],alert.len());assert_eq!(snapshot["committed_sha256"],sha256_hex(alert.as_bytes()));
+        fs::remove_file(&path).unwrap();
+
+    }
+
+    #[test]
+    fn finite_first_open_replacement_is_observation_only_and_preserves_legacy_processing() {
+        let path=temp_path("finite-legacy-first-open");fs::write(&path,line("alert",1)).unwrap();
+        let metadata=fs::metadata(&path).unwrap();let old=path.with_extension("old");fs::rename(&path,&old).unwrap();
+        fs::write(&path,format!("{}{}",line("alert",2),line("alert",3))).unwrap();
+        let mut legacy=IngressReader::new(metadata.len(),open_limits());
+        let mut finite=IngressReader::new(metadata.len(),open_limits());finite.enable_finite(&"b".repeat(32),Some(&metadata));
+        let mut original=Vec::new();let mut measured=Vec::new();let now=Instant::now();
+        let expected=legacy.poll(&path,now,|v|original.push(sig(v)));
+        let actual=finite.poll_with_span(&path,now,|v,_|{measured.push(sig(v));true});
+        assert_eq!(original,vec![3]);assert_eq!(measured,original);assert_eq!(actual,expected);
+        assert_eq!(finite.offset,legacy.offset);assert_eq!(finite.pending.file_replacements,legacy.pending.file_replacements);
+        assert_eq!(finite.finite_snapshot().unwrap()["invalid_reason"],"identity_changed");
+        fs::remove_file(&path).unwrap();
+        for _ in 0..2 {finite.poll_with_span(&path,Instant::now(),|_,_|panic!("missing input callback"));}
+        let snapshot=finite.finite_snapshot().unwrap();assert_eq!(snapshot["counts"]["polls"],3);
+        assert_eq!(snapshot["last_stop"],"NoFile");assert_eq!(finite.pending.polls,1);
+        fs::remove_file(old).unwrap();
+    }
+
 }

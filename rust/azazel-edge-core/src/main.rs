@@ -1549,15 +1549,19 @@ fn core_event(normalized: &NormalizedEvent, decision: &DefensiveDecision, enforc
 
 /// Decide one EVE record the ingress reader admitted.
 fn process_value(cfg: &Config, parsed: &Value) {
+    let _=process_value_with_span(cfg,parsed,None);
+}
+fn process_value_with_span(cfg:&Config,parsed:&Value,span:Option<ingress::IngressSpan<'_>>)->bool {
     let normalized = match build_normalized_event(parsed) {
         Some(ev) => ev,
-        None => return,
+        None => return false,
     };
 
     let decision = decide_defense(&normalized);
     let enforcement = maybe_enforce(&normalized, &decision, cfg);
     let event = core_event(&normalized, &decision, &enforcement, cfg);
-    live_origin::record("decision_execution", &event);
+    if let Some(span)=span {live_origin::record_with_span(&event,span);}
+    else {live_origin::record("decision_execution", &event);}
     if enforcement_evidence_due(&enforcement, cfg) {
         spool_enforcement_evidence(cfg, &event);
     }
@@ -1570,6 +1574,7 @@ fn process_value(cfg: &Config, parsed: &Value) {
     }
 
     print_event(cfg.event_stdout, &event);
+    true
 }
 
 fn process_release_events(cfg: &Config) {
@@ -1818,7 +1823,9 @@ fn write_ingress_record(cfg: &Config, record: &Value) {
 /// thread (`spawn_release_sweeper`), so neither an alert backlog nor an
 /// apply command waiting on its time bound holds a release back.
 fn poll_iteration(cfg: &Config, ingress: &mut IngressReader) -> PollReport {
-    let report = ingress.poll(Path::new(&cfg.eve_path), Instant::now(), |v| process_value(cfg, v));
+    let report=if live_origin::ingress_session().is_some() {
+        ingress.poll_with_span(Path::new(&cfg.eve_path),Instant::now(),|v,span|process_value_with_span(cfg,v,Some(span)))
+    } else {ingress.poll(Path::new(&cfg.eve_path),Instant::now(),|v|process_value(cfg,v))};
     for record in ingress.audit_records(Instant::now(), now_epoch()) {
         emit_ingress_record(cfg, &record);
     }
@@ -2087,7 +2094,8 @@ fn main() {
         let _ = fs::create_dir_all(parent);
     }
 
-    let offset = if cfg.from_start { 0 } else { fs::metadata(&cfg.eve_path).map(|m| m.len()).unwrap_or(0) };
+    let startup_metadata=if cfg.from_start {None} else {fs::metadata(&cfg.eve_path).ok()};
+    let offset=startup_metadata.as_ref().map(|m|m.len()).unwrap_or(0);
 
     eprintln!(
         "azazel-edge-core started: eve_path={}, ai_socket={}, from_start={}, poll_ms={}, defense_enforce={}, defense_dry_run={}, defense_enforce_level={}, high_impact_auto={}, defense_iface={}, honeypot_port={}, release_ledger={}, ingress_non_alert_per_sec={}, ingress_alerts_per_poll={}",
@@ -2135,6 +2143,7 @@ fn main() {
     }
     let mut reporter = ForwardReporter::new();
     let mut ingress = IngressReader::new(offset, IngressLimits::DECLARED);
+    if let Some(session)=live_origin::ingress_session() {ingress.enable_finite(session,startup_metadata.as_ref());}
     stop_signal::install();
     let sweeper = spawn_release_sweeper(cfg.clone(), stop_signal::requested);
     while !stop_signal::requested() {
@@ -2166,7 +2175,8 @@ fn main() {
         }
     }
     let _ = sweeper.join();
-    live_origin::finish();
+    if live_origin::ingress_session().is_some() {live_origin::finish_with_ingress(ingress.finite_snapshot());}
+    else {live_origin::finish();}
     eprintln!("azazel-edge-core stopping: {} ingress summary record(s) written for the last interval", written);
 }
 

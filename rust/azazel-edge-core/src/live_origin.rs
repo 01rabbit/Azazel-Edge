@@ -65,6 +65,7 @@ struct Capture {
     shutdown: UnixStream,
     session: String,
     close_receipts: bool,
+    ingress_accounting: bool,
     receipt_attempted: AtomicBool,
 }
 struct Admission<'a>(&'a AtomicU64);
@@ -210,7 +211,7 @@ fn start_profile(mut stream: UnixStream, session: String, accounting: bool) -> i
         }
         let _ = stream.shutdown(Shutdown::Both);
     });
-    Ok(Capture { tx, failed, gate, counts, shutdown, session: capture_session, close_receipts: false, receipt_attempted: AtomicBool::new(false) })
+    Ok(Capture { tx, failed, gate, counts, shutdown, session: capture_session, close_receipts: false, ingress_accounting: false, receipt_attempted: AtomicBool::new(false) })
 }
 
 /// Only a supervising trusted launcher supplies the private connected fd.
@@ -245,13 +246,37 @@ pub fn install(args: &[String]) -> Result<(), String> {
             && std::env::var("AZAZEL_EVENT_STDOUT").as_deref() == Ok("off") => true,
         _ => return Err("live origin close receipt profile refused".into()),
     };
+    let ingress_accounting=match std::env::var("AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING") {
+        Err(std::env::VarError::NotPresent)=>false,
+        Ok(value) if value=="v1" && accounting && close_receipts=>true,
+        _=>return Err("live origin ingress accounting profile refused".into()),
+    };
     if close_receipts { prepare_receipt_stdout()?; }
     let mut capture = start_profile(stream, args[4].clone(), accounting).map_err(|_| "live origin unavailable")?;
     capture.close_receipts = close_receipts;
+    capture.ingress_accounting=ingress_accounting;
     CAPTURE.set(capture).map_err(|_| "live origin already configured".into())
 }
 pub fn record(kind: &'static str, event: &Value) {
     if let Some(capture) = CAPTURE.get() { capture.record(kind, event); }
+}
+pub fn ingress_session()->Option<&'static str> {
+    CAPTURE.get().filter(|c|c.ingress_accounting).map(|c|c.session.as_str())
+}
+fn ingress_event(event:&Value,session:&str,span:crate::ingress::IngressSpan<'_>)->Value {
+    let mut copy=event.clone();
+    copy["ingress_origin"]=json!({"schema_version":"azazel-edge/ingress-origin/v1","range_ref":session,
+        "device":span.device,"inode":span.inode,"start_offset":span.start_offset,
+        "end_offset":span.end_offset,"raw_sha256":crate::audit_chain::sha256_hex(span.raw)});
+    copy
+}
+pub fn record_with_span(event:&Value,span:crate::ingress::IngressSpan<'_>) {
+    if let Some(capture)=CAPTURE.get() {
+        if capture.ingress_accounting {
+            let copy=ingress_event(event,&capture.session,span);
+            capture.record("decision_execution",&copy);
+        } else {capture.record("decision_execution",event);}
+    }
 }
 fn prepare_receipt_stdout() -> Result<(), String> {
     let metadata = std::fs::metadata("/dev/fd/1").map_err(|_| "close receipt stdout missing")?;
@@ -277,13 +302,22 @@ fn close_receipt(session: &str, acknowledged: bool) -> Vec<u8> {
     bytes.push(b'\n');
     bytes
 }
-pub fn finish() {
+fn close_receipt_v2(session:&str,acknowledged:bool,ingress:Value)->Vec<u8> {
+    let mut bytes=serde_json::to_vec(&json!({"schema_version":"outcome-native-close-receipt/v2",
+        "session_ref":session,"native_pid":std::process::id(),
+        "local_worker_ack_observed":acknowledged,"ingress":ingress})).unwrap_or_default();
+    bytes.push(b'\n');bytes
+}
+pub fn finish() {finish_with_ingress(None);}
+pub fn finish_with_ingress(ingress:Option<Value>) {
     if let Some(capture) = CAPTURE.get() {
         let report = capture.close_receipts && !capture.receipt_attempted.swap(true, Ordering::SeqCst);
         let acknowledged = capture.finish();
         if report {
-            let bytes = close_receipt(&capture.session, acknowledged);
-            if bytes.len() <= 1024 {
+            let bytes=if capture.ingress_accounting {
+                close_receipt_v2(&capture.session,acknowledged,ingress.unwrap_or(Value::Null))
+            } else {close_receipt(&capture.session, acknowledged)};
+            if bytes.len() <= if capture.ingress_accounting {4096} else {1024} {
                 extern "C" { fn write(fd: i32, bytes: *const u8, count: usize) -> isize; }
                 // One nonblocking attempt, never stdout locks/retries or process failure.
                 let _ = unsafe { write(1, bytes.as_ptr(), bytes.len()) };
@@ -394,7 +428,7 @@ mod tests {
         let (tx, rx) = sync_channel(capacity);
         (Capture { tx, shutdown, failed:Arc::new(AtomicBool::new(false)),
             gate:Arc::new(AtomicU64::new(0)), counts:Arc::new(Counts::default()),
-            session:"a".repeat(32), close_receipts:false, receipt_attempted:AtomicBool::new(false) }, rx, recv)
+            session:"a".repeat(32), close_receipts:false, ingress_accounting:false, receipt_attempted:AtomicBool::new(false) }, rx, recv)
     }
     #[test]
     fn deterministic_queue_full_and_checked_overflow_leave_no_terminal() {
@@ -514,6 +548,30 @@ mod tests {
             assert_eq!(value["native_pid"], std::process::id());
             assert_eq!(value["session_ref"], "a".repeat(32));
         }
+    }
+
+    #[test]
+    fn finite_origin_changes_only_signed_copy_and_hashes_original_lf_bytes() {
+        let original=json!({"marker":"original core_event"});
+        let raw=b"  {\"event_type\":\"alert\"} \n";
+        let span=crate::ingress::IngressSpan {device:1,inode:2,start_offset:10,end_offset:10+raw.len() as u64,raw};
+        let mut copy=ingress_event(&original,&"a".repeat(32),span);
+        assert_eq!(copy["ingress_origin"]["raw_sha256"],crate::audit_chain::sha256_hex(raw));
+        copy.as_object_mut().unwrap().remove("ingress_origin");assert_eq!(copy,original);
+        assert!(original.get("ingress_origin").is_none());
+    }
+
+    #[test]
+    fn finite_receipt_uses_explicit_v2_and_existing_atomic_pipe_bound() {
+        let mut reader=crate::ingress::IngressReader::new(0,crate::ingress::IngressLimits::DECLARED);
+        reader.enable_finite(&"a".repeat(32),None);let snapshot=reader.finite_snapshot().unwrap();
+        let bytes=close_receipt_v2(&"a".repeat(32),false,snapshot.clone());
+        assert!(bytes.len()<=4096 && bytes.ends_with(b"\n"));
+        let receipt:Value=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(receipt.as_object().unwrap().len(),5);assert_eq!(receipt["ingress"],snapshot);
+        assert_eq!(receipt["schema_version"],"outcome-native-close-receipt/v2");
+        let old:Value=serde_json::from_slice(&close_receipt(&"a".repeat(32),false)).unwrap();
+        assert_eq!(old.as_object().unwrap().len(),4);assert!(old.get("ingress").is_none());
     }
 
 }

@@ -36,7 +36,23 @@ ACTOR_FIELDS = (
 )
 SOURCE_FIELDS = ("device", "inode", "owner_uid", "mode", "nlink")
 CASES = ("normal-four", "restart-one", "interrupted-prefix")
-READBACK_CASES = frozenset((*CASES, "witness-stopped-close", "receiver-killed-prefix"))
+READBACK_CASES = frozenset(
+    (
+        *CASES,
+        "witness-stopped-close",
+        "receiver-killed-prefix",
+        "ingress-mixed",
+        "ingress-partial-tail",
+        "ingress-oversize",
+        "ingress-duplicate-sid",
+        "ingress-backlog-shed",
+        "ingress-rename",
+        "ingress-truncate",
+        "ingress-same-inode-overwrite",
+        "ingress-native-killed",
+        "ingress-receiver-killed",
+    )
+)
 PUBLIC_FILES = frozenset(
     (
         "trust.json",
