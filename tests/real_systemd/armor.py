@@ -143,6 +143,7 @@ def install_policy():
 
 NATIVE = False
 FINITE_INGRESS = None
+FINITE_LOAD_COST = False
 
 
 def configure():
@@ -150,9 +151,11 @@ def configure():
         # Enrolled bytes pin this optional protocol only in the native flavor.
         g.ENV["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] = "v1"
         g.ENV["AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS"] = "v1"
-    if FINITE_INGRESS:
+    if FINITE_INGRESS or FINITE_LOAD_COST:
         g.ENV["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] = "v1"
         g.ENV["AZAZEL_FORWARD_LOG"] = "1" if FINITE_INGRESS == "fault" else "0"
+    if FINITE_LOAD_COST:
+        g.ENV["AZAZEL_LIVE_ORIGIN_LOAD_COST"] = "v1"
     original = g.write
 
     def write(path, data, mode=0o644):
@@ -193,7 +196,17 @@ def configure():
         capture_apparmor_profile="edge400-capture",
         **({"native_apparmor_profile": "edge400-native"} if NATIVE else {}),
     )
-    g.observer = observer
+    if FINITE_LOAD_COST:
+        from finite_load_cost import audit_role
+
+        def load_audit(create=False):
+            status, receipt = audit_role(g, role_command, create)
+            g.record("finite-load-independent-audit", receipt=receipt)
+            return status
+
+        g.observer = load_audit
+    else:
+        g.observer = observer
 
 
 def identities_and_denials():
@@ -463,6 +476,7 @@ def main():
     parser.add_argument("--native-core", action="store_true")
     parser.add_argument("--receipt-fault", choices=["receiver-kill"])
     parser.add_argument("--finite-ingress", choices=["main", "fault"])
+    parser.add_argument("--finite-load-cost", action="store_true")
     args = parser.parse_args()
     if args.receipt_fault and not args.native_core:
         parser.error("receipt fault requires the existing native-core profile")
@@ -470,9 +484,14 @@ def main():
         parser.error(
             "finite ingress requires native-core and its separate fixed variant"
         )
-    global NATIVE, FINITE_INGRESS
+    if args.finite_load_cost and (
+        not args.native_core or args.receipt_fault or args.finite_ingress
+    ):
+        parser.error("finite load requires its separate native-core variant")
+    global NATIVE, FINITE_INGRESS, FINITE_LOAD_COST
     NATIVE = args.native_core
     FINITE_INGRESS = args.finite_ingress
+    FINITE_LOAD_COST = args.finite_load_cost
     g.guard()
     configure()
     if args.phase == "prepare":
@@ -495,7 +514,11 @@ def main():
             root_native_apparmor=NATIVE,
         )
     elif args.phase == "exercise":
-        if FINITE_INGRESS:
+        if FINITE_LOAD_COST:
+            from finite_load_cost import FiniteLoadCostLab
+
+            FiniteLoadCostLab(g, role_command).exercise()
+        elif FINITE_INGRESS:
             from finite_ingress import FiniteIngressLab
 
             FiniteIngressLab(g, role_command, FINITE_INGRESS).exercise()

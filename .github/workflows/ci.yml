@@ -910,7 +910,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [baseline, apparmor, native-apparmor, native-close-fault, finite-ingress, finite-ingress-fault, provider-apparmor, legacy-tc-apparmor]
+        flavor: [baseline, apparmor, native-apparmor, native-close-fault, finite-ingress, finite-ingress-fault, finite-load-cost, provider-apparmor, legacy-tc-apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -961,11 +961,22 @@ jobs:
           if [ '${{ matrix.flavor }}' = native-close-fault ]; then native_args='--native-core --receipt-fault receiver-kill'; fi
           if [ '${{ matrix.flavor }}' = finite-ingress ]; then native_args='--native-core --finite-ingress main'; fi
           if [ '${{ matrix.flavor }}' = finite-ingress-fault ]; then native_args='--native-core --finite-ingress fault'; fi
+          if [ '${{ matrix.flavor }}' = finite-load-cost ]; then native_args='--native-core --finite-load-cost'; fi
           for phase in prepare exercise smoke-finish; do
             sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
               /opt/edge400-runtime/bin/python -I "/opt/edge400-src/tests/real_systemd/$driver" \
               "$phase" --allow-disposable-vm $native_args
           done
+      - name: Collect all finite load cost originals
+        if: always() && matrix.flavor == 'finite-load-cost'
+        run: sudo /usr/bin/python3 -I .github/scripts/collect_finite_load_cost.py
+      - name: Retain finite load cost originals
+        if: always() && matrix.flavor == 'finite-load-cost'
+        uses: actions/upload-artifact@v4
+        with:
+          name: finite-load-cost-originals
+          path: finite-load-cost-public
+          if-no-files-found: error
       - name: Collect all finite ingress public originals
         if: always() && (matrix.flavor == 'finite-ingress' || matrix.flavor == 'finite-ingress-fault')
         run: sudo /usr/bin/python3 -I .github/scripts/collect_finite_ingress.py '${{ matrix.flavor }}'
