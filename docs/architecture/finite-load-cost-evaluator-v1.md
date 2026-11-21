@@ -84,3 +84,8 @@ The Root custody *stream* retains its existing 32 KiB cap, including the startup
 header. Its individual final custody record retains the separate existing
 16 KiB cap enforced by the close verifier. Do not confuse the record bound
 with the enclosing stream bound or truncate a valid startup header to fit it.
+
+An intact aggregate with every phase null still provides no measured cost.
+Each role needs at least one shared nonnull measured phase before its pairwise
+delta can receive a descriptive-measurement status. Otherwise retain its null
+cost and explicit missing-phase reason, while preserving another role's facts.
