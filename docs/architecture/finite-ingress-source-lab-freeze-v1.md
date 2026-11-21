@@ -222,3 +222,30 @@ Resource/clock/rate/load performance and Pi acceptance remain separate. Keep
 5ms/98%/1.2x, disabled/dry-run provider facts and all existing authority flags
 false. Preserve every adverse/unavailable result before another changed-code
 candidate; no profile broadening, privileged observer or scope repair.
+
+## Preparation amendment after first candidate
+
+CI44888983528 at candidate1ffd4ae failed in both new variants before assigning
+the first input case: the existing strict `systemctl reset-failed` returned1.
+Its stderr was not preserved; the historical cause remains UNKNOWN. Inactive
+unit unloading is a possible mechanism, not an established explanation. Both
+trials remain preparation failures, all their assigned input cases NOT_RUN,
+and their public inventories/logs remain preserved without success conversion.
+
+The finite fixture may replace only that one counter-reset adapter with an
+explicit persistent system-bus transaction for the fixed owned lab unit:
+open one existing libsystemd client, set a bounded call timeout, LoadUnit,
+RefUnit, independently recheck loaded/inactive-or-failed/no-core configuration,
+ResetFailedUnit exactly once, UnrefUnit in finally, then close the client.
+The original Source-closed/archive guards run before this adapter. Method
+returns/error names/messages and cleanup errors are recorded boundedly in the
+existing Root lab results. An unavailable method/library or any failed call is
+a failure, never ignored, retried, or replaced by a start. This transaction
+adds no dependency, permission, unit file/property, or StartLimit change.
+The old close fixture retains its original adapter. No Source/input case is
+started until this separate preparation succeeds. The new candidate must be
+reviewed and receive fresh full CI; the original failed trials stay failed.
+
+The manager API and client reference semantics are documented at
+https://www.freedesktop.org/software/systemd/man/256/org.freedesktop.systemd1.html;
+using one connection is necessary for a reference to survive between calls.
