@@ -120,7 +120,9 @@ def _profile():
     )
     return dict(
         protocol_sha256=PROTOCOL_SHA256,
-        cases={arm: ("normal_stop", [s for _, s in MARKERS]) for arm in ARMS},
+        # Authenticate a genuine interrupted prefix too. Exact frozen marker
+        # preimages/spans and the final barrier remain separate finite gates.
+        cases={arm: ("normal_stop", None) for arm in ARMS},
         case_specs={arm: case for arm in ARMS},
         close_profile=dict(
             load_cost=True, protocol_schema="edge-finite-load-cost-protocol/v1"
@@ -245,7 +247,15 @@ def evaluate_finite_load_cost_case(artifacts, *, expected):
         )
         _need(
             bound["legs"].get("context") is True
-            and bound["legs"].get("case_controls") is True,
+            and all(
+                bound["legs"].get(k) is True
+                for k in (
+                    "eve-start.raw",
+                    "eve-after-writer.raw",
+                    "eve-held-final.raw",
+                    "eve-path-final.raw",
+                )
+            ),
             "independent_input_writer_custody",
         )
         observed = original("eve-after-writer.raw")
@@ -263,6 +273,29 @@ def evaluate_finite_load_cost_case(artifacts, *, expected):
         writer = controller["writer"]
         _fields(writer, WRITER)
         original_writer = ic["writer"][0]
+        _need(
+            len(ic["writer"]) == 1
+            and ic["mutation"] is None
+            and original("eve-start.raw") == b""
+            and original("eve-held-final.raw") == observed
+            and original_writer["before"] == ic["held_fd"]["object"]
+            and original_writer["after"]
+            == ic["snapshots"]["eve-after-writer.raw"]["before"]
+            and finite.close._same_object(
+                original_writer["before"], original_writer["after"]
+            )
+            and original_writer["offset_before"]
+            == original_writer["before"]["size"]
+            == 0
+            and original_writer["offset_after"]
+            == original_writer["requested_bytes"]
+            == len(observed)
+            and ic["started_ns"]
+            <= original_writer["started_ns"]
+            <= original_writer["joined_ns"]
+            <= ic["finished_ns"],
+            "complete_actual_writer_generation_and_frontier",
+        )
         shared = set(
             "pid tid fd flags before after started_ns finished_ns joined_ns written_bytes write_calls fsync_completed joined error".split()
         )
@@ -313,8 +346,8 @@ def evaluate_finite_load_cost_case(artifacts, *, expected):
             full >= 9_000_000_000
             and warmup >= 3_000_000_000
             and measurement >= 6_000_000_000
-            and abs(full_rate / 3000 - 1) <= 0.02
-            and abs(measurement_rate / 3000 - 1) <= 0.02
+            and 2940 * full <= 27004 * 1_000_000_000 <= 3060 * full
+            and 2940 * measurement <= 18004 * 1_000_000_000 <= 3060 * measurement
         )
         result["load"] = dict(
             status="qualified" if qualified else "failed",
@@ -396,7 +429,25 @@ def evaluate_finite_load_cost_comparison(cases):
         value = case.get(name)
         return value if type(value) is dict else {}
 
-    hashes = [fact(c, "corpus").get("sha256") for c in cases]
+    _, manifest = materialize_corpus()
+
+    def corpus_valid(case):
+        value = fact(case, "corpus")
+        return (
+            set(value) == {"status", "sha256", "bytes", "nonalert_records", "per_class"}
+            and value["status"] == "verified"
+            and type(value["sha256"]) is str
+            and value["sha256"] == manifest["sha256"]
+            and type(value["bytes"]) is int
+            and value["bytes"] == manifest["bytes"]
+            and type(value["nonalert_records"]) is int
+            and value["nonalert_records"] == 27004
+            and value["per_class"] == manifest["per_class"]
+        )
+
+    hashes = [
+        fact(c, "corpus").get("sha256") if corpus_valid(c) else None for c in cases
+    ]
     if None in hashes or len(set(hashes)) != 1:
         result["reasons"].append("same_actual_corpus_not_established")
     for case in cases:

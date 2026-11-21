@@ -431,3 +431,106 @@ def test_descriptive_differences_preserve_unknown_phases_and_broad_blockers():
         ]
         is None
     )
+
+
+def test_measured_partial_prefix_below_floor_is_adverse_not_missing_zero():
+    a, c, root, ic = fixture()
+    raw, manifest = cost.materialize_corpus()
+    end = manifest["markers"][0]["end_offset"]
+    native = json.loads(a["native-close.raw"])
+    native["ingress"].update(
+        committed_end_offset=end,
+        committed_bytes=end,
+        committed_sha256=digest(raw[:end]),
+        last_stop="WorkTime",
+    )
+    native["ingress"]["counts"].update(
+        examined=9001,
+        admitted=9001,
+        alerts_admitted=1,
+        normalized_decisions=1,
+        admitted_without_source=9000,
+    )
+    a["native-close.raw"] = wire(native)
+    root["native_stream"] = stream(a["native-close.raw"])
+
+    def partial(rows):
+        decisions = [
+            e for e in rows if e["capture_origin"]["kind"] == "decision_execution"
+        ]
+        for e in decisions[1:]:
+            rows.remove(e)
+        for seq, e in enumerate(rows):
+            e["capture_origin"]["seq"] = seq
+            if e["capture_origin"]["kind"] == "session_end":
+                for key in ("admitted", "enqueued", "produced", "written"):
+                    e["capture_lifecycle"]["counts"][key] = 1
+
+    change_source(a, c, root, partial)
+    ic["markers"] = []
+    a["ingress-controller.json"] = wire(ic)
+    r = evaluate(a)
+    assert r["load"]["status"] == "qualified", r["reasons"]
+    assert r["intake"]["status"] == "failed", (
+        r["reasons"],
+        r["finite"]["close"]["reasons"],
+    )
+    assert r["intake"]["examined_nonalert"] == 9000
+    assert r["finite"]["whole_input_complete"] is False
+    assert r["finite"]["source_decisions"] == 1
+    assert r["status"] == "withheld"
+
+
+@pytest.mark.parametrize("bad", [[], {}, None, "f" * 64])
+def test_malformed_nested_corpus_pin_withholds_comparison(bad):
+    a, _, _, _ = fixture()
+    r = evaluate(a)
+    cases = [deepcopy(r) for _ in cost.ARMS]
+    for case, arm in zip(cases, cost.ARMS):
+        case["case_id"] = arm
+    cases[0]["corpus"]["sha256"] = bad
+    result = cost.evaluate_finite_load_cost_comparison(cases)
+    assert "same_actual_corpus_not_established" in result["reasons"]
+    assert all(d["status"] == "withheld" for d in result["differences"])
+
+
+def test_missing_end_does_not_destroy_verified_input_or_authorize_completion():
+    a, _, _, _ = fixture()
+    a["source-after.raw"] = a["source-before.raw"]
+    r = evaluate(a)
+    assert r["finite"]["close"]["selected_end_present"] is False
+    assert r["finite"]["source_decisions"] == 3
+    assert r["finite"]["whole_input_complete"] is not True
+    assert r["status"] == "withheld"
+
+
+def test_wrong_range_session_does_not_join_originals():
+    a, _, _, ic = fixture()
+    ic["session_ref"] = "f" * 32
+    a["ingress-controller.json"] = wire(ic)
+    r = evaluate(a)
+    assert r["load"] is None and r["intake"] is None
+    assert r["finite"]["whole_input_complete"] is not True
+
+
+@pytest.mark.parametrize("fault", ["missing_cpu", "overflow", "absent_phase"])
+def test_new_receipt_cost_failure_keeps_source_without_inventing_measurement(fault):
+    a, c, root, _ = fixture()
+    native = json.loads(a["native-close.raw"])
+    if fault == "missing_cpu":
+        native["cost"]["phases"]["poll_total"]["process_cpu_ns"] = None
+    elif fault == "overflow":
+        native["cost"].update(complete=False, invalid_reason="counter_overflow")
+    else:
+        native["cost"]["phases"]["poll_total"] = None
+    a["native-close.raw"] = wire(native)
+    root["native_stream"] = stream(a["native-close.raw"])
+    rewrite(a, c, root)
+    r = evaluate(a)
+    assert r["finite"]["source_decisions"] == 3 and r["status"] == "withheld"
+    if fault == "missing_cpu":
+        assert r["native_cost"] is None
+    elif fault == "overflow":
+        assert r["native_cost"]["complete"] is False
+    else:
+        assert r["native_cost"]["phases"]["poll_total"] is None
