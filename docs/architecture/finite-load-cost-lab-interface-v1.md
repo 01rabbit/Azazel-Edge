@@ -226,10 +226,13 @@ normal_return true, incomplete false, and no unfinished spans. Missing/partial/
 invalid footer withholds completion while retaining earlier valid phase facts.
 Collector per-file caps: EVE16MiB/total64MiB, Source and witness8MiB, clock calls
 and phase4MiB, clock context16KiB, observer stdout/stderr/completion64KiB,
-load-controller/config128KiB, Root custody16384B (registered load-cost Root envelope),
+load-controller/config128KiB, Root custody32768B (complete original stream, including startup row),
 native/receiver raw4096B. Existing other public originals retain their original
 8MiB bound. No blanket cap silently expands a frozen recording limit.
 
-The explicit load profile uses the registered 16384-byte Root custody cap at
-export as well as inner receipt decode; this supersedes the legacy 32768-byte
-outer read helper bound. Trust and registration originals retain 32768-byte caps.
+The complete Root custody stream retains the existing 32768-byte outer bound,
+including the startup row and final custody report. Each individual Root custody
+report retains its unchanged 16384-byte inner bound. These are distinct bounds;
+no report capacity is increased. Trust and registration originals retain
+32768-byte caps. This correction supersedes the earlier outer-bound tightening
+before any collection.
