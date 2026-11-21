@@ -45,7 +45,11 @@ Provider children cannot inherit this stdout capability across exec. This pipe
 is not shared with the receiver. No reverse durability ACK protocol is added.
 
 Receiver's existing private stdout retains exact readiness bytes, and at most
-one canonical final/refusal JSON+LF. Set CLOEXEC. Root retains the actual full
+one canonical final/refusal JSON+LF. Set CLOEXEC. Final publication is one raw
+nonblocking write of at most3072bytes, after writer close; no retry, print/flush
+lock or blocking final publication. Publication failure alone does not turn a
+successfully completed receiver into exit failure or change defense behavior.
+Root retains the actual full
 readiness/receipt stream rather than reconstructing it. Bound native1024bytes,
 receiver4096bytes, Root custody record16384bytes. Read actual EOF with bounded
 waits after actual child exits; leaked writers, timeout, excess, duplicates,
