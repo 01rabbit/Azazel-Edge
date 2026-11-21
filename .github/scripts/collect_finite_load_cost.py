@@ -46,6 +46,10 @@ def file_limit(name):
         return 65536
     if name in ("load-controller.json", "observer-config.json", "corpus-manifest.json"):
         return 131072
+    if name == "launcher-journal.raw":
+        return 65536
+    if name == "unit-exec-start.raw":
+        return 131072
     if name == "root-custody.raw":
         return 32768
     if name in ("native-close.raw", "receiver-close.raw"):

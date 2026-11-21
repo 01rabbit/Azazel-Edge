@@ -777,6 +777,8 @@ def test_collector_uses_frozen_per_file_limits():
     spec.loader.exec_module(module)
     for name, limit in {
         "root-custody.raw": 32768,
+        "launcher-journal.raw": 65536,
+        "unit-exec-start.raw": 131072,
         "native-close.raw": 4096,
         "receiver-close.raw": 4096,
         "observer-context.raw": 16384,
