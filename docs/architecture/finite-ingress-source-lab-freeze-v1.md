@@ -280,3 +280,22 @@ bound_complete_input, even if other legs happen to be available. Missing native
 receipt/manager completion still withholds final native counters/difference.
 The old v1 evaluator remains unchanged. Original reports are not rewritten;
 new diagnostic replays are additional results tied to their evaluating commit.
+
+## Existing authority-audit test after function extraction
+
+Third CI44890688209 completed with all Linux collection cases successful but
+one full-suite failure: `CoreReadsNoAdvice.test_decision_happens_before_forwarding`
+searched the old `process_value` wrapper for calls now in its shared span-aware
+implementation. It remains a failed full CI (23846 passed,456 optional skipped,
+230 subtests; one failure). No runtime authority change or threshold exception
+is authorized by this failure.
+
+Update only that existing source-audit test to follow the actual wrapper into
+the shared implementation. Assert the legacy path delegates with no span,
+the opt-in polling path uses the same implementation with its span, and the
+shared body calls deterministic decision then enforcement before any AI
+forwarding. Do not remove the ordering assertions, accept an absent function,
+or ignore either entry path. Existing no-advice/no-listener checks remain.
+Independent review and fresh final-head complete CI are required. The earlier
+284-file evidence remains preserved and is not silently labelled final-head
+evidence for a later commit.
