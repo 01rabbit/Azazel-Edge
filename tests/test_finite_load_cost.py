@@ -534,3 +534,36 @@ def test_new_receipt_cost_failure_keeps_source_without_inventing_measurement(fau
         assert r["native_cost"]["complete"] is False
     else:
         assert r["native_cost"]["phases"]["poll_total"] is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("status", "unknown"), ("bytes", 1), ("nonalert_records", 1), ("per_class", {})],
+)
+def test_matching_hash_does_not_excuse_unverified_arm_population(field, value):
+    a, _, _, _ = fixture()
+    base = evaluate(a)
+    cases = [deepcopy(base) for _ in cost.ARMS]
+    for case, arm in zip(cases, cost.ARMS):
+        case["case_id"] = arm
+    cases[1]["corpus"][field] = value
+    result = cost.evaluate_finite_load_cost_comparison(cases)
+    assert result["differences"][0]["status"] == "withheld"
+    assert result["differences"][1]["status"] == "descriptive_measured_difference"
+
+
+def test_frozen_artifact_and_recording_bounds_remain_exact():
+    interface = json.loads((ROOT / "finite-load-cost-interface-v1.json").read_bytes())
+    assert cost.EXTRA_FILES == frozenset(interface["extra_files"])
+    assert len(cost.FILES) == 45
+    assert cost._limit("observer-fault-anchors.raw") == 8 * 1024 * 1024
+    assert cost._limit("observer-context.raw") == 16384
+    assert cost._limit("observer-stdout.raw") == 65536
+    a, _, _, _ = fixture()
+    a["observer-phase.raw"] = b"{}\n" * 1000
+    a["observer-calls.raw"] = b"{}\n" * 901
+    r = evaluate(a)
+    # These are pin-envelope checks only; fake rows never establish observations.
+    assert r["pins"]["observer-phase.raw"] is True
+    assert r["pins"]["observer-calls.raw"] is False
+    assert r["observer"] is None and r["status"] == "withheld"

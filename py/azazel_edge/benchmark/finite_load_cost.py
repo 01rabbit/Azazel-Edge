@@ -9,7 +9,7 @@ from .native_source_accounting import ERRORS, _decode, _fields, _need, _uint
 PROTOCOL_SHA256 = "9764ea4b3d907f63d53f3526cfeef9f91895af6d8a0de44cc10236f636f8beec"
 ARMS = ("load-off", "load-on", "load-faulted")
 EXTRA_FILES = frozenset(
-    "load-controller.json corpus-manifest.json observer-config.json observer-policy.json observer-phase.raw observer-calls.raw observer-context.raw observer-completion.json observer-stdout.raw observer-stderr.raw observer-journal.raw observer-outcomes.raw".split()
+    "load-controller.json corpus-manifest.json observer-config.json observer-policy.json observer-phase.raw observer-calls.raw observer-context.raw observer-completion.json observer-stdout.raw observer-stderr.raw observer-journal.raw observer-outcomes.raw observer-fault-anchors.raw".split()
 )
 FILES = finite.FILES | EXTRA_FILES
 CLASSES = ("flow", "dns", "stats", "http")
@@ -42,7 +42,11 @@ def _limit(name):
         return 16384
     if name in ("observer-phase.raw", "observer-calls.raw"):
         return 4 * 1024 * 1024
-    if name in ("observer-journal.raw", "observer-outcomes.raw"):
+    if name in (
+        "observer-journal.raw",
+        "observer-outcomes.raw",
+        "observer-fault-anchors.raw",
+    ):
         return 8 * 1024 * 1024
     if name == "observer-completion.json":
         return 65536
@@ -162,7 +166,7 @@ def evaluate_finite_load_cost_case(artifacts, *, expected):
         if (
             name in ("observer-phase.raw", "observer-calls.raw")
             and type(raw) is bytes
-            and raw.count(b"\n") > 900
+            and raw.count(b"\n") > (4096 if name == "observer-phase.raw" else 900)
         ):
             digest = None
         valid = type(pin) is str and digest == pin
@@ -478,6 +482,7 @@ def evaluate_finite_load_cost_comparison(cases):
         if (
             not gates
             or hashes[0] is None
+            or not corpus_valid(case)
             or hashes[0] != fact(case, "corpus").get("sha256")
         ):
             delta["reasons"].append("same_complete_finite_population_and_load_required")
