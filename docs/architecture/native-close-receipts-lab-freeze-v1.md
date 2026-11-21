@@ -81,7 +81,7 @@ image: sha256, owner_uid, mode, nlink, seals
 invocation: unit, invocation_id, exec_main_pid,
             exec_main_start_monotonic_us, exec_main_exit_monotonic_us,
             active_state, result, exec_main_code, exec_main_status,
-            exec_start_sha256, exec_start_sha256, exec_start, standard_output, standard_error
+            exec_start_sha256, exec_start, standard_output, standard_error
 
 root_custody: relative_name, prepared, launcher_fd1, after, bytes, sha256
 object: device, inode, owner_uid, mode, nlink, size, mtime_ns, ctime_ns

@@ -13,7 +13,11 @@ or None; expected has the SAME exact keyset, SHA256 string or None for explicitl
 unavailable data. Pin mismatches/invalid envelope fail qualification; optional
 failure.json/evaluation.json absence is not itself a failed observation. No
 missing bytes/pin becomes empty content, false ACK, zero loss or successful exit.
-Recorded evaluation.json is never consumed as evidence for itself.
+Recorded evaluation.json is never consumed as evidence for itself. Its supplied
+external pin is validated, but its raw_sha256/pins output slots always remain
+null, preventing circular hashes or changed results when replay includes the
+previously recorded evaluation. Other supplied pin mismatches block status even
+if that optional leg is not otherwise needed; explicit None+None is unavailable.
 
 8MiB each Source/anchor/journal/readback; trust/registration32KiB; all controller
 and auxiliary JSON128KiB; journal diagnostic64KiB; Root custody32KiB; native1024;
