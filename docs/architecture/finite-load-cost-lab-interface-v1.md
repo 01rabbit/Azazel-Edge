@@ -9,11 +9,12 @@ Canonical JSON is sorted compact UTF-8, finite numbers only, plus LF.
 ## Public files
 
 Each arm retains the original finite-ingress 32-file map unchanged, through the
-explicit load-cost runtime profile, plus exactly these twelve files:
+explicit load-cost runtime profile, plus exactly these thirteen files:
 `load-controller.json`, `corpus-manifest.json`, `observer-config.json`,
 `observer-policy.json`, `observer-phase.raw`, `observer-calls.raw`,
 `observer-context.raw`, `observer-completion.json`, `observer-stdout.raw`,
-`observer-stderr.raw`, `observer-journal.raw`, `observer-outcomes.raw`.
+`observer-stderr.raw`, `observer-journal.raw`, `observer-outcomes.raw`,
+`observer-fault-anchors.raw`.
 Missing files are null in the evaluator map. The original `journal-after.raw`
 remains the final Source-reader journal; `observer-journal.raw` is the observer's
 original journal at exit, before that independent readback. No late observer
@@ -183,3 +184,48 @@ sidecar/output preservation it calls UnrefUnit once and closes that connection.
 No observer ResetFailedUnit, LoadUnit, restart policy or permission change is
 introduced. On failure, preserve available originals before release; API cleanup
 errors remain strict, bounded diagnostics without replacing the primary failure.
+
+## Bounded drains, interrupted prefixes and fault boundary
+
+Observer receipt additionally has exactly `stdout_eof`, `stderr_eof`,
+`drain_errors`, `fault_boundary`. Concurrent private-pipe drains start immediately
+on process creation, count every received byte and retain only the original first
+65536 bytes per stream. They keep draining after capacity, recording truncation.
+EOF is an actual read result. Drain errors are bounded `{stream,type,message}`
+records. A timeout preserves prefix/count/EOF/error observations before owned-unit
+cleanup; cleanup never replaces the primary error or precedes available original
+preservation. Missing EOF, truncation or a drain error cannot qualify completion.
+
+FAULTED retains the original pre-signal witness bytes in
+`observer-fault-anchors.raw`, bounded to the unchanged witness 8MiB cap. ON/OFF
+have null for this file. `fault_boundary` is null except FAULTED, where it is
+exactly `{observed_ns,source_checkpoint,cursor_position,journal_checkpoint,
+witness_sha256,witness_boundary}`. source_checkpoint is the actual authenticated
+first-marker Source prefix `{seq,head,size,sha256}`. cursor_position is the actual
+durable `{offset,sha256}`. journal_checkpoint is `{size,sha256}` over the actual
+complete pre-signal journal prefix. witness_boundary uses the existing native
+accounting witness boundary shape. Verify journal prefix against the original
+post-kill measured journal, witness signatures/chain against original public
+trust and its actual Source prefix, marker SID/session/span and first-cursor
+coverage. The marker must precede the second planned marker: boundary observed
+and actual signal request precede writer.first_write_before_ns+6000000000.
+An expected SIGKILL alone does not verify this fault leg.
+
+The observer verifier returns `{status,normal_completion,fault_verified,clock,
+phase,error}`. OFF status absent has null normal/fault/clock/phase. FAULTED remains
+clock withheld even when fault_verified true. ON collection acceptance requires
+normal_completion true and unchanged qualify_clock status qualified. Any actual
+5ms failure is an adverse failed trial with all originals retained; never retry
+or accept unknown as qualification. Expected fault acceptance separately requires
+fault_verified true. This does not confer broad comparison or safety authority.
+
+Phase decoding retains independently verified complete original prefix rows and
+an explicit original partial tail, never repairs the tail or invents a footer.
+A partial-mode recording is complete only with a valid terminal clean footer,
+normal_return true, incomplete false, and no unfinished spans. Missing/partial/
+invalid footer withholds completion while retaining earlier valid phase facts.
+Collector per-file caps: EVE16MiB/total64MiB, Source and witness8MiB, clock calls
+and phase4MiB, clock context16KiB, observer stdout/stderr/completion64KiB,
+load-controller/config128KiB, Root custody32768B (existing Root raw envelope),
+native/receiver raw4096B. Existing other public originals retain their original
+8MiB bound. No blanket cap silently expands a frozen recording limit.
