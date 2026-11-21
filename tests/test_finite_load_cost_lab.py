@@ -791,3 +791,68 @@ def test_collector_uses_frozen_per_file_limits():
         "eve-held-final.raw": 16 * 1024 * 1024,
     }.items():
         assert module.file_limit(name) == limit
+
+
+def test_observer_config_refuses_old_observer_owned_location_before_read(monkeypatch):
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("legacy location must never reach trusted read")
+
+    monkeypatch.setattr(observer.input_auth, "read_regular", unexpected_read)
+    with pytest.raises(ValueError, match="fixed Root config path"):
+        observer.load_config(
+            Path(
+                "/var/lib/edge400-systemd-lab/bundle/observer/load-"
+                + "a" * 32
+                + "-config.json"
+            ),
+            "b" * 64,
+        )
+
+
+def test_observer_root_config_keeps_owner_mode_and_pin_guards(monkeypatch):
+    path = Path(
+        "/opt/edge400-src/tests/real_systemd/finite-load-configs/load-"
+        + "a" * 32
+        + "-config.json"
+    )
+    raw = lab.accounting.canonical(dict(metadata=dict(run_id="a" * 32)))
+    calls = []
+
+    def read(target, **kwargs):
+        calls.append((target, kwargs))
+        return raw, None
+
+    monkeypatch.setattr(observer.input_auth, "read_regular", read)
+    with pytest.raises(ValueError, match="config pin differs"):
+        observer.load_config(path, "0" * 64)
+    assert calls == [(path, dict(owner=0, mode=0o444, max_bytes=65536))]
+    with pytest.raises(ValueError, match="filename/run id differs"):
+        observer.load_config(
+            path.with_name("load-" + "c" * 32 + "-config.json"),
+            lab.accounting.sha256(raw),
+        )
+
+
+def test_authentication_read_still_refuses_other_role_ancestor(tmp_path, monkeypatch):
+    from azazel_edge.outcome import input_auth
+    from azazel_edge.outcome.journal import OutcomeJournalError
+
+    directory = tmp_path / "observer-owned"
+    directory.mkdir(mode=0o700)
+    path = directory / "root-config.json"
+    path.write_bytes(b"{}\n")
+    path.chmod(0o444)
+    identity = directory.stat()
+    original = os.fstat
+
+    def observed(fd):
+        info = original(fd)
+        if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+            return SimpleNamespace(st_uid=61002, st_mode=info.st_mode)
+        return info
+
+    monkeypatch.setattr(input_auth.os, "fstat", observed)
+    with pytest.raises(
+        OutcomeJournalError, match="ancestor is writable by another role"
+    ):
+        input_auth.read_regular(path, owner=os.getuid(), mode=0o444, max_bytes=65536)

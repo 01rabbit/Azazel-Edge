@@ -183,10 +183,20 @@ class LoadPhaseRecording(phase.PhaseRecording):
 
 
 def load_config(path, digest):
-    raw = input_auth.read_regular(Path(path), owner=0, mode=0o444, max_bytes=65536)[0]
+    path = Path(path)
+    need(
+        path.parent == Path("/opt/edge400-src/tests/real_systemd/finite-load-configs")
+        and re.fullmatch(r"load-[0-9a-f]{32}-config\.json", path.name),
+        "fixed Root config path required",
+    )
+    raw = input_auth.read_regular(path, owner=0, mode=0o444, max_bytes=65536)[0]
     need(accounting.sha256(raw) == digest, "config pin differs")
     config = json.loads(raw)
     need(accounting.canonical(config) == raw, "canonical config required")
+    need(
+        path.name == "load-" + config["metadata"]["run_id"] + "-config.json",
+        "config filename/run id differs",
+    )
     need(
         set(config)
         == {

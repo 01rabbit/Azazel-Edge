@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -47,6 +48,43 @@ OUTPUT_LIMIT = 65536
 
 def error_value(error):
     return dict(type=type(error).__name__, message=str(error)[:4096])
+
+
+def stage_observer_config(g, nonce, raw):
+    """Root-only source ancestors, exclusive immutable config, existing read grant."""
+    from azazel_edge.outcome.input_auth import open_parent, read_regular
+
+    assert re.fullmatch("[0-9a-f]{32}", nonce) and len(raw) <= 65536
+    directory = g.SRC / "tests/real_systemd/finite-load-configs"
+    directory.mkdir(mode=0o555, exist_ok=True)
+    info = directory.lstat()
+    assert (
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == 0
+        and stat.S_IMODE(info.st_mode) == 0o555
+    )
+    path = directory / ("load-" + nonce + "-config.json")
+    parent, name = open_parent(path, trusted_owner=0)
+    fd = None
+    try:
+        fd = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o444,
+            dir_fd=parent,
+        )
+        remaining = memoryview(raw)
+        while remaining:
+            count = os.write(fd, remaining)
+            assert count > 0
+            remaining = remaining[count:]
+        os.fsync(fd)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent)
+    assert read_regular(path, owner=0, mode=0o444, max_bytes=65536)[0] == raw
+    return path
 
 
 def root_identity(pid, bootstrap=None):
@@ -561,8 +599,7 @@ class FiniteLoadCostLab(FiniteIngressLab):
             metadata=metadata,
         )
         raw = accounting.canonical(config)
-        path = directory / ("load-" + nonce + "-config.json")
-        self.g.write(path, raw, 0o444)
+        path = stage_observer_config(self.g, nonce, raw)
         context["files"].update(
             {
                 "observer-config.json": raw,
