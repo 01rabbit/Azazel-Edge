@@ -70,6 +70,14 @@ different result is retained as adverse evidence. The exact backlog/admitted
 split is observed, never predicted from clock proximity. After resume, wait for
 the final signed alert span.
 
+Before the controlled pressure append, the existing bounded /proc FD inventory
+must show no EVE object descriptor on the actually stopped native process.
+Otherwise a poll may already have sampled an old empty length. An open matching
+FD makes this fixed trial unavailable/adverse: archive it and stop without
+resume/re-pause retries to seek a favorable scheduling point. This adds no
+inspection grant; it reuses the existing Root native FD collector. Expected
+rate/backlog splitting remains an actual result, not an inferred guarantee.
+
 ## Cases and expected knowledge
 
 Main sequence:
