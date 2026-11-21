@@ -223,7 +223,10 @@ class CloseReceiptLab:
                 )
 
     def begin(self, case_id, *, previous_session=None):
-        assert case_id in CASE_IDS and case_id not in self.contexts
+        assert (
+            case_id in getattr(self, "allowed_case_ids", CASE_IDS)
+            and case_id not in self.contexts
+        )
         g = self.g
         self.prepare_case_start(case_id, previous_session=previous_session)
         case = self.cases[case_id]
@@ -258,7 +261,7 @@ class CloseReceiptLab:
         controller = dict(
             schema_version="edge-native-close-controller/v1",
             case_id=case_id,
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=getattr(self, "protocol_sha256", PROTOCOL_SHA256),
             source_revision=revision,
             core_image_sha256=json.loads(registration)["binary_sha256"],
             trust_sha256=accounting.sha256(trust),
@@ -558,7 +561,8 @@ class CloseReceiptLab:
                 row
                 for row in rows
                 if type(row) is dict
-                and row.get("schema_version") == "outcome-live-close-custody/v1"
+                and row.get("schema_version")
+                == getattr(self, "custody_schema", "outcome-live-close-custody/v1")
             ]
             if len(finals) == 1:
                 for name in ("native", "receiver"):
@@ -794,7 +798,9 @@ class CloseReceiptLab:
                     )
                     self.g.write(
                         self.g.BASE
-                        / "native-close-receipts-public"
+                        / getattr(
+                            self, "public_directory", "native-close-receipts-public"
+                        )
                         / case_id
                         / "failure.json",
                         raw,

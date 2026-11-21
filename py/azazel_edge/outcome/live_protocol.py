@@ -16,34 +16,51 @@ class LiveState:
     activity_count: int = 0
 
 
-COUNTERS = frozenset(("produced", "admitted", "enqueued", "written", "dropped", "inflight"))
+COUNTERS = frozenset(
+    ("produced", "admitted", "enqueued", "written", "dropped", "inflight")
+)
 LIFECYCLE_SCHEMA = "outcome-live-origin-lifecycle/v2"
 
 
 def validate_lifecycle(event, kind, *, activity_count=None):
     """Validate lifecycle shape; return its explicit profile, never infer counts."""
-    states = {"session_prepare": "prepare", "session_start": "start", "session_end": "end"}
+    states = {
+        "session_prepare": "prepare",
+        "session_start": "start",
+        "session_end": "end",
+    }
     if (
-        type(kind) is not str or kind not in states or type(event) is not dict
-        or set(event) not in (
+        type(kind) is not str
+        or kind not in states
+        or type(event) is not dict
+        or set(event)
+        not in (
             {"pipeline", "source", "capture_lifecycle"},
             {"pipeline", "source", "capture_lifecycle", "capture_origin"},
         )
         or event.get("pipeline") != "rust_live_origin_v1"
-        or event.get("source") != ("capture_producer" if kind == "session_prepare" else "rust_core")
+        or event.get("source")
+        != ("capture_producer" if kind == "session_prepare" else "rust_core")
     ):
         raise OutcomeJournalError("live process lifecycle mismatch")
     lifecycle = event["capture_lifecycle"]
     if lifecycle == {"state": states[kind]}:
         return None
-    expected = dict(schema_version=LIFECYCLE_SCHEMA, state=states[kind], accounting_profile="v1")
+    expected = dict(
+        schema_version=LIFECYCLE_SCHEMA, state=states[kind], accounting_profile="v1"
+    )
     if kind == "session_end" and type(lifecycle) is dict:
         counts = lifecycle.get("counts")
         if (
-            type(counts) is not dict or set(counts) != COUNTERS
+            type(counts) is not dict
+            or set(counts) != COUNTERS
             or any(type(n) is not int or not 0 <= n < 2**63 for n in counts.values())
-            or counts["dropped"] != 0 or counts["inflight"] != 0
-            or any(counts[k] != counts["written"] for k in ("produced", "admitted", "enqueued"))
+            or counts["dropped"] != 0
+            or counts["inflight"] != 0
+            or any(
+                counts[k] != counts["written"]
+                for k in ("produced", "admitted", "enqueued")
+            )
             or (activity_count is not None and counts["written"] != activity_count)
         ):
             raise OutcomeJournalError("live process accounting mismatch")
@@ -51,6 +68,38 @@ def validate_lifecycle(event, kind, *, activity_count=None):
     if kind == "session_prepare" or lifecycle != expected:
         raise OutcomeJournalError("live process lifecycle mismatch")
     return "v1"
+
+
+def validate_ingress_origin(event, session, kind, *, required=False):
+    origin = event.get("ingress_origin")
+    if "ingress_origin" not in event:
+        if required and kind == "decision_execution":
+            raise OutcomeJournalError("registered ingress origin missing")
+        return
+    if (
+        kind != "decision_execution"
+        or type(origin) is not dict
+        or set(origin)
+        != {
+            "schema_version",
+            "range_ref",
+            "device",
+            "inode",
+            "start_offset",
+            "end_offset",
+            "raw_sha256",
+        }
+        or origin["schema_version"] != "azazel-edge/ingress-origin/v1"
+        or origin["range_ref"] != session
+        or any(
+            type(origin[k]) is not int or not 0 <= origin[k] < 2**63
+            for k in ("device", "inode", "start_offset", "end_offset")
+        )
+        or origin["end_offset"] <= origin["start_offset"]
+        or type(origin["raw_sha256"]) is not str
+        or not re.fullmatch(r"[0-9a-f]{64}", origin["raw_sha256"])
+    ):
+        raise OutcomeJournalError("invalid native ingress origin")
 
 
 def native_frame(wire, state):
@@ -73,6 +122,7 @@ def native_frame(wire, state):
         raise OutcomeJournalError("invalid live process identity")
     if "capture_origin" in event:
         raise OutcomeJournalError("native provenance injection")
+    validate_ingress_origin(event, session, kind)
     if kind == "session_start":
         prepared = not state.closed and state.session == session and state.seq == 0
         if seq != 1 or (
@@ -131,11 +181,21 @@ def native_frame(wire, state):
     else:
         raise OutcomeJournalError("unknown live process record kind")
     activity_count = state.activity_count
-    if state.accounting_profile is not None and kind in ("decision_execution", "release"):
+    if state.accounting_profile is not None and kind in (
+        "decision_execution",
+        "release",
+    ):
         activity_count += 1
         if activity_count >= 2**63:
             raise OutcomeJournalError("live process activity count exhausted")
-    return LiveState(state.sessions, session, seq, kind == "session_end", state.accounting_profile, activity_count)
+    return LiveState(
+        state.sessions,
+        session,
+        seq,
+        kind == "session_end",
+        state.accounting_profile,
+        activity_count,
+    )
 
 
 def signed_live_event(event, registration, state):
@@ -183,6 +243,6 @@ def signed_live_event(event, registration, state):
     native = dict(
         schema_version="outcome-live-origin/v1",
         **{k: origin[k] for k in ("session_ref", "seq", "kind")},
-        event={k: v for k, v in event.items() if k != "capture_origin"}
+        event={k: v for k, v in event.items() if k != "capture_origin"},
     )
     return native_frame(native, state)

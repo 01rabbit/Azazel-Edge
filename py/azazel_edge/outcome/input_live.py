@@ -28,12 +28,12 @@ from .input_auth import (
 from .input_origin import MAX_IMAGE
 from .instance import CoreLease
 from .journal import OutcomeJournalError, _parse, _ref
-from .live_protocol import native_frame
+from .live_protocol import native_frame, validate_ingress_origin
 from . import native_close_receipts as close_receipts
 
 SCHEMA = "outcome-live-origin-registration/v1"
 ENV_KEYS = frozenset(
-    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING LIVE_ORIGIN_CLOSE_RECEIPTS".split()
+    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING LIVE_ORIGIN_CLOSE_RECEIPTS LIVE_ORIGIN_INGRESS_ACCOUNTING".split()
 )
 REQUIRED_ENV = frozenset(
     "EVE_PATH NORMALIZED_EVENT_LOG FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_RELEASE_LEDGER REDIRECT_POLICY_PATH PROTECTED_FLOWS_PATH EVE_FROM_START".split()
@@ -147,6 +147,7 @@ def validate_registration(policy, r):
         )
     accounting_profile(r)
     close_receipts.enabled(r)
+    close_receipts.ingress_enabled(r)
     ai_uid = r.get("ai_socket_uid", 0)
     if (
         type(ai_uid) is not int
@@ -321,6 +322,7 @@ def receive(policy, r, key_path, boot_ref, fd, session):
         raise OutcomeJournalError("registered non-root Linux receiver required")
     expected_profile = accounting_profile(r)
     report_close = close_receipts.enabled(r)
+    report_ingress = close_receipts.ingress_enabled(r)
     if report_close:
         os.set_inheritable(1, False)
     harden_receiver(policy.data["producer_uid"])
@@ -398,6 +400,9 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                     if ended:
                         raise OutcomeJournalError("live data after session end")
                     next_state = native_frame(wire, state)
+                    validate_ingress_origin(
+                        wire["event"], session, wire["kind"], required=report_ingress
+                    )
                     if (
                         wire["kind"] == "session_start"
                         and next_state.accounting_profile != expected_profile
@@ -448,6 +453,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     p = TrustPolicy.from_file(policy_path, role="witness")
     r = registration(p, registration_path)
     report_close = close_receipts.enabled(r)
+    report_ingress = close_receipts.ingress_enabled(r)
     capture_python = sys.executable
     if "capture_apparmor_profile" in r:
         from .confinement import capture_image
@@ -587,7 +593,9 @@ def launch(policy_path, registration_path, key_path, boot_ref):
         if report_close:
             native_stream = close_receipts.stream(
                 core.stdout if core is not None else None,
-                limit=close_receipts.NATIVE_LIMIT,
+                limit=close_receipts.NATIVE_INGRESS_LIMIT
+                if report_ingress
+                else close_receipts.NATIVE_LIMIT,
                 exited=core is not None and core.poll() is not None,
             )
             receiver_stream = close_receipts.stream(
@@ -598,7 +606,9 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             )
             close_receipts.emit(
                 dict(
-                    schema_version="outcome-live-close-custody/v1",
+                    schema_version="outcome-live-close-custody/v2"
+                    if report_ingress
+                    else "outcome-live-close-custody/v1",
                     registration_sha256=p.data["origin_registration_sha256"],
                     trust_sha256=p.digest,
                     session_ref=session,

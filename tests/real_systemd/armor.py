@@ -142,6 +142,7 @@ def install_policy():
 
 
 NATIVE = False
+FINITE_INGRESS = None
 
 
 def configure():
@@ -149,6 +150,9 @@ def configure():
         # Enrolled bytes pin this optional protocol only in the native flavor.
         g.ENV["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] = "v1"
         g.ENV["AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS"] = "v1"
+    if FINITE_INGRESS:
+        g.ENV["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] = "v1"
+        g.ENV["AZAZEL_FORWARD_LOG"] = "1" if FINITE_INGRESS == "fault" else "0"
     original = g.write
 
     def write(path, data, mode=0o644):
@@ -458,11 +462,17 @@ def main():
     parser.add_argument("--allow-disposable-vm", action="store_true", required=True)
     parser.add_argument("--native-core", action="store_true")
     parser.add_argument("--receipt-fault", choices=["receiver-kill"])
+    parser.add_argument("--finite-ingress", choices=["main", "fault"])
     args = parser.parse_args()
     if args.receipt_fault and not args.native_core:
         parser.error("receipt fault requires the existing native-core profile")
-    global NATIVE
+    if args.finite_ingress and (not args.native_core or args.receipt_fault):
+        parser.error(
+            "finite ingress requires native-core and its separate fixed variant"
+        )
+    global NATIVE, FINITE_INGRESS
     NATIVE = args.native_core
+    FINITE_INGRESS = args.finite_ingress
     g.guard()
     configure()
     if args.phase == "prepare":
@@ -485,18 +495,23 @@ def main():
             root_native_apparmor=NATIVE,
         )
     elif args.phase == "exercise":
-        g.exercise()
-        identities_and_denials()
-        if NATIVE:
-            native_checks()
-            import native_accounting
-            from native_close_receipts import CloseReceiptLab
+        if FINITE_INGRESS:
+            from finite_ingress import FiniteIngressLab
 
-            close_lab = CloseReceiptLab(g, role_command)
-            if args.receipt_fault:
-                close_lab.receiver_fault()
-            else:
-                native_accounting.exercise(g, role_command, close_lab=close_lab)
+            FiniteIngressLab(g, role_command, FINITE_INGRESS).exercise()
+        else:
+            g.exercise()
+            identities_and_denials()
+            if NATIVE:
+                native_checks()
+                import native_accounting
+                from native_close_receipts import CloseReceiptLab
+
+                close_lab = CloseReceiptLab(g, role_command)
+                if args.receipt_fault:
+                    close_lab.receiver_fault()
+                else:
+                    native_accounting.exercise(g, role_command, close_lab=close_lab)
     elif args.phase == "smoke-finish" and NATIVE:
         import native_accounting
 

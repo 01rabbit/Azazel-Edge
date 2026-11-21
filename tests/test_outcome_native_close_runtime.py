@@ -322,3 +322,80 @@ def test_receiver_report_follows_verified_eof_append_and_successful_writer_close
         assert state["reports"][0]["reason"] == "unclean_prior_session"
     else:
         assert state["reports"] == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "valid",
+        "missing",
+        "extra",
+        "wrong_session",
+        "bool",
+        "negative",
+        "overflow",
+        "reversed",
+        "bad_hash",
+        "release",
+    ],
+)
+def test_finite_ingress_origins_are_strict_session_bound_and_never_release_spans(fault):
+    from azazel_edge.outcome.live_protocol import validate_ingress_origin
+
+    origin = dict(
+        schema_version="azazel-edge/ingress-origin/v1",
+        range_ref="a" * 32,
+        device=1,
+        inode=2,
+        start_offset=0,
+        end_offset=10,
+        raw_sha256="b" * 64,
+    )
+    event = {"ingress_origin": origin}
+    kind = "decision_execution"
+    if fault == "missing":
+        event = {}
+    elif fault == "extra":
+        origin["derived_success"] = True
+    elif fault == "wrong_session":
+        origin["range_ref"] = "c" * 32
+    elif fault == "bool":
+        origin["device"] = True
+    elif fault == "negative":
+        origin["start_offset"] = -1
+    elif fault == "overflow":
+        origin["end_offset"] = 2**63
+    elif fault == "reversed":
+        origin["end_offset"] = 0
+    elif fault == "bad_hash":
+        origin["raw_sha256"] = "z" * 64
+    elif fault == "release":
+        kind = "release"
+    if fault == "valid":
+        validate_ingress_origin(event, "a" * 32, kind, required=True)
+    else:
+        with pytest.raises(OutcomeJournalError):
+            validate_ingress_origin(event, "a" * 32, kind, required=True)
+    # Opt-out without a span remains exactly the previous input format.
+    validate_ingress_origin({}, "a" * 32, "decision_execution")
+
+
+@pytest.mark.parametrize(
+    "fault", ["valid", "absent", "empty", "no_close", "legacy_reg"]
+)
+def test_finite_ingress_profile_is_explicit_and_preserves_receipt_versions(fault):
+    r = registration()
+    r["environment"]["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] = "v1"
+    if fault == "absent":
+        r["environment"].pop("AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING")
+    elif fault == "empty":
+        r["environment"]["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] = ""
+    elif fault == "no_close":
+        r["environment"].pop("AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS")
+    elif fault == "legacy_reg":
+        r["schema_version"] = "outcome-live-origin-registration/v3"
+    if fault in ("valid", "absent"):
+        assert receipts.ingress_enabled(r) is (fault == "valid")
+    else:
+        with pytest.raises(OutcomeJournalError):
+            receipts.ingress_enabled(r)

@@ -9,6 +9,7 @@ import time
 from .journal import OutcomeJournalError, _json
 
 NATIVE_LIMIT = 1024
+NATIVE_INGRESS_LIMIT = 4096
 RECEIVER_LIMIT = 4096
 RECEIVER_REPORT_LIMIT = 3072
 ROOT_LIMIT = 16384
@@ -25,6 +26,17 @@ def enabled(registration):
         or registration.get("schema_version") != "outcome-live-origin-registration/v4"
     ):
         raise OutcomeJournalError("invalid registered native close receipt profile")
+    return True
+
+
+def ingress_enabled(registration):
+    env = registration["environment"]
+    if "AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING" not in env:
+        return False
+    if env["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] != "v1" or not enabled(
+        registration
+    ):
+        raise OutcomeJournalError("invalid registered ingress accounting profile")
     return True
 
 
