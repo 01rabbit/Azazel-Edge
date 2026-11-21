@@ -14,12 +14,14 @@ existing profiles/permissions and protocol SHA256
 and its first reason permanently; it never changes, retries or suppresses the
 original operation. Previously observed aggregates may survive as partial facts,
 but no partial recorder establishes final phase totals. Further measurements
-stop after a fault. Successful operation exceptions are not fabricated as returns.
+stop after a fault. A call completion includes normal return or an exception;
+its count is not a successful-operation count. The original exception object and
+propagation are preserved, without another call or a fabricated normal return.
 
 Native `phases` has exactly `poll_total,committed_hash,admitted_callback`.
 Receiver `phases` has exactly
 `receive_wait,frame_validation,source_append,source_sign,source_verify,source_fsync`.
-Every slot is null until an actual measured call completes. Null means unmeasured
+Every slot is null until an actual measured attempt completes (return or raise). Null means unmeasured
 or unavailable, never count=0. Each nonnull aggregate has exactly
 `count,wall_ns,process_cpu_ns,thread_cpu_ns,max_wall_ns`, all exact integers in
 `0 <= n < 2**63`, with count>=1 and max_wall_ns<=wall_ns. Arithmetic never wraps.
