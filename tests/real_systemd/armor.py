@@ -26,18 +26,19 @@ RestrictAddressFamilies=AF_UNIX
 """
 
 
-def execute_role(role, mode, *args):
+def role_command(role, mode, *args, unit=None):
     python = (
         g.PYTHON
         if role == "witness"
         else g.PYTHON.with_name("edge-capture" if role == "capture" else "edge-observe")
     )
     user = "root" if role == "witness" else "edge400-" + role
-    return g.command(
+    return [
         "systemd-run",
         "--wait",
         "--pipe",
         "--collect",
+        *(["--unit=" + unit] if unit is not None else []),
         "-p",
         "User=" + user,
         "-p",
@@ -55,7 +56,11 @@ def execute_role(role, mode, *args):
         str(g.SRC / "tests/real_systemd/role_probe.py"),
         mode,
         *args,
-    )
+    ]
+
+
+def execute_role(role, mode, *args):
+    return g.command(*role_command(role, mode, *args))
 
 
 def observer(create=False):
@@ -140,6 +145,9 @@ NATIVE = False
 
 
 def configure():
+    if NATIVE:
+        # Enrolled bytes pin this optional protocol only in the native flavor.
+        g.ENV["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] = "v1"
     original = g.write
 
     def write(path, data, mode=0o644):
@@ -477,6 +485,13 @@ def main():
         identities_and_denials()
         if NATIVE:
             native_checks()
+            import native_accounting
+
+            native_accounting.exercise(g, role_command)
+    elif args.phase == "smoke-finish" and NATIVE:
+        import native_accounting
+
+        native_accounting.finish(g)
     else:
         {
             "boot-check": g.boot_check,

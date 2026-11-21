@@ -161,7 +161,7 @@ def test_receiver_refuses_context_before_channel_or_key_use():
     ):
         input_live.receive(
             policy,
-            {"capture_apparmor_profile": "edge400-capture"},
+            {"capture_apparmor_profile": "edge400-capture", "environment": {}},
             Path("/not-read"),
             "boot",
             -1,

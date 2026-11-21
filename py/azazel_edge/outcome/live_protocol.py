@@ -12,6 +12,45 @@ class LiveState:
     session: str = ""
     seq: int = 0
     closed: bool = True
+    accounting_profile: str | None = None
+    activity_count: int = 0
+
+
+COUNTERS = frozenset(("produced", "admitted", "enqueued", "written", "dropped", "inflight"))
+LIFECYCLE_SCHEMA = "outcome-live-origin-lifecycle/v2"
+
+
+def validate_lifecycle(event, kind, *, activity_count=None):
+    """Validate lifecycle shape; return its explicit profile, never infer counts."""
+    states = {"session_prepare": "prepare", "session_start": "start", "session_end": "end"}
+    if (
+        type(kind) is not str or kind not in states or type(event) is not dict
+        or set(event) not in (
+            {"pipeline", "source", "capture_lifecycle"},
+            {"pipeline", "source", "capture_lifecycle", "capture_origin"},
+        )
+        or event.get("pipeline") != "rust_live_origin_v1"
+        or event.get("source") != ("capture_producer" if kind == "session_prepare" else "rust_core")
+    ):
+        raise OutcomeJournalError("live process lifecycle mismatch")
+    lifecycle = event["capture_lifecycle"]
+    if lifecycle == {"state": states[kind]}:
+        return None
+    expected = dict(schema_version=LIFECYCLE_SCHEMA, state=states[kind], accounting_profile="v1")
+    if kind == "session_end" and type(lifecycle) is dict:
+        counts = lifecycle.get("counts")
+        if (
+            type(counts) is not dict or set(counts) != COUNTERS
+            or any(type(n) is not int or not 0 <= n < 2**63 for n in counts.values())
+            or counts["dropped"] != 0 or counts["inflight"] != 0
+            or any(counts[k] != counts["written"] for k in ("produced", "admitted", "enqueued"))
+            or (activity_count is not None and counts["written"] != activity_count)
+        ):
+            raise OutcomeJournalError("live process accounting mismatch")
+        expected["counts"] = counts
+    if kind == "session_prepare" or lifecycle != expected:
+        raise OutcomeJournalError("live process lifecycle mismatch")
+    return "v1"
 
 
 def native_frame(wire, state):
@@ -46,13 +85,11 @@ def native_frame(wire, state):
     if seq != state.seq + 1:
         raise OutcomeJournalError("live process sequence gap or replay")
     if kind in ("session_start", "session_end"):
-        expected = dict(
-            pipeline="rust_live_origin_v1",
-            source="rust_core",
-            capture_lifecycle=dict(state="start" if kind == "session_start" else "end"),
-        )
-        if event != expected:
-            raise OutcomeJournalError("live process lifecycle mismatch")
+        profile = validate_lifecycle(event, kind, activity_count=state.activity_count)
+        if kind == "session_end" and profile != state.accounting_profile:
+            raise OutcomeJournalError("live process accounting profile changed")
+        if kind == "session_start":
+            state = LiveState(state.sessions, session, state.seq, False, profile, 0)
     elif kind == "decision_execution":
         if (
             event.get("pipeline") != "rust_event_engine_v1"
@@ -93,7 +130,12 @@ def native_frame(wire, state):
             raise OutcomeJournalError("release provider event mismatch")
     else:
         raise OutcomeJournalError("unknown live process record kind")
-    return LiveState(state.sessions, session, seq, kind == "session_end")
+    activity_count = state.activity_count
+    if state.accounting_profile is not None and kind in ("decision_execution", "release"):
+        activity_count += 1
+        if activity_count >= 2**63:
+            raise OutcomeJournalError("live process activity count exhausted")
+    return LiveState(state.sessions, session, seq, kind == "session_end", state.accounting_profile, activity_count)
 
 
 def signed_live_event(event, registration, state):

@@ -1,4 +1,4 @@
-"""Fixed disposable service-role checks. Never print key/payload bytes."""
+"""Fixed disposable role checks; explicit RO mode exports only public Source."""
 
 import argparse
 import errno
@@ -10,8 +10,12 @@ import subprocess
 import sys
 
 SRC = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(SRC / "py"), str(SRC / "tests")]
-from azazel_edge.outcome.confinement import enforce_capture
+sys.path[:0] = [
+    str(SRC / "py"),
+    str(SRC / "tests"),
+    str(Path(__file__).resolve().parent),
+]
+from azazel_edge.outcome.confinement import enforce_capture  # noqa: E402
 
 BASE = Path("/var/lib/edge400-systemd-lab")
 BUNDLE = BASE / "bundle"
@@ -138,13 +142,18 @@ def denials(role, pid):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["observer", "denials"])
+    parser.add_argument("mode", choices=["observer", "denials", "readonly-source"])
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--role", choices=["capture", "observer", "witness"])
     parser.add_argument("--pid", type=int)
+    parser.add_argument("--challenge")
     args = parser.parse_args()
     if args.mode == "observer":
         observer(args.create)
+    elif args.mode == "readonly-source":
+        from native_accounting import readonly_source
+
+        readonly_source(args.challenge)
     else:
         denials(args.role, args.pid)
 

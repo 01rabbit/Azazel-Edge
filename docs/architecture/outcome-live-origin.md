@@ -210,6 +210,35 @@ live-decision parity. #393 retains independent protected-service measurement;
 external/TPM monotonic anchoring remains separate. Keep #400 open. Passing the
 software CI does not authorize deployment or prove comparative/causal benefit.
 
+An optional registered `AZAZEL_LIVE_ORIGIN_ACCOUNTING=v1` selects the
+[finite native accounting profile](native-source-accounting-v1.md). Absence
+preserves the legacy lifecycle payloads and leaves counters unmeasured; empty
+or unknown values refuse. Exact registration bytes bind the choice. The receiver
+rejects a missing or unexpected start profile before signing start; an old
+registered image may therefore leave only the existing uncertain preparation.
+
+The outer native envelope and signed provenance remain unchanged. Accounted
+start/end use `outcome-live-origin-lifecycle/v2` with `accounting_profile=v1`;
+end requires explicit produced/admitted/enqueued/written/dropped/inflight
+counters. An atomic pre-close admission gate defines the finite population:
+produced counts callbacks joining it, admitted counts serialized events,
+enqueued counts queue insertions, and written counts complete native socket
+writes. Late callbacks cannot join that already closed cohort. Clean end requires
+the first four counts equal the receiver's actual activity count, with zero
+dropped/inflight. Lifecycle records themselves are excluded. Checked counters,
+16 bounded admission CAS attempts, and guard retirement prevent wraparound and
+End overtaking an admitted callback. One shared one-second finish deadline covers
+pre-close drain and local acknowledgement; capture failure leaves defense running.
+
+These native counters do not establish signed Source durability. The receiver
+still verifies EOF before original signing/append/fsync. A missing valid terminal
+leaves final totals unknown, preserving authenticated prefix facts. A local
+acknowledgement timeout after a terminal was written cannot retract authentic
+End/EOF or signed bytes, and does not establish successful local finish. Resume
+and terminal classification share strict lifecycle validation and retain their
+existing recovery/control meaning. This profile does not establish complete EVE
+ingress, lifetime losses, Pi performance, physical durability, or commissioning.
+
 The [service/key handoff layer](outcome-service-handoff.md) adds explicit offline
 provisioning and reviewed switching of the same existing unit, with a shared
 native lifetime guard. New live launchers acquire that guard before signer

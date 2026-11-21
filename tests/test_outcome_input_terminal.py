@@ -76,15 +76,21 @@ class Journal:
         self.close()
 
 
-def fixture(tmp_path, *, kind="session_end", tail=b""):
+def fixture(tmp_path, *, kind="session_end", tail=b"", accounting=False):
     p, key = enrolled(tmp_path)
     v = SourceVerifier(p)
     raw = b""
-    for n, f in enumerate([frame("session_prepare", 0), frame("session_start", 1)], 1):
+    from test_outcome_native_accounting import accounted_frame
+
+    start = (
+        accounted_frame("session_start", 1) if accounting else frame("session_start", 1)
+    )
+    for n, f in enumerate([frame("session_prepare", 0), start], 1):
         raw += signed_frame(p, key, f, n, v.head)
         v.verify(raw)
     before = dict(offset=len(raw), sha256=hashlib.sha256(raw).hexdigest())
-    last = signed_frame(p, key, frame(kind, 2), 3, v.head)
+    final = accounted_frame(kind, 2) if accounting else frame(kind, 2)
+    last = signed_frame(p, key, final, 3, v.head)
     raw += last
     decoded = SourceVerifier.unwrap(last)
     line = InputLine(
@@ -154,6 +160,18 @@ def test_real_signed_terminal_control_preserves_bytes_and_pending_losses(tmp_pat
         receipt.to_dict()["resume_authorized"] is False
         and receipt.to_dict()["measurement_completed"] is False
     )
+    assert f.source.current == f.raw
+
+
+def test_accounted_terminal_is_control_preserving_exact_signed_bytes_and_loss(tmp_path):
+    f = fixture(tmp_path, accounting=True)
+    result = prepare(f)
+    f.journal.close()
+    receipt = result.after_journal_close(f.journal, f.source)
+    assert receipt.signed_wire == f.last and receipt.decoded_record == f.line.raw
+    assert receipt.pending_windows_lost == 2
+    assert receipt.to_dict()["measurement_completed"] is False
+    assert receipt.to_dict()["resume_authorized"] is False
     assert f.source.current == f.raw
 
 

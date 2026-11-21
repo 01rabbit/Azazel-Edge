@@ -32,11 +32,21 @@ from .live_protocol import native_frame
 
 SCHEMA = "outcome-live-origin-registration/v1"
 ENV_KEYS = frozenset(
-    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START".split()
+    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING".split()
 )
 REQUIRED_ENV = frozenset(
     "EVE_PATH NORMALIZED_EVENT_LOG FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_RELEASE_LEDGER REDIRECT_POLICY_PATH PROTECTED_FLOWS_PATH EVE_FROM_START".split()
 )
+
+
+def accounting_profile(r):
+    """The exact registered environment selects the optional accounting profile."""
+    env = r["environment"]
+    if "AZAZEL_LIVE_ORIGIN_ACCOUNTING" not in env:
+        return None
+    if env["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] != "v1":
+        raise OutcomeJournalError("invalid registered live accounting profile")
+    return "v1"
 
 
 def registration(policy, path):
@@ -134,6 +144,7 @@ def validate_registration(policy, r):
         raise OutcomeJournalError(
             "live origin cannot replay input or use stdout as evidence"
         )
+    accounting_profile(r)
     ai_uid = r.get("ai_socket_uid", 0)
     if (
         type(ai_uid) is not int
@@ -306,6 +317,7 @@ def harden_receiver(uid):
 def receive(policy, r, key_path, boot_ref, fd, session):
     if sys.platform != "linux" or os.geteuid() != policy.data["producer_uid"]:
         raise OutcomeJournalError("registered non-root Linux receiver required")
+    expected_profile = accounting_profile(r)
     harden_receiver(policy.data["producer_uid"])
     if "capture_apparmor_profile" in r:
         from .confinement import enforce_capture
@@ -363,6 +375,11 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                     if ended:
                         raise OutcomeJournalError("live data after session end")
                     next_state = native_frame(wire, state)
+                    if (
+                        wire["kind"] == "session_start"
+                        and next_state.accounting_profile != expected_profile
+                    ):
+                        raise OutcomeJournalError("registered live accounting profile mismatch")
                     event = dict(wire["event"])
                     if "capture_origin" in event:
                         raise OutcomeJournalError("native provenance injection")
