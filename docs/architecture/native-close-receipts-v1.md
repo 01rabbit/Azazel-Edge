@@ -71,7 +71,7 @@ Only reason `unclean_prior_session`, at the verified unclosed-history branch
 before preparation. This is distinct from managed-start refusal below.
 
 Root launcher `outcome-live-close-custody/v1`:
-`schema_version,registration_sha256,trust_sha256,session_ref,boot_ref,launcher_pid,core_pid,receiver_pid,core_returncode,receiver_returncode,receiver_wait_timed_out,forwarded_signal,native_stream,receiver_stream`.
+`schema_version,registration_sha256,trust_sha256,session_ref,boot_ref,launcher_pid,core_pid,receiver_pid,core_returncode,receiver_returncode,receiver_wait_timed_out,forwarded_signal,native_stream,receiver_stream,root_stdout`.
 Each stream is exactly `{raw_b64,eof,over_limit}`. Null PID/returncode where no
 process was spawned/observed. Wait timeout/kill keeps actual raw child returncode
 separate from existing aggregate return1; do not replace -SIGKILL with guessed1.
@@ -87,7 +87,7 @@ reread evidence in its handler to guess a cause. service_entry catches this
 typed error, emits an opt-in Root receipt, and re-raises for unchanged exit1.
 
 Root managed refusal `outcome-managed-restart-refusal/v1`:
-`schema_version,stage,attempted_session_ref,prior_session_ref,source_checkpoint,registration_sha256,trust_sha256,launcher_pid,boot_ref,invocation_id,core_spawn_attempted,receiver_spawn_attempted`.
+`schema_version,stage,attempted_session_ref,prior_session_ref,source_checkpoint,registration_sha256,trust_sha256,launcher_pid,boot_ref,invocation_id,core_spawn_attempted,receiver_spawn_attempted,root_stdout`.
 Stage is `managed_ready_unclosed_history`; attempted session is null (none was
 created), both spawn flags false, invocation is actual INVOCATION_ID. This is
 not a generic key/profile/image failure classification. A missing report cannot
@@ -140,6 +140,19 @@ reset, recreate, replace keys or repair histories to obtain another test case.
 - object: device,inode,owner_uid,mode,nlink,size,mtime_ns,ctime_ns.
 - reader: existing #620 O_RDONLY receipt, nullable on refusal/unsupported legs.
 - custody_mode: live_parent_and_children or managed_prelaunch_refusal.
+
+Both Root runtime reports include `root_stdout`, an actual fstat(1) object using
+the eight-field object schema, or null if unavailable. Compare its identity
+(device/inode/owner/mode/nlink) to the independently precreated/read-back sink;
+size/timestamps naturally change while Root writes. Stable before/after metadata
+is required around each read, not across the whole writing lifetime. Actual
+systemd `standard_output` is `{mode,path}`; mode is the typed manager property,
+path stays null if that manager exposes no typed output path. In that case
+actual Root fd1 fstat-to-pinned-file binding is mandatory; unit-text guessing is
+forbidden. `standard_error` must be actual typed `journal`. Refusal's short-lived
+Root fstat is an explicitly trusted-code observation paired with independently
+retained invocation/ExecMainPID/fixed code and exact sink, not a fabricated live
+controller sample.
 
 Unavailable values stay null. attempt_ref is a collector nonce, not a native
 session. Refusal session_ref/previous_session_ref select the prior interrupted
