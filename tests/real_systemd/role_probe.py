@@ -142,14 +142,22 @@ def denials(role, pid):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["observer", "denials", "readonly-source"])
+    parser.add_argument(
+        "mode", choices=["observer", "denials", "readonly-source", "finite-load"]
+    )
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--role", choices=["capture", "observer", "witness"])
     parser.add_argument("--pid", type=int)
     parser.add_argument("--challenge")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--config-sha256")
     args = parser.parse_args()
     if args.mode == "observer":
         observer(args.create)
+    elif args.mode == "finite-load":
+        from finite_load_observer import main as finite_load_main
+
+        finite_load_main(args.challenge, args.config, args.config_sha256, args.create)
     elif args.mode == "readonly-source":
         from native_accounting import readonly_source
 

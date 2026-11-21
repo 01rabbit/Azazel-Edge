@@ -51,6 +51,9 @@ READBACK_CASES = frozenset(
         "ingress-same-inode-overwrite",
         "ingress-native-killed",
         "ingress-receiver-killed",
+        "load-off",
+        "load-on",
+        "load-faulted",
     )
 )
 PUBLIC_FILES = frozenset(

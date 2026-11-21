@@ -350,6 +350,7 @@ pub struct IngressReader {
     /// The last interval was written at shutdown; nothing more is emitted.
     shutdown_flushed: bool,
     finite:Option<FiniteIngress>,
+    cost:Option<crate::load_cost::Meter>,
 }
 
 const ALERT_MARKER: &[u8] = b"\"event_type\":\"alert\"";
@@ -377,6 +378,7 @@ impl IngressReader {
             cumulative_resets: 0,
             shutdown_flushed: false,
             finite:None,
+            cost:None,
         }
     }
 
@@ -387,7 +389,13 @@ impl IngressReader {
             counts:Some(FiniteCounts::default()),tail:None,last_stop:None});
     }
     pub fn finite_snapshot(&self)->Option<Value> { self.finite.as_ref().map(|f|f.snapshot(self.offset,self.last_len,self.skipping)) }
-    fn committed(&mut self,raw:&[u8]) {if let Some(f)=self.finite.as_mut() {f.consume(raw);}}
+    pub fn enable_cost(&mut self) {self.cost=Some(crate::load_cost::Meter::new());}
+    pub fn cost_snapshot(&self)->Option<Value> {self.cost.as_ref().map(|m|m.snapshot())}
+    fn cost_begin(&mut self)->Option<crate::load_cost::Stamp> {self.cost.as_mut().and_then(|m|m.begin())}
+    fn cost_end(&mut self,phase:usize,stamp:Option<crate::load_cost::Stamp>) {if let Some(m)=self.cost.as_mut(){m.end(phase,stamp);}}
+    fn committed(&mut self,raw:&[u8]) {
+        let start=self.cost_begin();if let Some(f)=self.finite.as_mut() {f.consume(raw);}self.cost_end(1,start);
+    }
     // Finite polls count every attempted call; legacy Pending still counts only its original completed polls.
     fn finite_io_error(&mut self,report:&PollReport) {if let Some(f)=self.finite.as_mut() {f.fold(report,0,0);}}
 
@@ -432,6 +440,7 @@ impl IngressReader {
     }
     pub fn poll_with_span<F: FnMut(&Value,IngressSpan<'_>)->bool>(&mut self,path:&Path,now:Instant,mut decide:F)->PollReport {
         let started = Instant::now();
+        let cost_start=self.cost_begin();
         let mut report = PollReport::default();
         let mut normalized=0u64;
         let mut possible=0u64;
@@ -442,6 +451,7 @@ impl IngressReader {
             Err(_) => {
                 report.stop = Some(PollStop::NoFile);
                 self.finite_io_error(&report);
+                self.cost_end(0,cost_start);
                 return report;
             }
         };
@@ -450,6 +460,7 @@ impl IngressReader {
             Err(_) => {
                 report.stop = Some(PollStop::NoFile);
                 self.finite_io_error(&report);
+                self.cost_end(0,cost_start);
                 return report;
             }
         };
@@ -475,6 +486,7 @@ impl IngressReader {
         if reader.seek(SeekFrom::Start(self.offset)).is_err() {
             report.stop = Some(PollStop::NoFile);
             self.finite_io_error(&report);
+            self.cost_end(0,cost_start);
             return report;
         }
 
@@ -554,7 +566,9 @@ impl IngressReader {
                     report.admitted += 1;
                     report.alerts_admitted += 1;
                     if let Some(v) = parsed.as_ref() {
-                        if decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf}) {normalized+=1;}
+                        let stamp=self.cost_begin();
+                        let made=decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf});
+                        self.cost_end(2,stamp);if made {normalized+=1;}
                     }
                 }
                 Some(class) => {
@@ -564,7 +578,9 @@ impl IngressReader {
                         self.tokens -= 1.0;
                         report.admitted += 1;
                         if let Some(v) = parsed.as_ref() {
-                            if decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf}) {normalized+=1;}
+                            let stamp=self.cost_begin();
+                        let made=decide(v,IngressSpan {device:id.0,inode:id.1,start_offset,end_offset:self.offset,raw:&buf});
+                        self.cost_end(2,stamp);if made {normalized+=1;}
                         }
                     } else {
                         self.shed(&mut report, class, false);
@@ -597,6 +613,7 @@ impl IngressReader {
             p.alert_backlog_alerts_admitted += report.alerts_admitted;
             self.cumulative_alert_backlog_polls += 1;
         }
+        self.cost_end(0,cost_start);
         report
     }
 
@@ -1718,6 +1735,21 @@ mod tests {
         let snapshot=finite.finite_snapshot().unwrap();assert_eq!(snapshot["counts"]["polls"],3);
         assert_eq!(snapshot["last_stop"],"NoFile");assert_eq!(finite.pending.polls,1);
         fs::remove_file(old).unwrap();
+    }
+
+    #[test]
+    fn finite_cost_meter_does_not_change_reader_transitions_or_callbacks() {
+        let path=temp_path("finite-cost-parity");let mut original=finite_reader(&path,open_limits());
+        let metadata=fs::metadata(&path).unwrap();let mut measured=IngressReader::new(0,open_limits());
+        measured.enable_finite(&"a".repeat(32),Some(&metadata));measured.enable_cost();
+        write_bytes(&path,format!("{}{}",line("flow",1),line("alert",2)).as_bytes());
+        let mut a=Vec::new();let mut b=Vec::new();let now=Instant::now();
+        let ra=original.poll_with_span(&path,now,|v,_|{a.push(v.clone());v["event_type"]=="alert"});
+        let rb=measured.poll_with_span(&path,now,|v,_|{b.push(v.clone());v["event_type"]=="alert"});
+        assert_eq!(a,b);assert_eq!(ra,rb);assert_eq!(original.offset,measured.offset);
+        assert_eq!(original.finite_snapshot(),measured.finite_snapshot());
+        assert!(original.cost_snapshot().is_none());assert!(measured.cost_snapshot().is_some());
+        fs::remove_file(path).unwrap();
     }
 
 }

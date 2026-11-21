@@ -13,7 +13,7 @@ import sys
 close_sink = len(sys.argv) == 3 and sys.argv[1] == "--close-sink-name"
 if close_sink:
     assert re.fullmatch(
-        r"(?:normal-four|restart-one|witness-stopped-close|interrupted-prefix|interrupted-restart-refused|receiver-killed-prefix|receiver-restart-refused|ingress-mixed|ingress-partial-tail|ingress-oversize|ingress-duplicate-sid|ingress-backlog-shed|ingress-rename|ingress-truncate|ingress-same-inode-overwrite|ingress-native-killed|ingress-receiver-killed)-[0-9a-f]{32}\.raw",
+        r"(?:normal-four|restart-one|witness-stopped-close|interrupted-prefix|interrupted-restart-refused|receiver-killed-prefix|receiver-restart-refused|ingress-mixed|ingress-partial-tail|ingress-oversize|ingress-duplicate-sid|ingress-backlog-shed|ingress-rename|ingress-truncate|ingress-same-inode-overwrite|ingress-native-killed|ingress-receiver-killed|load-off|load-on|load-faulted)-[0-9a-f]{32}\.raw",
         sys.argv[2],
     )
 assert close_sink or sys.argv[1:] in ([], ["--provider"], ["--tc"])

@@ -57,6 +57,25 @@ def _same_object(a, b):
     return all(a[k] == b[k] for k in IDENTITY)
 
 
+
+NATIVE_COST_PHASES={"poll_total","committed_hash","admitted_callback"}
+RECEIVER_COST_PHASES={"receive_wait","frame_validation","source_append","source_sign","source_verify","source_fsync"}
+
+def _cost(value,phases):
+    _fields(value,{"schema_version","complete","invalid_reason","phases"})
+    _need(value["schema_version"]=="azazel-edge/phase-cost/v1"
+          and type(value["complete"]) is bool
+          and value["invalid_reason"] in (None,"clock_error","counter_overflow")
+          and value["complete"] == (value["invalid_reason"] is None),"cost_integrity")
+    _fields(value["phases"],phases)
+    for aggregate in value["phases"].values():
+        if aggregate is None:
+            continue
+        _fields(aggregate,{"count","wall_ns","process_cpu_ns","thread_cpu_ns","max_wall_ns"})
+        _need(all(_uint(n,2**63) for n in aggregate.values()) and aggregate["count"]>=1
+              and aggregate["max_wall_ns"]<=aggregate["wall_ns"],"cost_aggregate")
+    return value
+
 def evaluate_native_close_receipts(artifacts, *, expected):
     """Retain independent authenticated facts when another leg is unavailable."""
     return _evaluate_close_profile(artifacts, expected=expected)
@@ -65,8 +84,9 @@ def evaluate_native_close_receipts(artifacts, *, expected):
 def _evaluate_close_profile(artifacts, *, expected, profile=None):
     """Shared custody checks; only explicit versioned callers select a profile."""
     ingress = profile is not None
+    load_cost=ingress and profile.get("load_cost") is True
     protocol_sha = profile["protocol_sha256"] if ingress else PROTOCOL_SHA256
-    protocol_schema = "edge-finite-ingress-source-protocol/v1" if ingress else "edge-native-close-receipts-protocol/v1"
+    protocol_schema = profile.get("protocol_schema","edge-finite-ingress-source-protocol/v1") if ingress else "edge-native-close-receipts-protocol/v1"
     cases = profile["cases"] if ingress else CASES
     native_limit = 4096 if ingress else 1024
 
@@ -74,7 +94,7 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
         return native_limit if name == "native-close.raw" else _limit(name)
 
     result = dict(
-        schema_version="edge-native-close-analysis/v2" if ingress else "edge-native-close-analysis/v1", case_id=None, status="unknown",
+        schema_version="edge-native-close-analysis/v3" if load_cost else ("edge-native-close-analysis/v2" if ingress else "edge-native-close-analysis/v1"), case_id=None, status="unknown",
         raw_sha256={}, pins={}, legs={}, reasons=[],
         native_local_worker_ack_observed=None, receiver_close_report=None,
         source_authenticated=None, source_tip=None, authenticated_prefix_tip=None,
@@ -83,6 +103,8 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
         native_returncode=None, receiver_returncode=None, launcher_exit=None,
         managed_refusal_verified=None, stores_unchanged=None, authority_flags=AUTHORITY.copy(),
     )
+    if load_cost:
+        result["native_cost"]=result["receiver_cost"]=None
     if ingress:
         result["native_ingress"] = None
         result["collection_completed"] = None
@@ -204,6 +226,8 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
               and env.get("AZAZEL_EVENT_STDOUT") == "off" and env.get("AZAZEL_EVE_FROM_START") == "0", "registered_receipts_profile")
         if ingress:
             _need(env.get("AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING") == "v1", "registered_ingress_profile")
+        if load_cost:
+            _need(env.get("AZAZEL_LIVE_ORIGIN_LOAD_COST")=="v1","registered_load_cost_profile")
         _need(type(r["binary_path"]) is str and r["binary_path"].startswith("/")
               and len(r["binary_path"]) <= 1024 and "\x00" not in r["binary_path"]
               and all(part not in ("", ".", "..") for part in r["binary_path"].split("/")[1:])
@@ -360,7 +384,7 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
               and report["trust_sha256"] == control["trust_sha256"]
               and _same_object(report["root_stdout"], value["prepared"]), "exclusive_Root_report_binding")
         if not refusal:
-            _need(report["schema_version"] == ("outcome-live-close-custody/v2" if ingress else "outcome-live-close-custody/v1") and report["session_ref"] == control["session_ref"]
+            _need(report["schema_version"] == ("outcome-live-close-custody/v3" if load_cost else ("outcome-live-close-custody/v2" if ingress else "outcome-live-close-custody/v1")) and report["session_ref"] == control["session_ref"]
                   and _uint(report["core_pid"]) and _uint(report["receiver_pid"]), "Root_live_custody")
         return report
 
@@ -446,24 +470,26 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
     def native_report():
         body = child_stream("native", native_limit)
         value = _decode(body, native_limit, lf=True)
-        _fields(value, NATIVE | {"ingress"} if ingress else NATIVE)
-        _need(value["schema_version"] == ("outcome-native-close-receipt/v2" if ingress else "outcome-native-close-receipt/v1")
+        _fields(value, NATIVE | {"ingress","cost"} if load_cost else (NATIVE | {"ingress"} if ingress else NATIVE))
+        _need(value["schema_version"] == ("outcome-native-close-receipt/v3" if load_cost else ("outcome-native-close-receipt/v2" if ingress else "outcome-native-close-receipt/v1"))
               and value["session_ref"] == control["session_ref"]
               and type(value["native_pid"]) is int and value["native_pid"] == actors["native"]["pid"]
               and type(value["local_worker_ack_observed"]) is bool, "actual_native_report")
         result["native_local_worker_ack_observed"] = value["local_worker_ack_observed"]
         if ingress:
             result["native_ingress"] = value["ingress"]
+        if load_cost:
+            result["native_cost"]=check("native_cost",lambda:_cost(value["cost"],NATIVE_COST_PHASES))
     check("native_report", native_report) if not refusal else None
 
     def receiver_report():
         body = child_stream("receiver", 4096)
         _need(body.startswith(b'{"ready":true}\n'), "exact_original_ready")
         value = _decode(body[15:], 3072, lf=True)
-        _fields(value, RECEIVER)
+        _fields(value, RECEIVER | {"cost"} if load_cost else RECEIVER)
         flags = ("clean_eof_observed", "terminal_append_fsync_completed", "source_writer_close_completed")
         _tip(value["source_checkpoint"])
-        _need(value["schema_version"] == "outcome-live-receiver-close-receipt/v1"
+        _need(value["schema_version"] == ("outcome-live-receiver-close-receipt/v2" if load_cost else "outcome-live-receiver-close-receipt/v1")
               and value["session_ref"] == control["session_ref"]
               and type(value["receiver_pid"]) is int and value["receiver_pid"] == actors["receiver"]["pid"]
               and type(value["launcher_pid"]) is int and value["launcher_pid"] == actors["launcher"]["pid"]
@@ -472,6 +498,8 @@ def _evaluate_close_profile(artifacts, *, expected, profile=None):
               and after is not None and value["source_checkpoint"] == after[1]
               and result["selected_end_present"] is True, "post_close_receiver_report")
         result["receiver_close_report"] = {k: value[k] for k in (*flags, "source_checkpoint")}
+        if load_cost:
+            result["receiver_cost"]=check("receiver_cost",lambda:_cost(value["cost"],RECEIVER_COST_PHASES))
     check("receiver_report", receiver_report) if not refusal else None
 
     def readback():

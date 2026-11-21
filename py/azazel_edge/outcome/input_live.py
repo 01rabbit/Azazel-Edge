@@ -30,10 +30,11 @@ from .instance import CoreLease
 from .journal import OutcomeJournalError, _parse, _ref
 from .live_protocol import native_frame, validate_ingress_origin
 from . import native_close_receipts as close_receipts
+from .phase_cost import Meter as CostMeter
 
 SCHEMA = "outcome-live-origin-registration/v1"
 ENV_KEYS = frozenset(
-    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING LIVE_ORIGIN_CLOSE_RECEIPTS LIVE_ORIGIN_INGRESS_ACCOUNTING".split()
+    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING LIVE_ORIGIN_CLOSE_RECEIPTS LIVE_ORIGIN_INGRESS_ACCOUNTING LIVE_ORIGIN_LOAD_COST".split()
 )
 REQUIRED_ENV = frozenset(
     "EVE_PATH NORMALIZED_EVENT_LOG FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_RELEASE_LEDGER REDIRECT_POLICY_PATH PROTECTED_FLOWS_PATH EVE_FROM_START".split()
@@ -148,6 +149,7 @@ def validate_registration(policy, r):
     accounting_profile(r)
     close_receipts.enabled(r)
     close_receipts.ingress_enabled(r)
+    close_receipts.load_cost_enabled(r)
     ai_uid = r.get("ai_socket_uid", 0)
     if (
         type(ai_uid) is not int
@@ -323,8 +325,16 @@ def receive(policy, r, key_path, boot_ref, fd, session):
     expected_profile = accounting_profile(r)
     report_close = close_receipts.enabled(r)
     report_ingress = close_receipts.ingress_enabled(r)
+    report_cost = close_receipts.load_cost_enabled(r)
     if report_close:
         os.set_inheritable(1, False)
+    meter = CostMeter() if report_cost else None
+
+    def measured(phase, function, *args):
+        return (
+            meter.call(phase, function, *args) if meter is not None else function(*args)
+        )
+
     harden_receiver(policy.data["producer_uid"])
     if "capture_apparmor_profile" in r:
         from .confinement import enforce_capture
@@ -341,7 +351,10 @@ def receive(policy, r, key_path, boot_ref, fd, session):
             raise OutcomeJournalError("live launcher peer/parent mismatch")
         # No payload is read until identity, key, source history and clean
         # previous session closure all verify. Missing stores are not created.
-        with SignedCaptureWriter(policy, key_path, boot_ref=boot_ref) as writer:
+        writer_options = {"boot_ref": boot_ref}
+        if meter is not None:
+            writer_options["cost_meter"] = meter
+        with SignedCaptureWriter(policy, key_path, **writer_options) as writer:
             if not writer.verifier.live_state.closed:
                 if report_close:
                     close_receipts.emit_pipe(
@@ -375,19 +388,23 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                     kind="session_prepare",
                 ),
             )
-            writer.append(prepare)  # Durable uncertainty marker before core launch.
+            measured(
+                "source_append", writer.append, prepare
+            )  # Original durable preparation.
             state = writer.verifier.live_state
             print('{"ready":true}', flush=True)
             buffer = bytearray()
             ended = False
             terminal = None
             while True:
-                part = channel.recv(min(8192, 65537 - len(buffer)))
+                part = measured(
+                    "receive_wait", channel.recv, min(8192, 65537 - len(buffer))
+                )
                 if not part:
                     if buffer or not ended:
                         raise OutcomeJournalError("live capture truncated or unclosed")
-                    checkpoint = writer.append(
-                        terminal
+                    checkpoint = measured(
+                        "source_append", writer.append, terminal
                     )  # Only after clean EOF, no extra bytes.
                     break
                 buffer.extend(part)
@@ -399,7 +416,7 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                     del buffer[:index]
                     if ended:
                         raise OutcomeJournalError("live data after session end")
-                    next_state = native_frame(wire, state)
+                    next_state = measured("frame_validation", native_frame, wire, state)
                     validate_ingress_origin(
                         wire["event"], session, wire["kind"], required=report_ingress
                     )
@@ -423,27 +440,30 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                     if ended:
                         terminal = event  # Withhold clean closure until EOF verifies.
                     else:
-                        writer.append(event)
+                        measured("source_append", writer.append, event)
                     state = next_state
                 if len(buffer) > 65536:
                     raise OutcomeJournalError("live capture frame bound")
 
         # Successful context exit, including writer.close(), precedes this report.
         if report_close:
-            close_receipts.emit_pipe(
-                dict(
-                    schema_version="outcome-live-receiver-close-receipt/v1",
-                    session_ref=session,
-                    receiver_pid=os.getpid(),
-                    launcher_pid=os.getppid(),
-                    registration_sha256=policy.data["origin_registration_sha256"],
-                    trust_sha256=policy.digest,
-                    source_checkpoint=checkpoint,
-                    clean_eof_observed=True,
-                    terminal_append_fsync_completed=True,
-                    source_writer_close_completed=True,
-                )
+            close_report = dict(
+                schema_version="outcome-live-receiver-close-receipt/v2"
+                if report_cost
+                else "outcome-live-receiver-close-receipt/v1",
+                session_ref=session,
+                receiver_pid=os.getpid(),
+                launcher_pid=os.getppid(),
+                registration_sha256=policy.data["origin_registration_sha256"],
+                trust_sha256=policy.digest,
+                source_checkpoint=checkpoint,
+                clean_eof_observed=True,
+                terminal_append_fsync_completed=True,
+                source_writer_close_completed=True,
             )
+            if meter is not None:
+                close_report["cost"] = meter.snapshot()
+            close_receipts.emit_pipe(close_report)
 
 
 def launch(policy_path, registration_path, key_path, boot_ref):
@@ -454,6 +474,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     r = registration(p, registration_path)
     report_close = close_receipts.enabled(r)
     report_ingress = close_receipts.ingress_enabled(r)
+    report_cost = close_receipts.load_cost_enabled(r)
     capture_python = sys.executable
     if "capture_apparmor_profile" in r:
         from .confinement import capture_image
@@ -606,9 +627,13 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             )
             close_receipts.emit(
                 dict(
-                    schema_version="outcome-live-close-custody/v2"
-                    if report_ingress
-                    else "outcome-live-close-custody/v1",
+                    schema_version="outcome-live-close-custody/v3"
+                    if report_cost
+                    else (
+                        "outcome-live-close-custody/v2"
+                        if report_ingress
+                        else "outcome-live-close-custody/v1"
+                    ),
                     registration_sha256=p.data["origin_registration_sha256"],
                     trust_sha256=p.digest,
                     session_ref=session,

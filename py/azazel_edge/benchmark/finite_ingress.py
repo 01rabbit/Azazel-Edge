@@ -179,8 +179,14 @@ def _raw_classes(raw):
 
 
 def evaluate_finite_ingress(artifacts, *, expected):
+    return _evaluate_finite_profile(artifacts, expected=expected)
+
+
+def _evaluate_finite_profile(artifacts, *, expected, profile=None):
     """Read fixed original artifacts, retaining independently valid partial facts."""
-    r = dict(schema_version="edge-finite-ingress-analysis/v1", case_id=None,
+    protocol_sha = PROTOCOL_SHA256 if profile is None else profile["protocol_sha256"]
+    cases = CASES if profile is None else profile["cases"]
+    r = dict(schema_version="edge-finite-ingress-analysis/v1" if profile is None else "edge-finite-load-ingress-analysis/v1", case_id=None,
              status="unknown", raw_sha256={}, pins={}, legs={}, reasons=[], close=None,
              ingress=None, source_decisions=None, source_releases=None,
              matched_decision_spans=None, committed_range_verified=None,
@@ -222,7 +228,7 @@ def evaluate_finite_ingress(artifacts, *, expected):
     original_close = {k: artifacts[k] for k in close.FILES}
     r["close"] = close._evaluate_close_profile(
         original_close, expected={k: expected[k] for k in close.FILES},
-        profile=dict(protocol_sha256=PROTOCOL_SHA256, cases=CASES))
+        profile=dict(protocol_sha256=protocol_sha, cases=cases, **({} if profile is None else profile.get("close_profile", {}))))
     bound = r["close"]
     r["case_id"] = bound["case_id"]
 
@@ -232,7 +238,7 @@ def evaluate_finite_ingress(artifacts, *, expected):
         c, old = data("ingress-controller.json"), data("close-controller.json")
         _fields(c, CONTROL)
         _need(c["schema_version"] == "edge-finite-ingress-controller/v1"
-              and c["case_id"] == old["case_id"] and c["protocol_sha256"] == PROTOCOL_SHA256
+              and c["case_id"] == old["case_id"] and c["protocol_sha256"] == protocol_sha
               and c["session_ref"] == c["range_ref"] == old["session_ref"], "same_range_session_case")
         _numbers(c, ("started_ns", "finished_ns"))
         _need(c["started_ns"] <= c["finished_ns"], "controller_order")
@@ -313,7 +319,8 @@ def evaluate_finite_ingress(artifacts, *, expected):
     def case_controls():
         _need(control is not None and decisions is not None, "case_originals")
         protocol = data("protocol.json")
-        case = next(v for v in protocol["cases"] if v["case_id"] == control["case_id"])
+        case = (next(v for v in protocol["cases"] if v["case_id"] == control["case_id"])
+                if profile is None else profile["case_specs"][control["case_id"]])
         _need("eve-after-writer.raw" in snapshots, "actual_writer_snapshot")
         written = snapshots["eve-after-writer.raw"][0]
         pin = case["recipe_intended_pin"]
