@@ -172,3 +172,24 @@ and case checkpoints. The observer handshake uses the existing identity/profile
 and Root process binding, without added profile rules, capabilities or sockets.
 5ms/98%/1.2x, offline collection, no missing-data reconstruction and all existing
 safety/comparison/production exclusions remain unchanged.
+
+## Actual fixture start-limit separation
+
+Run44881536133 at85af9cc preserved successful normal/restart/witness-stop
+originals, but systemd refused the next declared interrupted-prefix start with
+`start-limit-hit` before native creation. Its native-kill/refusal assignments
+therefore remained NOT_RUN; do not report native SIGKILL success from this run.
+The separate receiver-fault job completed its two assignments. Preserve all
+these original outcomes; no unchanged-code rerun or original replacement.
+
+Before each explicitly declared new case/attempt, the disposable controller
+must prove the owned unit inactive/failed, no existing native process, and the
+original verified Source state: closed for ordinary/fault-start cases, unclosed
+ONLY for the two dedicated refusal cases. Previous invocation wait/custody must
+already be harvested before any manager reset. Then exactly one `reset-failed`
+prepares the fixture counter before the single start request; move the existing
+refusal reset into this common preparation to avoid double reset. Never reset
+after an unexpected active/unknown state or use it to retry a failed assignment.
+No StartLimit setting, production policy, capability, profile, Source/history,
+key, auto-restart or duplicate-exclusion rule changes. This separates cumulative
+disposable-fixture starts from the actual specified evidence experiment.
