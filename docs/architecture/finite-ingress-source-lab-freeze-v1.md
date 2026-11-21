@@ -253,3 +253,30 @@ using one connection is necessary for a reference to survive between calls.
 The fixed systemd255 implementation's RefUnit loads its unit, while
 ResetFailedUnit deliberately does not:
 https://github.com/systemd/systemd/blob/v255/src/core/dbus-manager.c#L803-L827.
+
+## Case-lifetime reference and failed-collection facts
+
+CI44889796669 at candidate25baa3f collected the receiver-kill case successfully.
+The main trial stopped during the first mixed case because the actual final
+manager InvocationID differed from the earlier live sample. It remains a failed
+collection; subsequent main cases are NOT_RUN. Saved originals/evaluation and
+the successful fault originals are immutable. No missing manager ID may be
+replaced by a prior ID or an invented exit.
+
+Extend the same single client/reference from preparation through the entire
+assigned case: retain it during actual start/stop, final manager/custody/store/
+Source/EVE reads and public export. Unref/close exactly once after originals
+are archived, or in failure cleanup after preserving all available originals.
+Pending ownership before begin creates its context must also be cleaned up.
+No extra Ref/reset, method/property/permission change or repeat of the failed
+assignment is permitted. Each new candidate uses a fresh CI scope.
+
+New v2 analysis may validate a typed failed collection's selector/context when
+its exact pinned failure object matches controller.error (type/message strings).
+This only preserves independently authenticated Source counts and stable raw
+population facts. Add `collection_completed` to the v2 close result, false for
+that failure. A failed collection can NEVER receive bound_finite_close or
+bound_complete_input, even if other legs happen to be available. Missing native
+receipt/manager completion still withholds final native counters/difference.
+The old v1 evaluator remains unchanged. Original reports are not rewritten;
+new diagnostic replays are additional results tied to their evaluating commit.
