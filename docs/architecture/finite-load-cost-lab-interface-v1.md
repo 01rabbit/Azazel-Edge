@@ -173,3 +173,13 @@ Audits cannot upgrade original measured ON/KILL callback or clock evidence.
 
 The governing corpus protocol pin is
 `9764ea4b3d907f63d53f3526cfeef9f91895af6d8a0de44cc10236f636f8beec`.
+
+## Observer unit metadata retention
+
+A separate same-connection existing libsystemd client references only fresh
+`edge400-load-observer-<32lowerhex>.service` units. After actual bootstrap binding,
+Root calls RefUnit once before GO; after actual wait, exit metadata and original
+sidecar/output preservation it calls UnrefUnit once and closes that connection.
+No observer ResetFailedUnit, LoadUnit, restart policy or permission change is
+introduced. On failure, preserve available originals before release; API cleanup
+errors remain strict, bounded diagnostics without replacing the primary failure.
