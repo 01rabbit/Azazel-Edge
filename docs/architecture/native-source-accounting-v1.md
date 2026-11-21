@@ -274,6 +274,11 @@ Qualification clarifications before annex implementation:
   combinations must match that fixed protocol, not merely a self-consistent
   controller digest. Normal-four means four actual activity records and the
   prescribed four SIDs; restart-one means one and excludes the downtime SID.
+  This CI-profile annex accepts only native/capture labels edge400-native /
+  edge400-capture, producer UID61001 and observer UID61002. Selected activity
+  must preserve the protocol's disabled/dry_run/policy_gated mode, zero executed
+  commands, disabled enforcement and dry-run posture. An authenticated APPLIED
+  record remains an authentic fact but does not qualify this no-action case.
 - Qualified finite accounting requires the selected protected witness Source
   checkpoint to reach the selected session's authenticated End (at least that
   exact byte boundary). A shorter valid witnessed prefix stays a positive prefix
