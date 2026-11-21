@@ -234,8 +234,9 @@ and their public inventories/logs remain preserved without success conversion.
 
 The finite fixture may replace only that one counter-reset adapter with an
 explicit persistent system-bus transaction for the fixed owned lab unit:
-open one existing libsystemd client, set a bounded call timeout, LoadUnit,
-RefUnit, independently recheck loaded/inactive-or-failed/no-core configuration,
+open one existing libsystemd client, set a bounded call timeout,
+RefUnit (which loads and references atomically), independently recheck
+loaded/inactive-or-failed/no-core configuration,
 ResetFailedUnit exactly once, UnrefUnit in finally, then close the client.
 The original Source-closed/archive guards run before this adapter. Method
 returns/error names/messages and cleanup errors are recorded boundedly in the
@@ -249,3 +250,6 @@ reviewed and receive fresh full CI; the original failed trials stay failed.
 The manager API and client reference semantics are documented at
 https://www.freedesktop.org/software/systemd/man/256/org.freedesktop.systemd1.html;
 using one connection is necessary for a reference to survive between calls.
+The fixed systemd255 implementation's RefUnit loads its unit, while
+ResetFailedUnit deliberately does not:
+https://github.com/systemd/systemd/blob/v255/src/core/dbus-manager.c#L803-L827.
