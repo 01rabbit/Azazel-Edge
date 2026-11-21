@@ -172,3 +172,93 @@ All fixed cases/failures/raw public evidence and externally pinned code/registra
 references are retained; export no private keys. Run affected Rust/Python tests,
 independent review, complete final-head CI, exact base/head/test-merge/tree and
 postmerge main checks before closeout. Update existing #400/#393, keep them open.
+
+## Recorded annex API and receipt freeze
+
+`benchmark/native_source_accounting.py` exports the pure function
+`evaluate_native_source_accounting(trust_raw, registration_raw, source_raw,
+anchors_raw, controller_raw, *, expected)`. All raw arguments are exact bytes or
+None. `expected` has exactly `trust_sha256, registration_sha256, source_sha256,
+anchors_sha256, controller_sha256`; pins are lowercase SHA256, null only when
+that raw input is absent. No derived substitute pin. Each bad leg quarantines
+its qualification, not independently valid Source signature facts. JSON is
+strict duplicate-free/finite canonical JSON plus LF, depth at most16; Source
+retains its existing signed format. Limits: trust32KiB, registration32KiB,
+controller128KiB, Source/anchors8MiB and at most4096 rows; bound before hashing
+or parsing. Original library verification limits remain separately enforced.
+
+Controller schema `edge-native-source-accounting-controller/v1` exact fields:
+
+```text
+schema_version, case_id, protocol_sha256, source_revision,
+core_image_sha256, registration_sha256, trust_sha256,
+boot_id, source_boot_ref, session_ref, source_identity,
+prefix_checkpoint, checkpoint, native, launcher, receiver,
+wait, reader, challenge_sids, observed_sids, excluded_sids,
+planned_activity_count, witness_boundary, outcome, local_finish_acknowledged
+
+source_identity: device, inode, owner_uid, mode, nlink
+Source checkpoint: seq, head, size, sha256
+anchor checkpoint: counter, head, size, sha256
+actor: pid, ppid, start_ticks, uid, gid, groups, apparmor_label,
+       cap_eff, cap_prm, cap_bnd, cap_amb, no_new_privs
+native: actor fields plus image
+image: sha256, owner_uid, mode, nlink, seals
+wait: unit_state, exec_main_code, exec_main_status
+reader: actor, source_before, source_after, access_mode, started_ns,
+        finished_ns, bytes_read, sha256, complete, errors
+source_before/after: device, inode, owner_uid, mode, nlink, size,
+                     mtime_ns, ctime_ns
+witness_boundary: source_checkpoint, anchor_checkpoint
+```
+
+Nullable unavailable receipt legs/checkpoints/actor values are retained as null
+and cannot qualify a missing fact. Actual unreadable process metadata is never
+invented. `local_finish_acknowledged` is null in this harness (no independent ack
+receipt); authentic Source footer cannot supply it. `source_revision` is exact
+tested checkout SHA, image hash matches the registered sealed running image.
+The Source boot ref and kernel boot ID are separately recorded and must bind
+according to the existing launcher boot-ref convention, without replacing clocks.
+All numeric types reject bool. actor capability fields are actual integer masks.
+All scopes/keys/stream refs and declared registration digest match the original
+TrustPolicy; actual registration must be v4 with distinct native/capture labels
+and the explicitly required accounting environment. Wrong/missing required
+profile never qualifies. Do not use `validate_registration` for pure analysis if
+it would read target paths; repeat only bounded recorded structural binding.
+
+Actual native and receiver parents bind to the observed Root launcher PID,
+process incarnations are positive, native UID/GID0 and receiver roles match
+TrustPolicy. Actual enforcing labels match registration. Native image is Root
+0500/unlinked/all-seals15 with exact registered SHA. Existing native/launcher
+capabilities are subsets of unchanged baseline mask0x10c4, no ambient capabilities,
+NNP true; receiver has zero effective/permitted/ambient capabilities. Reader
+matches observer UID/GID, has no supplemental privileged groups, zero retained
+capabilities, NNP true and existing enforcing observer label. Missing observations
+leave the actual-native/read leg unknown, never a successful synthetic stand-in.
+
+Readback is from the original single-link producer-owned0644 Source via actual
+O_RDONLY FD with equal before/after metadata, EOF/length/hash and selected
+checkpoint. It performs no key load, witness RPC or target writes. Fixed proc
+metadata reads use only existing profile permissions; denial is recorded, not
+fixed by rule/capability additions. Root separately exports protected anchor
+bytes; this is a trusted-custodian copy, not observer access to private anchors.
+Source replay and original protected-anchor chain verification remain separate.
+
+Select the independently retained prefix checkpoint and final checkpoint exactly
+by byte size/hash/sequence/head, not by time proximity. Verify the signed chain
+before interpreting activity. Multiple legitimate historical sessions remain
+intact; select the exact session_ref and require its boot/profile consistency.
+Preserve authenticated prefix facts when later bytes or receipts fail. A prior
+clean checkpoint is not overwritten by the interrupted tail. Match challenge
+SIDs only as positive/negative input controls; compute activity count from actual
+authenticated session records. Planned count is never the produced denominator.
+
+Report independent leg statuses, raw hashes, exact original Source/anchor tips,
+known activity prefix and declared authenticated counters separately from
+`finite_accounting_verified`. That boolean needs trusted recorded native/receiver/
+wait/reader/witness binding plus authenticated end, clean profile and exact actual
+activity/count equality. Overall capture completion and local ack remain unknown
+without separate proof. Interrupted/malformed/unregistered/missing legs retain
+null qualified totals. All authority, safety, performance, comparison, production
+and resume flags stay false. Legacy start/end receive `legacy_unmeasured`, never
+implicit counted values or a schema conversion.
