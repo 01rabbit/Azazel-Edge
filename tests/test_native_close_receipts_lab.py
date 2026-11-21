@@ -1,9 +1,13 @@
 """Synthetic custody observations; never a native/capture or service trial."""
 
 import importlib.util
+import ctypes
+from copy import deepcopy
+import errno
 import json
 import os
 from pathlib import Path
+import runpy
 import stat
 import sys
 
@@ -254,3 +258,163 @@ def test_journal_record_limit_is_explicit_instead_of_silent_tail_selection(monke
     assert context["files"]["launcher-journal.raw"] == b"{}\n" * 160
     assert context["controller"]["error"]["type"] == "DiagnosticTruncated"
     assert "record_limit160=True" in context["controller"]["error"]["message"]
+
+
+def preparation(monkeypatch, *, refusal=False, fault=None):
+    from types import SimpleNamespace
+    from azazel_edge.outcome import input_auth
+
+    calls = []
+    mode = "managed_prelaunch_refusal" if refusal else "live_parent_and_children"
+    instance = object.__new__(lab.CloseReceiptLab)
+    instance.cases = {"case": dict(custody_mode=mode)}
+    files = {
+        "root-custody.raw": b"raw",
+        "launcher-systemd.json": b"wait",
+        **{
+            name + "-" + phase + ".raw": b"raw"
+            for name in ("source", "anchors", "journal")
+            for phase in ("before", "after")
+        },
+    }
+    instance.contexts = {
+        "previous": dict(
+            exported=True,
+            analysis_accepted=True,
+            files=files,
+            controller=dict(invocation=dict(exec_main_exit_monotonic_us=10)),
+        )
+    }
+    if fault == "unarchived":
+        instance.contexts["previous"]["exported"] = False
+    elif fault == "unaccepted":
+        instance.contexts["previous"]["analysis_accepted"] = False
+    elif fault == "missing_snapshot":
+        del files["journal-after.raw"]
+    elif fault == "missing_wait":
+        instance.contexts["previous"]["controller"]["invocation"][
+            "exec_main_exit_monotonic_us"
+        ] = 0
+    saved = deepcopy(instance.contexts)
+
+    def cores():
+        calls.append("cores")
+        return [dict(pid=99)] if fault == "running_core" else []
+
+    def snapshot():
+        calls.append("manager")
+        return dict(ActiveState="active" if fault == "active" else "failed")
+
+    def systemctl(*args):
+        calls.append(args)
+
+    def record(*args, **kwargs):
+        calls.append(("record", args, kwargs))
+
+    instance.g = SimpleNamespace(
+        Systemd=lambda: SimpleNamespace(cores=cores, snapshot=snapshot),
+        fixture=lambda: SimpleNamespace(p="public-policy"),
+        source=lambda: b"signed fixture",
+        systemctl=systemctl,
+        record=record,
+        UNIT="fixed-owned-lab.service",
+    )
+
+    class Verifier:
+        def __init__(self, policy):
+            assert policy == "public-policy"
+            self.live_state = SimpleNamespace(
+                closed=(refusal if fault == "wrong_closure" else not refusal),
+                session="b" * 32 if fault == "wrong_session" else "a" * 32,
+            )
+
+        def verify(self, raw):
+            calls.append("verify_source")
+            assert raw == b"signed fixture"
+            return dict(seq=3, head="f" * 64, size=14, sha256="e" * 64)
+
+    monkeypatch.setattr(input_auth, "SourceVerifier", Verifier)
+    return instance, calls, saved
+
+
+@pytest.mark.parametrize("refusal", [False, True])
+def test_case_preparation_guards_then_resets_counter_exactly_once(monkeypatch, refusal):
+    instance, calls, saved = preparation(monkeypatch, refusal=refusal)
+    instance.prepare_case_start("case", previous_session="a" * 32 if refusal else None)
+    assert calls[:3] == ["cores", "manager", "verify_source"]
+    assert calls[3] == ("reset-failed", "fixed-owned-lab.service")
+    assert calls[4][0] == "record" and len(calls) == 5
+    assert calls[4][2]["expected_source_closed"] is (not refusal)
+    assert instance.contexts == saved
+
+
+@pytest.mark.parametrize(
+    "fault,refusal",
+    [
+        ("running_core", False),
+        ("active", False),
+        ("unarchived", False),
+        ("unaccepted", False),
+        ("missing_snapshot", False),
+        ("missing_wait", False),
+        ("wrong_closure", False),
+        ("wrong_closure", True),
+        ("wrong_session", True),
+    ],
+)
+def test_failed_preparation_guard_never_resets_or_records_success(
+    monkeypatch, fault, refusal
+):
+    instance, calls, saved = preparation(monkeypatch, refusal=refusal, fault=fault)
+    with pytest.raises(AssertionError):
+        instance.prepare_case_start(
+            "case", previous_session="a" * 32 if refusal else None
+        )
+    assert not any(isinstance(call, tuple) for call in calls)
+    assert instance.contexts == saved
+
+
+@pytest.mark.parametrize("write_allowed", [False, True])
+def test_fixed_native_policy_helper_probes_read_and_write_without_writing(
+    monkeypatch, capsys, write_allowed
+):
+    from types import SimpleNamespace
+
+    sink = "normal-four-" + "a" * 32 + ".raw"
+    monkeypatch.setattr(sys, "argv", ["native_probe.py", "--close-sink-name", sink])
+    monkeypatch.setattr(
+        ctypes,
+        "CDLL",
+        lambda *args, **kwargs: SimpleNamespace(aa_change_profile=lambda profile: 0),
+    )
+    original_read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, *args, **kwargs: "edge400-native (enforce)\n"
+        if str(path) == "/proc/self/attr/apparmor/current"
+        else original_read_text(path, *args, **kwargs),
+    )
+    opened, closed = [], []
+
+    def open_sink(path, flags):
+        assert path == Path("/var/lib/edge400-systemd-lab/close-custody") / sink
+        opened.append(flags)
+        if flags == os.O_WRONLY | os.O_APPEND and write_allowed:
+            return 123
+        raise PermissionError(errno.EACCES, "mock policy denial")
+
+    monkeypatch.setattr(os, "open", open_sink)
+    monkeypatch.setattr(os, "close", lambda fd: closed.append(fd))
+    if write_allowed:
+        with pytest.raises(AssertionError, match="write unexpectedly allowed"):
+            runpy.run_path(str(REAL_SYSTEMD / "native_probe.py"), run_name="__main__")
+        assert closed == [123]
+    else:
+        with pytest.raises(SystemExit) as stopped:
+            runpy.run_path(str(REAL_SYSTEMD / "native_probe.py"), run_name="__main__")
+        assert stopped.value.code == 0
+        assert (
+            "root-exclusive-sink-write" in json.loads(capsys.readouterr().out)["denied"]
+        )
+    assert opened == [os.O_RDONLY, os.O_WRONLY | os.O_APPEND]

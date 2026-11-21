@@ -31,7 +31,7 @@ denied = []
 
 def expect(name, operation):
     try:
-        operation()
+        result = operation()
     except OSError as exc:
         assert exc.errno in (errno.EACCES, errno.EPERM, errno.EAFNOSUPPORT), (
             name,
@@ -39,6 +39,8 @@ def expect(name, operation):
         )
         denied.append(name)
     else:
+        if isinstance(result, int):
+            os.close(result)
         raise AssertionError(name + " unexpectedly allowed")
 
 
@@ -47,6 +49,12 @@ if close_sink:
     expect(
         "root-exclusive-sink",
         lambda: os.open(base / "close-custody" / sys.argv[2], os.O_RDONLY),
+    )
+    expect(
+        "root-exclusive-sink-write",
+        lambda: os.open(
+            base / "close-custody" / sys.argv[2], os.O_WRONLY | os.O_APPEND
+        ),
     )
     print(
         json.dumps(

@@ -225,9 +225,7 @@ class CloseReceiptLab:
     def begin(self, case_id, *, previous_session=None):
         assert case_id in CASE_IDS and case_id not in self.contexts
         g = self.g
-        assert not g.Systemd().cores(), (
-            "Root output assignment requires no running core"
-        )
+        self.prepare_case_start(case_id, previous_session=previous_session)
         case = self.cases[case_id]
         nonce = secrets.token_hex(16)
         directory = g.BASE / "close-custody"
@@ -341,6 +339,59 @@ class CloseReceiptLab:
         g.systemctl("daemon-reload")
         self.policy_probe(context)
 
+    def prepare_case_start(self, case_id, *, previous_session=None):
+        """One explicit fixture preparation, never a retry or production change."""
+        from azazel_edge.outcome.input_auth import SourceVerifier
+
+        g = self.g
+        system = g.Systemd()
+        assert not system.cores(), "Root output assignment requires no running core"
+        assert system.snapshot()["ActiveState"] in ("inactive", "failed"), (
+            "case preparation requires inactive/failed manager"
+        )
+        for context in self.contexts.values():
+            assert context["exported"] and context.get("analysis_accepted"), (
+                "previous case must be archived and accepted before counter preparation"
+            )
+            required = {
+                "root-custody.raw",
+                "launcher-systemd.json",
+                *(
+                    name + "-" + phase + ".raw"
+                    for name in ("source", "anchors", "journal")
+                    for phase in ("before", "after")
+                ),
+            }
+            assert required <= context["files"].keys(), (
+                "previous original snapshots are incomplete"
+            )
+            assert (
+                context["controller"]["invocation"]["exec_main_exit_monotonic_us"] > 0
+            ), "previous actual wait must be archived"
+        verifier = SourceVerifier(g.fixture().p)
+        tip = verifier.verify(g.source())
+        refusal = self.cases[case_id]["custody_mode"] == "managed_prelaunch_refusal"
+        if refusal:
+            assert (
+                not verifier.live_state.closed
+                and previous_session is not None
+                and verifier.live_state.session == previous_session
+            ), "refusal requires the exact prior unclosed session"
+        else:
+            assert verifier.live_state.closed and previous_session is None, (
+                "new native case requires verified closed history"
+            )
+        g.systemctl("reset-failed", g.UNIT)
+        g.record(
+            "native-close-case-start-counter-prepared",
+            case_id=case_id,
+            source_checkpoint=tip,
+            expected_source_closed=not refusal,
+            prior_session_ref=previous_session,
+            archived_cases=list(self.contexts),
+            action="single-explicit-reset-failed",
+        )
+
     def policy_probe(self, context):
         """Existing grant controls, explicitly separate from actual core work."""
         g = self.g
@@ -351,9 +402,10 @@ class CloseReceiptLab:
             "assert os.getuid()==61001 and os.getgid()==61001;"
             "assert not os.getgroups();"
             "assert Path('/proc/self/attr/apparmor/current').read_text().strip()=='unconfined';"
-            "\ntry: fd=os.open(sys.argv[1],os.O_RDONLY)"
-            "\nexcept OSError as e: assert e.errno in (errno.EACCES,errno.EPERM)"
-            "\nelse: os.close(fd);raise AssertionError('Root sink unexpectedly readable')"
+            "\nfor flags in (os.O_RDONLY,os.O_WRONLY|os.O_APPEND):"
+            "\n try: fd=os.open(sys.argv[1],flags)"
+            "\n except OSError as e: assert e.errno in (errno.EACCES,errno.EPERM)"
+            "\n else: os.close(fd);raise AssertionError('Root sink unexpectedly accessible')"
             "\nprint(json.dumps({'uid':os.getuid(),'probe':'unconfined-producer-DAC-control','denied':True}))"
         )
         dac = subprocess.run(
@@ -549,6 +601,11 @@ class CloseReceiptLab:
 
     def finalized(self, case_id, *, reader=None, readback=None, reader_binding=None):
         context = self.contexts[case_id]
+        if context["exported"]:
+            assert context["analysis_accepted"], (
+                "cannot replace rejected case originals"
+            )
+            return
         self.stores(context, "after")
         if (
             reader is None
@@ -650,7 +707,6 @@ class CloseReceiptLab:
         )
         prior_session = self.contexts[prior_case]["controller"]["session_ref"]
         self.begin(name, previous_session=prior_session)
-        self.g.systemctl("reset-failed", self.g.UNIT, check=False)
         self.g.systemctl("start", self.g.UNIT, check=False)
         self.g.wait_for(
             lambda: self.g.Systemd().snapshot()["ActiveState"] == "failed"

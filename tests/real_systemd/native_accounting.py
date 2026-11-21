@@ -555,6 +555,7 @@ def _case(g, role_command, protocol, case, *, downtime_sid=None, close_lab=None)
                     "native-accounting-interrupted-connected-relaunch-refused"
                 )
             else:
+                close_lab.finalized(case_id)
                 close_lab.refuse_restart(case_id)
             assert g.source() == before
         else:
