@@ -93,8 +93,12 @@ dropped = inflight = 0
 The worker constructs this snapshot after all preceding activity frames are
 written, not from sender expectations. Checked counters never wrap. Overflow,
 CAS exhaustion, serialization/frame bound, queue saturation, disconnect, write
-failure, drain/ack timeout or missing end poisons capture and prevents a clean
-terminal. Later defense can continue. No valid terminal means final produced/
+failure or drain timeout before terminal emission poisons capture and prevents
+a valid terminal. An acknowledgement timeout may happen AFTER End/EOF and Source
+fsync; it cannot retract authentic terminal bytes. Preserve those bytes and any
+authenticated counter facts, but do not infer successful local acknowledgement
+or overall normal capture completion from them. Later defense can continue.
+No valid terminal means final produced/
 loss/inflight totals UNKNOWN, even if local diagnostics or a signed prefix exist.
 Do not claim complete failure/lifetime loss totals from a permanently closed
 capture stream. Repeated finish cannot append another End or reopen admission.
@@ -102,7 +106,10 @@ capture stream. Repeated finish cannot append another End or reopen admission.
 Receiver verifies profile/counts against actual accepted activity frames. It
 still withholds end until complete clean EOF/no extra or partial tail, then
 original append/fsync succeeds. Native write acknowledgement is not durable
-Source acceptance. Exact durable agreement additionally requires unchanged
+Source acceptance. Local finisher acknowledgement is a separate field and stays
+unknown without positive, independently bound evidence. Finite signed-cohort
+accounting can be verified separately from overall capture completion; an absent
+finish receipt never silently becomes acknowledged=true. Exact durable agreement additionally requires unchanged
 signed Source replay, actual receiver/launcher normal wait, original readback and
 selected protected witness boundary. Regular Source is not immutable/sealed.
 
@@ -131,7 +138,9 @@ Rust module tests (synthetic event concurrency, not normal-provider execution):
 normal finite queue, deterministic record/close interleaving, serialization held
 across close, post-close rejection, repeated/concurrent finish, oversize, queue
 full, closed receiver/partial-write failure, bounded timeout/CAS/counter overflow.
-Clean end cannot precede a pre-close accepted record; faults retain no clean end.
+Clean end cannot precede a pre-close accepted record. Preterminal faults have no
+valid end; postterminal timeout controls preserve authentic end bytes but withhold
+overall acknowledged/normal completion. Never discard a valid signed prefix.
 
 Python parser/replay tests (synthetic signed fixtures, not native capture):
 legacy parity; counted start/end and activity agreement; unknown/missing/bool/
