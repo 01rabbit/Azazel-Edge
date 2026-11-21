@@ -29,10 +29,11 @@ from .input_origin import MAX_IMAGE
 from .instance import CoreLease
 from .journal import OutcomeJournalError, _parse, _ref
 from .live_protocol import native_frame
+from . import native_close_receipts as close_receipts
 
 SCHEMA = "outcome-live-origin-registration/v1"
 ENV_KEYS = frozenset(
-    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING".split()
+    "EVE_PATH AI_SOCKET NORMALIZED_EVENT_LOG EVE_POLL_MS FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_ENFORCE_LEVEL DEFENSE_ACTION_TTL_SEC PROTECTED_FLOWS_PATH UNDELIVERED_SPOOL UNDELIVERED_SPOOL_CAP_BYTES DEFENSE_RELEASE_LEDGER DEFENSE_ALLOW_HIGH_IMPACT_AUTO DEFENSE_IFACE DEFENSE_HONEYPOT_PORT REDIRECT_POLICY_PATH EVE_FROM_START LIVE_ORIGIN_ACCOUNTING LIVE_ORIGIN_CLOSE_RECEIPTS".split()
 )
 REQUIRED_ENV = frozenset(
     "EVE_PATH NORMALIZED_EVENT_LOG FORWARD_AI FORWARD_LOG EVENT_STDOUT DEFENSE_ENFORCE DEFENSE_DRY_RUN DEFENSE_RELEASE_LEDGER REDIRECT_POLICY_PATH PROTECTED_FLOWS_PATH EVE_FROM_START".split()
@@ -145,6 +146,7 @@ def validate_registration(policy, r):
             "live origin cannot replay input or use stdout as evidence"
         )
     accounting_profile(r)
+    close_receipts.enabled(r)
     ai_uid = r.get("ai_socket_uid", 0)
     if (
         type(ai_uid) is not int
@@ -318,6 +320,9 @@ def receive(policy, r, key_path, boot_ref, fd, session):
     if sys.platform != "linux" or os.geteuid() != policy.data["producer_uid"]:
         raise OutcomeJournalError("registered non-root Linux receiver required")
     expected_profile = accounting_profile(r)
+    report_close = close_receipts.enabled(r)
+    if report_close:
+        os.set_inheritable(1, False)
     harden_receiver(policy.data["producer_uid"])
     if "capture_apparmor_profile" in r:
         from .confinement import enforce_capture
@@ -336,6 +341,22 @@ def receive(policy, r, key_path, boot_ref, fd, session):
         # previous session closure all verify. Missing stores are not created.
         with SignedCaptureWriter(policy, key_path, boot_ref=boot_ref) as writer:
             if not writer.verifier.live_state.closed:
+                if report_close:
+                    close_receipts.emit_pipe(
+                        dict(
+                            schema_version="outcome-live-receiver-refusal-receipt/v1",
+                            session_ref=session,
+                            receiver_pid=os.getpid(),
+                            launcher_pid=os.getppid(),
+                            registration_sha256=policy.data[
+                                "origin_registration_sha256"
+                            ],
+                            trust_sha256=policy.digest,
+                            reason="unclean_prior_session",
+                            prior_session_ref=writer.verifier.live_state.session,
+                            source_checkpoint=writer.verifier.tip(),
+                        )
+                    )
                 raise OutcomeJournalError(
                     "unclean live session; automatic continuation refused"
                 )
@@ -363,8 +384,10 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                 if not part:
                     if buffer or not ended:
                         raise OutcomeJournalError("live capture truncated or unclosed")
-                    writer.append(terminal)  # Only after clean EOF, no extra bytes.
-                    return
+                    checkpoint = writer.append(
+                        terminal
+                    )  # Only after clean EOF, no extra bytes.
+                    break
                 buffer.extend(part)
                 while b"\n" in buffer:
                     index = buffer.index(b"\n") + 1
@@ -379,7 +402,9 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                         wire["kind"] == "session_start"
                         and next_state.accounting_profile != expected_profile
                     ):
-                        raise OutcomeJournalError("registered live accounting profile mismatch")
+                        raise OutcomeJournalError(
+                            "registered live accounting profile mismatch"
+                        )
                     event = dict(wire["event"])
                     if "capture_origin" in event:
                         raise OutcomeJournalError("native provenance injection")
@@ -398,6 +423,23 @@ def receive(policy, r, key_path, boot_ref, fd, session):
                 if len(buffer) > 65536:
                     raise OutcomeJournalError("live capture frame bound")
 
+        # Successful context exit, including writer.close(), precedes this report.
+        if report_close:
+            close_receipts.emit_pipe(
+                dict(
+                    schema_version="outcome-live-receiver-close-receipt/v1",
+                    session_ref=session,
+                    receiver_pid=os.getpid(),
+                    launcher_pid=os.getppid(),
+                    registration_sha256=policy.data["origin_registration_sha256"],
+                    trust_sha256=policy.digest,
+                    source_checkpoint=checkpoint,
+                    clean_eof_observed=True,
+                    terminal_append_fsync_completed=True,
+                    source_writer_close_completed=True,
+                )
+            )
+
 
 def launch(policy_path, registration_path, key_path, boot_ref):
     if sys.platform != "linux" or os.geteuid() != 0:
@@ -405,6 +447,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     _ref(boot_ref)
     p = TrustPolicy.from_file(policy_path, role="witness")
     r = registration(p, registration_path)
+    report_close = close_receipts.enabled(r)
     capture_python = sys.executable
     if "capture_apparmor_profile" in r:
         from .confinement import capture_image
@@ -421,13 +464,17 @@ def launch(policy_path, registration_path, key_path, boot_ref):
     core = None
     old_handlers = {}
     stopping = False
+    forwarded_signal = None
+    receiver_wait_timed_out = False
+    ready_raw = b""
     session = secrets.token_hex(16)
 
     def stop(signum, frame):
-        nonlocal stopping
+        nonlocal stopping, forwarded_signal
         stopping = True
         if core is not None and core.poll() is None:
             core.send_signal(signum)
+            forwarded_signal = signum
 
     try:
         native_gate(r, image)
@@ -465,10 +512,15 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             close_fds=True,
         )
         signer_end.close()
-        if (
-            not select.select([worker.stdout], [], [], 10)[0]
-            or worker.stdout.readline(1025) != b'{"ready":true}\n'
-        ):
+        if report_close:
+            ready_raw = close_receipts.first_line(worker.stdout)
+            ready = ready_raw == b'{"ready":true}\n'
+        else:
+            ready = (
+                select.select([worker.stdout], [], [], 10)[0]
+                and worker.stdout.readline(1025) == b'{"ready":true}\n'
+            )
+        if not ready:
             raise OutcomeJournalError(
                 "live signer preflight refused; core not launched"
             )
@@ -489,7 +541,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
             ],
             pass_fds=(image, core_end.fileno(), lease.fd),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if report_close else subprocess.DEVNULL,
             cwd="/",
             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", **r["environment"]},
             close_fds=True,
@@ -512,6 +564,7 @@ def launch(policy_path, registration_path, key_path, boot_ref):
         try:
             signer_code = worker.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            receiver_wait_timed_out = True
             worker.kill()
             worker.wait()
             signer_code = 1
@@ -531,6 +584,41 @@ def launch(policy_path, registration_path, key_path, boot_ref):
                 worker.kill()
             if core is None:
                 worker.wait()
+        if report_close:
+            native_stream = close_receipts.stream(
+                core.stdout if core is not None else None,
+                limit=close_receipts.NATIVE_LIMIT,
+                exited=core is not None and core.poll() is not None,
+            )
+            receiver_stream = close_receipts.stream(
+                worker.stdout if worker is not None else None,
+                initial=ready_raw,
+                limit=close_receipts.RECEIVER_LIMIT,
+                exited=worker is not None and worker.poll() is not None,
+            )
+            close_receipts.emit(
+                dict(
+                    schema_version="outcome-live-close-custody/v1",
+                    registration_sha256=p.data["origin_registration_sha256"],
+                    trust_sha256=p.digest,
+                    session_ref=session,
+                    boot_ref=boot_ref,
+                    launcher_pid=os.getpid(),
+                    core_pid=core.pid if core is not None else None,
+                    receiver_pid=worker.pid if worker is not None else None,
+                    core_returncode=core.poll() if core is not None else None,
+                    receiver_returncode=worker.poll() if worker is not None else None,
+                    receiver_wait_timed_out=receiver_wait_timed_out,
+                    forwarded_signal=forwarded_signal,
+                    native_stream=native_stream,
+                    receiver_stream=receiver_stream,
+                    root_stdout=close_receipts.stdout_object(),
+                ),
+                close_receipts.ROOT_LIMIT,
+            )
+            if core is not None:
+                core.stdout.close()
+        if worker is not None:
             worker.stdout.close()
 
 

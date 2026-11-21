@@ -63,6 +63,9 @@ struct Capture {
     gate: Arc<AtomicU64>,
     counts: Arc<Counts>,
     shutdown: UnixStream,
+    session: String,
+    close_receipts: bool,
+    receipt_attempted: AtomicBool,
 }
 struct Admission<'a>(&'a AtomicU64);
 impl Drop for Admission<'_> {
@@ -172,6 +175,7 @@ fn start_profile(mut stream: UnixStream, session: String, accounting: bool) -> i
     let failed = Arc::new(AtomicBool::new(false));
     let gate = Arc::new(AtomicU64::new(0));
     let counts = Arc::new(Counts::default());
+    let capture_session = session.clone();
     let flag = failed.clone();
     let worker_gate = gate.clone();
     let worker_counts = counts.clone();
@@ -206,7 +210,7 @@ fn start_profile(mut stream: UnixStream, session: String, accounting: bool) -> i
         }
         let _ = stream.shutdown(Shutdown::Both);
     });
-    Ok(Capture { tx, failed, gate, counts, shutdown })
+    Ok(Capture { tx, failed, gate, counts, shutdown, session: capture_session, close_receipts: false, receipt_attempted: AtomicBool::new(false) })
 }
 
 /// Only a supervising trusted launcher supplies the private connected fd.
@@ -235,14 +239,57 @@ pub fn install(args: &[String]) -> Result<(), String> {
         Ok(value) if value == "v1" => true,
         _ => return Err("live origin accounting profile refused".into()),
     };
-    let capture = start_profile(stream, args[4].clone(), accounting).map_err(|_| "live origin unavailable")?;
+    let close_receipts = match std::env::var("AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(value) if value == "v1" && accounting
+            && std::env::var("AZAZEL_EVENT_STDOUT").as_deref() == Ok("off") => true,
+        _ => return Err("live origin close receipt profile refused".into()),
+    };
+    if close_receipts { prepare_receipt_stdout()?; }
+    let mut capture = start_profile(stream, args[4].clone(), accounting).map_err(|_| "live origin unavailable")?;
+    capture.close_receipts = close_receipts;
     CAPTURE.set(capture).map_err(|_| "live origin already configured".into())
 }
 pub fn record(kind: &'static str, event: &Value) {
     if let Some(capture) = CAPTURE.get() { capture.record(kind, event); }
 }
+fn prepare_receipt_stdout() -> Result<(), String> {
+    let metadata = std::fs::metadata("/dev/fd/1").map_err(|_| "close receipt stdout missing")?;
+    if !metadata.file_type().is_fifo() { return Err("close receipt stdout must be private pipe".into()); }
+    extern "C" { fn fcntl(fd: i32, command: i32, ...) -> i32; }
+    #[cfg(target_os = "linux")]
+    const NONBLOCK: i32 = 0x800;
+    #[cfg(not(target_os = "linux"))]
+    const NONBLOCK: i32 = 0x4;
+    let flags = unsafe { fcntl(1, 1) };
+    let status = unsafe { fcntl(1, 3) };
+    if flags < 0 || status < 0 || unsafe { fcntl(1, 2, flags | 1) } < 0
+        || unsafe { fcntl(1, 4, status | NONBLOCK) } < 0 {
+        return Err("close receipt stdout flags unavailable".into());
+    }
+    Ok(())
+}
+fn close_receipt(session: &str, acknowledged: bool) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&json!({
+        "schema_version":"outcome-native-close-receipt/v1", "session_ref":session,
+        "native_pid":std::process::id(), "local_worker_ack_observed":acknowledged
+    })).unwrap_or_default();
+    bytes.push(b'\n');
+    bytes
+}
 pub fn finish() {
-    if let Some(capture) = CAPTURE.get() { let _ = capture.finish(); }
+    if let Some(capture) = CAPTURE.get() {
+        let report = capture.close_receipts && !capture.receipt_attempted.swap(true, Ordering::SeqCst);
+        let acknowledged = capture.finish();
+        if report {
+            let bytes = close_receipt(&capture.session, acknowledged);
+            if bytes.len() <= 1024 {
+                extern "C" { fn write(fd: i32, bytes: *const u8, count: usize) -> isize; }
+                // One nonblocking attempt, never stdout locks/retries or process failure.
+                let _ = unsafe { write(1, bytes.as_ptr(), bytes.len()) };
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -346,7 +393,8 @@ mod tests {
         let (shutdown, recv) = UnixStream::pair().unwrap();
         let (tx, rx) = sync_channel(capacity);
         (Capture { tx, shutdown, failed:Arc::new(AtomicBool::new(false)),
-            gate:Arc::new(AtomicU64::new(0)), counts:Arc::new(Counts::default()) }, rx, recv)
+            gate:Arc::new(AtomicU64::new(0)), counts:Arc::new(Counts::default()),
+            session:"a".repeat(32), close_receipts:false, receipt_attempted:AtomicBool::new(false) }, rx, recv)
     }
     #[test]
     fn deterministic_queue_full_and_checked_overflow_leave_no_terminal() {
@@ -453,6 +501,19 @@ mod tests {
         }
         assert!(!capture.finish());
         assert!(!has_end(&read_frames(recv)));
+    }
+
+    #[test]
+    fn close_diagnostic_is_bounded_and_does_not_claim_receiver_ack() {
+        for acknowledged in [true, false] {
+            let raw = close_receipt(&"a".repeat(32), acknowledged);
+            assert!(raw.len() <= 1024 && raw.ends_with(b"\n"));
+            let value: Value = serde_json::from_slice(&raw).unwrap();
+            assert_eq!(value.as_object().unwrap().len(), 4);
+            assert_eq!(value["local_worker_ack_observed"], acknowledged);
+            assert_eq!(value["native_pid"], std::process::id());
+            assert_eq!(value["session_ref"], "a".repeat(32));
+        }
     }
 
 }
