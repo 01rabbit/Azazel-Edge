@@ -251,3 +251,25 @@ owner0/mode0444 and trusted-ancestor checks. Measured sidecars remain under the
 existing observer-owned writable directory. No open_parent relaxation, new
 AppArmor rule, account or capability is introduced. This prospective correction
 precedes any new capture; it does not repair or overwrite the first failed arm.
+
+## Runtime-tree configuration correction after original second failure
+
+The second original ON bootstrap retained PermissionError opening the
+`/opt/edge400-src/` directory during the unchanged trusted ancestor walk. Its
+completed OFF result and failed ON originals remain separate; FAULTED was not
+run. The source-tree staging path above is superseded before a changed capture by
+`/opt/edge400-runtime/finite-load-configs/load-<32hex>-config.json`. This is the
+same fresh disposable runtime tree, with existing explicit ancestor directory
+read grants and existing `/opt/edge400-runtime/** mr` coverage. The new directory
+remains Root0555, files exclusively Root0444/fsynced/pinned. No permission is
+added and no authentication ancestor check is removed.
+
+Static read-path review covers each actual open_parent component: config walks
+`/`, `/opt/`, `/opt/edge400-runtime/`, then its Root config directory; trust and
+registration walk the existing explicit `/var/`, `/var/lib/`, lab and bundle
+directory grants; completion sidecar reads additionally walk the granted
+observer directory with trusted_owner61002 and Root ancestors. The UID61002
+registration parser skips private native environment path walks by its existing
+rule. Source/policy/helper files use their existing direct read paths. Child
+identity reads remain status/label/boot only; legacy self-stat/time namespace
+functions are still replaced solely inside the new bound-identity context.
