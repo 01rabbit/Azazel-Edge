@@ -342,8 +342,8 @@ class CloseReceiptLab:
         g.systemctl("daemon-reload")
         self.policy_probe(context)
 
-    def prepare_case_start(self, case_id, *, previous_session=None):
-        """One explicit fixture preparation, never a retry or production change."""
+    def verify_case_start(self, case_id, *, previous_session=None):
+        """Validate original archive/Source/manager guards without mutation."""
         from azazel_edge.outcome.input_auth import SourceVerifier
 
         g = self.g
@@ -384,7 +384,18 @@ class CloseReceiptLab:
             assert verifier.live_state.closed and previous_session is None, (
                 "new native case requires verified closed history"
             )
-        g.systemctl("reset-failed", g.UNIT)
+        return tip, refusal
+
+    def _reset_case_counter(self, case_id, previous_session, expected_tip):
+        self.g.systemctl("reset-failed", self.g.UNIT)
+
+    def prepare_case_start(self, case_id, *, previous_session=None):
+        """One explicit fixture preparation, never a retry or production change."""
+        tip, refusal = self.verify_case_start(
+            case_id, previous_session=previous_session
+        )
+        self._reset_case_counter(case_id, previous_session, tip)
+        g = self.g
         g.record(
             "native-close-case-start-counter-prepared",
             case_id=case_id,

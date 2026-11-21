@@ -248,3 +248,172 @@ def test_failed_proc_lookup_and_stop_still_retain_original_failure(monkeypatch):
     assert [
         entry["stage"] for entry in instance.contexts["case"]["ingress"]["errors"]
     ] == ["teardown-resume", "teardown-manager", "teardown-manager"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "open",
+        "RefUnit",
+        "guard",
+        "changed_source",
+        "ResetFailedUnit",
+        "UnrefUnit",
+        "close",
+        "initial_guard",
+    ],
+)
+def test_persistent_counter_transaction_holds_reference_through_guards_and_one_reset(
+    monkeypatch, fault
+):
+    calls, records = [], []
+
+    class Client:
+        def __init__(self):
+            calls.append("construct")
+            self.trace = []
+
+        def open(self):
+            calls.append("open")
+            if fault == "open":
+                raise OSError("bus unavailable")
+
+        def call(self, method, unit):
+            assert unit == "azazel-edge-core.service"
+            calls.append(method)
+            self.trace.append(
+                dict(method=method, returncode=-1 if fault == method else 1)
+            )
+            if fault == method:
+                raise OSError(method + " failed")
+
+        def close(self):
+            calls.append("close")
+            if fault == "close":
+                raise OSError("close failed")
+
+    monkeypatch.setattr(lab, "SystemdUnitClient", Client)
+    instance = object.__new__(lab.FiniteIngressLab)
+    instance.contexts = {}
+    instance.g = SimpleNamespace(
+        UNIT="azazel-edge-core.service",
+        record=lambda name, **fields: records.append((name, fields)),
+    )
+    guard_count = 0
+
+    def guards(case_id, *, previous_session=None):
+        nonlocal guard_count
+        guard_count += 1
+        calls.append("initial_guard" if guard_count == 1 else "held_guard")
+        if fault == "initial_guard" or (fault == "guard" and guard_count == 2):
+            raise AssertionError("original guard refused")
+        if guard_count == 2:
+            assert calls[-2] == "RefUnit"
+        return dict(
+            seq=2 if fault == "changed_source" and guard_count == 2 else 1
+        ), False
+
+    monkeypatch.setattr(instance, "verify_case_start", guards)
+    if fault is None:
+        instance.prepare_case_start("case")
+        assert calls == [
+            "initial_guard",
+            "construct",
+            "open",
+            "RefUnit",
+            "held_guard",
+            "ResetFailedUnit",
+            "UnrefUnit",
+            "close",
+        ]
+        assert len(records) == 2 and records[0][1]["error"] is None
+    else:
+        with pytest.raises((AssertionError, OSError)):
+            instance.prepare_case_start("case")
+        assert all(
+            name != "native-close-case-start-counter-prepared" for name, _ in records
+        )
+        if fault == "initial_guard":
+            assert calls == ["initial_guard"] and records == []
+        else:
+            assert calls[-1] == "close"
+            assert records[0][1]["error"] is not None
+        if fault in (
+            "guard",
+            "changed_source",
+            "ResetFailedUnit",
+            "UnrefUnit",
+            "close",
+        ):
+            assert calls.count("UnrefUnit") == 1
+    assert calls.count("ResetFailedUnit") <= 1
+
+
+def test_libsystemd_binding_uses_same_bus_fixed_target_and_bounded_timeout(monkeypatch):
+    import ctypes
+
+    calls = []
+
+    class Function:
+        def __init__(self, operation):
+            self.operation = operation
+
+        def __call__(self, *args):
+            return self.operation(*args)
+
+    def opened(pointer):
+        ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p)).contents.value = 77
+        calls.append("open")
+        return 0
+
+    def timeout(bus, usec):
+        assert bus.value == 77 and usec == 5_000_000
+        calls.append("timeout")
+        return 0
+
+    def method(
+        bus, destination, path, interface, member, error, reply, signature, unit
+    ):
+        assert bus.value == 77 and destination == b"org.freedesktop.systemd1"
+        assert (
+            path == b"/org/freedesktop/systemd1"
+            and interface == b"org.freedesktop.systemd1.Manager"
+        )
+        assert signature == b"s" and unit.value == b"azazel-edge-core.service"
+        calls.append(member.decode())
+        return 1
+
+    library = SimpleNamespace(
+        sd_bus_open_system=Function(opened),
+        sd_bus_set_method_call_timeout=Function(timeout),
+        sd_bus_call_method=Function(method),
+        sd_bus_message_unref=Function(lambda reply: None),
+        sd_bus_error_free=Function(lambda error: None),
+        sd_bus_flush=Function(lambda bus: calls.append("flush") or 0),
+        sd_bus_close=Function(lambda bus: calls.append("close")),
+        sd_bus_unref=Function(lambda bus: calls.append("unref")),
+    )
+    monkeypatch.setattr(
+        lab.ctypes,
+        "CDLL",
+        lambda name: library
+        if name == "libsystemd.so.0"
+        else pytest.fail("new dependency"),
+    )
+    client = lab.SystemdUnitClient()
+    client.open()
+    for member in ("RefUnit", "ResetFailedUnit", "UnrefUnit"):
+        client.call(member, "azazel-edge-core.service")
+    client.close()
+    assert calls == [
+        "open",
+        "timeout",
+        "RefUnit",
+        "ResetFailedUnit",
+        "UnrefUnit",
+        "flush",
+        "close",
+        "unref",
+    ]
+    assert not client.bus
