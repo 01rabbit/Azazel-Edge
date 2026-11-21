@@ -182,8 +182,11 @@ None. `expected` has exactly `trust_sha256, registration_sha256, source_sha256,
 anchors_sha256, controller_sha256`; pins are lowercase SHA256, null only when
 that raw input is absent. No derived substitute pin. Each bad leg quarantines
 its qualification, not independently valid Source signature facts. JSON is
-strict duplicate-free/finite canonical JSON plus LF, depth at most16; Source
-retains its existing signed format. Limits: trust32KiB, registration32KiB,
+strict duplicate-free/finite, depth at most16. Preserve the actual provisioned
+trust/registration canonical JSON WITHOUT LF (`input_service.provision` writes
+exact `_json` bytes); do not append a newline while calling it an original.
+New controller JSON is canonical plus LF; Source/anchors retain their existing
+signed line format. Limits: trust32KiB, registration32KiB,
 controller128KiB, Source/anchors8MiB and at most4096 rows; bound before hashing
 or parsing. Original library verification limits remain separately enforced.
 
