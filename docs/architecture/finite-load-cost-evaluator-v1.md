@@ -79,3 +79,8 @@ recordings retain their existing 4,096-row bound and call recordings their
 existing 900 total-row bound. ON actual-Linux acceptance requires genuine close
 and unchanged 5ms qualification. Withheld/failed clocks preserve originals and
 block acceptance; they are never converted into an expected passing metric.
+
+The Root custody *stream* retains its existing 32 KiB cap, including the startup
+header. Its individual final custody record retains the separate existing
+16 KiB cap enforced by the close verifier. Do not confuse the record bound
+with the enclosing stream bound or truncate a valid startup header to fit it.
