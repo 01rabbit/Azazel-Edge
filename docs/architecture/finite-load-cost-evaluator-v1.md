@@ -48,7 +48,15 @@ critical-path latency, causal attribution or a 5ms clock substitute.
 
 `evaluate_finite_load_cost_comparison(cases)` takes the ordered three original
 case analyses (OFF/ON/FAULTED). It reports schema_version
-`edge-finite-load-comparison/v1`, status, reasons, cases and authority_flags.
+`edge-finite-load-comparison/v1`, status, reasons, cases, differences and
+authority_flags. Differences has exactly ON-minus-OFF and FAULTED-minus-OFF
+entries, each with case_id, status, reasons, native_cost and receiver_cost.
+Only equal verified actual corpora, qualified load/intake, complete finite
+input and complete valid phase costs permit a descriptive delta. Each role
+maps original phase names to null (unavailable in either arm), or signed
+differences of count/wall/process CPU/thread CPU/maximum wall. These are
+sequential observed differences, not a causal estimate; overlapping phases
+remain separate. Any missing gate withholds the affected comparison.
 It requires all actual raw corpus hashes/populations equal, load and 98-percent
 gates verified, and finite completion separately verified. Observer OFF and
 FAULTED remain unqualified for a complete observer clock; therefore this three
