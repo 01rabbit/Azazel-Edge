@@ -279,6 +279,9 @@ Qualification clarifications before annex implementation:
   must preserve the protocol's disabled/dry_run/policy_gated mode, zero executed
   commands, disabled enforcement and dry-run posture. An authenticated APPLIED
   record remains an authentic fact but does not qualify this no-action case.
+  Preserve exact normal-core result vocabulary: disabled maps to
+  no_disruptive_action; dry_run/policy_gated map to planned_not_applied. An
+  internally contradictory applied/disabled declaration cannot qualify.
 - Qualified finite accounting requires the selected protected witness Source
   checkpoint to reach the selected session's authenticated End (at least that
   exact byte boundary). A shorter valid witnessed prefix stays a positive prefix
