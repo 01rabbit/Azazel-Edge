@@ -273,3 +273,26 @@ registration parser skips private native environment path walks by its existing
 rule. Source/policy/helper files use their existing direct read paths. Child
 identity reads remain status/label/boot only; legacy self-stat/time namespace
 functions are still replaced solely inside the new bound-identity context.
+
+## Explicit clean finite-load finish
+
+The third original Linux trial collected all three assigned arms with complete
+finite input, qualified load/intake, genuine qualified ON clock and verified
+FAULTED boundary. Its later smoke-finish failed only because the legacy native
+finish deliberately requires interrupted Source history. Preserve all originals
+and that failure; do not pool its arms into another candidate's trial.
+
+Only `armor.py smoke-finish --native-core --finite-load-cost` dispatches to new
+`finite_load_cost.finish(g)`. Other native flavors retain native_accounting.finish
+unchanged. The new finish first retains exact authenticated Source bytes and
+requires a verified closed selected session. It disables only the existing owned
+test core unit and stops only that core and its owned witness, using strict
+manager return checks. It then requires byte-for-byte unchanged authenticated
+Source, still closed, no native cores, inactive/failed owned core and witness,
+and no live owned `edge400-load-observer-<32hex>.service` unit (MainPID zero and
+inactive/failed state, or absent). It never signals arbitrary reported/recycled
+PIDs, starts/restarts an actor, reads private keys or resets history. The existing
+Root systemd/proc authority suffices. A pre-existing interrupted Source, manager
+failure, changed Source, live core or live owned observer makes finish fail.
+Record only scoped clean-close/teardown facts. This prospective dispatcher/gate
+correction precedes the changed candidate's fresh mandatory full trial.
