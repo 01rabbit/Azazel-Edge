@@ -1497,3 +1497,57 @@ def _verify_fault_boundary(controller, observer, original):
         for r in rows
         if r["kind"] == "cursor" and r["data"]["position"] == position
     )
+
+
+def finish(g):
+    """Close only this flavor's clean disposable lab; preserve all Source bytes."""
+    from azazel_edge.outcome.input_auth import SourceVerifier
+
+    before = g.source()
+    verifier = SourceVerifier(g.fixture().p)
+    tip = verifier.verify(before)
+    assert verifier.live_state.closed is True, (
+        "finite load finish requires clean Source history"
+    )
+    g.systemctl("disable", g.UNIT)
+    g.systemctl("stop", g.UNIT, g.WITNESS)
+    assert not g.Systemd().cores(), "native core remains after finite load teardown"
+    for unit in (g.UNIT, g.WITNESS):
+        state = g.systemctl(
+            "show", unit, "--property=ActiveState", "--value"
+        ).stdout.strip()
+        assert state in ("inactive", "failed"), (unit, state)
+    observers = g.systemctl(
+        "list-units",
+        "--all",
+        "--no-legend",
+        "--plain",
+        "--no-pager",
+        "edge400-load-observer-*.service",
+    ).stdout
+    assert len(observers.encode()) <= 65536, "owned observer inventory exceeds bound"
+    for line in observers.splitlines():
+        unit = line.split()[0]
+        assert re.fullmatch(r"edge400-load-observer-[0-9a-f]{32}\.service", unit)
+        properties = g.systemctl(
+            "show", unit, "--property=MainPID", "--property=ActiveState"
+        ).stdout
+        values = dict(
+            part.split("=", 1) for part in properties.splitlines() if "=" in part
+        )
+        assert values["MainPID"] == "0" and values["ActiveState"] in (
+            "inactive",
+            "failed",
+        ), "owned observer remains live"
+    after = g.source()
+    assert after == before, "finite load teardown changed Source"
+    final = SourceVerifier(g.fixture().p)
+    assert final.verify(after) == tip and final.live_state.closed is True
+    g.record(
+        "finite-load-finished-disabled-retained-clean-history",
+        source_sha256=accounting.sha256(before),
+        source_checkpoint=tip,
+        source_closed=True,
+        active_native_cores=0,
+        live_owned_observers=0,
+    )

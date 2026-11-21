@@ -915,3 +915,105 @@ def test_source_tree_config_is_rejected_before_any_trusted_walk(monkeypatch):
             + "-config.json",
             "0" * 64,
         )
+
+
+def finish_fixture(monkeypatch, *, closed=True, changed=False, live_observer=False):
+    calls = []
+    source_calls = []
+
+    class Verifier:
+        def __init__(self, policy):
+            self.live_state = SimpleNamespace(closed=closed)
+
+        def verify(self, raw):
+            assert raw == b"original signed Source\n"
+            return dict(
+                seq=4, head="a" * 64, size=len(raw), sha256=lab.accounting.sha256(raw)
+            )
+
+    from azazel_edge.outcome import input_auth
+
+    monkeypatch.setattr(input_auth, "SourceVerifier", Verifier)
+
+    def source():
+        source_calls.append(True)
+        return (
+            b"changed\n"
+            if changed and len(source_calls) > 1
+            else b"original signed Source\n"
+        )
+
+    def systemctl(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "list-units":
+            return SimpleNamespace(
+                stdout="edge400-load-observer-"
+                + "a" * 32
+                + ".service loaded active running description\n"
+                if live_observer
+                else ""
+            )
+        if "--property=MainPID" in args:
+            return SimpleNamespace(stdout="MainPID=123\nActiveState=active\n")
+        return SimpleNamespace(stdout="inactive\n")
+
+    g = SimpleNamespace(
+        UNIT="azazel-edge-core.service",
+        WITNESS="edge400-lab-witness.service",
+        source=source,
+        fixture=lambda: SimpleNamespace(p=object()),
+        systemctl=systemctl,
+        Systemd=lambda: SimpleNamespace(cores=lambda: []),
+        record=lambda *args, **kwargs: calls.append(("record", args, kwargs)),
+    )
+    return g, calls
+
+
+def test_clean_finish_preserves_source_and_stops_only_owned_units(monkeypatch):
+    g, calls = finish_fixture(monkeypatch)
+    lab.finish(g)
+    assert calls[:2] == [("disable", g.UNIT), ("stop", g.UNIT, g.WITNESS)]
+    assert calls[-1][0] == "record" and calls[-1][2]["source_closed"] is True
+    assert not any(call[0] in ("start", "restart", "reset-failed") for call in calls)
+
+
+@pytest.mark.parametrize("fault", ["interrupted", "changed", "observer"])
+def test_clean_finish_rejects_interrupted_changed_or_live_actor(monkeypatch, fault):
+    g, calls = finish_fixture(
+        monkeypatch,
+        closed=fault != "interrupted",
+        changed=fault == "changed",
+        live_observer=fault == "observer",
+    )
+    with pytest.raises(AssertionError):
+        lab.finish(g)
+    assert not any(call[0] == "record" for call in calls)
+    if fault == "interrupted":
+        assert calls == []
+
+
+def test_finish_dispatch_is_explicit_new_flavor_only(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "finite_load_finish_dispatch", REAL / "armor.py"
+    )
+    armor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(armor)
+    calls = []
+    monkeypatch.setattr(armor.g, "guard", lambda: None)
+    monkeypatch.setattr(armor, "configure", lambda: None)
+    monkeypatch.setattr(lab, "finish", lambda g: calls.append("load"))
+    monkeypatch.setattr(lab.accounting, "finish", lambda g: calls.append("legacy"))
+    for extra in (["--finite-load-cost"], []):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "armor.py",
+                "smoke-finish",
+                "--allow-disposable-vm",
+                "--native-core",
+                *extra,
+            ],
+        )
+        armor.main()
+    assert calls == ["load", "legacy"]

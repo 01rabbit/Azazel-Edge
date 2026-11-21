@@ -536,9 +536,14 @@ def main():
                 else:
                     native_accounting.exercise(g, role_command, close_lab=close_lab)
     elif args.phase == "smoke-finish" and NATIVE:
-        import native_accounting
+        if FINITE_LOAD_COST:
+            from finite_load_cost import finish
 
-        native_accounting.finish(g)
+            finish(g)
+        else:
+            import native_accounting
+
+            native_accounting.finish(g)
     else:
         {
             "boot-check": g.boot_check,
