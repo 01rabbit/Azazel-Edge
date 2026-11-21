@@ -47,6 +47,24 @@ Source through SourceVerifier to exact scope/key/stream/registration/boot/sessio
 Source tip, signed prefix and signed End remain separate even if controller
 validation later fails. Reuse original protected-anchor verifier/checkpoints.
 
+### First actual trial: independent version contracts correction
+
+CI44881208941 at b215cc212f8ebe6798813692f230b82afb1f230e retained the first
+normal-four and receiver-killed-prefix originals, but analysis refused the
+existing trust-policy v3. Later assigned cases were NOT_RUN. Trust-policy v3/v4
+and native registration v4 are independent versions: existing input_live and
+#620 already support Root-witness trustv3 with native-registrationv4. Correct
+only the analysis trust version predicate to the same v3/v4 contract, retaining
+exact Root roles, keys, original registration digest, native image/seals/profiles
+and all existing policy validation. No registrationv3/unconfined/downgrade is
+accepted. This corrects the mistaken version equation, not privileges or metrics.
+
+First artifacts remain failed/unqualified and immutable:
+native14697837124 ZIP SHA2567ae5c4aa08c8570c8d8ee5fa237f7c28c8c603ce8c9c734a61cf997bed190cc8;
+receiver-fault14697762095 SHA2565f496b7193ce7a0c6350accbe9a1c0999e885e3f1886b7b6feacfce323cf761b.
+Independent diagnostic replay can expose other implementation errors without
+rewriting their recorded evaluation or counting them as successful trials.
+
 Fixed cases/actions/custody modes are exactly the seven protocol entries; no
 posthoc case selection, outcome substitution or implicit old-format upgrade.
 Controller outcome is exactly `collected` for completed collection (including
