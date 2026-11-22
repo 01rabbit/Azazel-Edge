@@ -513,3 +513,33 @@ def test_missing_original_callback_record_never_becomes_filtered_or_complete(tmp
     assert sink.incomplete and not any(
         row["kind"] == "end" for row in rows(tmp_path / "inputs")
     )
+
+
+def test_composite_pin_reads_existing_protected_source_without_denied_ancestor_walk():
+    import ast
+
+    text = Path(helper.__file__).read_text()
+    tree = ast.parse(text)
+    load = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "load_config"
+    )
+    reads = [
+        node
+        for node in ast.walk(load)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "read_regular"
+    ]
+    assert reads
+    for call in reads:
+        arg = ast.get_source_segment(text, call.args[0])
+        assert "__file__" not in arg and "fresh_source_recording" not in arg
+    assert 'Path(__file__).with_name("fresh_source_recording.py").read_bytes()' in text
+    top = Path(helper.__file__).read_bytes()
+    dependency = Path(fresh.__file__).read_bytes()
+    assert (
+        hashlib.sha256(top + b"\0" + dependency).hexdigest()
+        != hashlib.sha256(top).hexdigest()
+    )

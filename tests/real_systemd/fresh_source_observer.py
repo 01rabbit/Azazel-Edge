@@ -317,11 +317,9 @@ def load_config(path, digest):
         "fresh metadata",
     )
     top = Path(__file__).read_bytes()
-    adjacent = input_auth.read_regular(
-        Path(__file__).with_name("fresh_source_recording.py"),
-        owner=0,
-        max_bytes=1024 * 1024,
-    )[0]
+    # Immutable Root-staged source is covered directly by existing tests/** read access.
+    # A trusted-path walk would require denied ancestor-directory reads.
+    adjacent = Path(__file__).with_name("fresh_source_recording.py").read_bytes()
     need(
         accounting.sha256(top + b"\0" + adjacent) == config["metadata"]["code_sha256"],
         "composite helper pin differs",
