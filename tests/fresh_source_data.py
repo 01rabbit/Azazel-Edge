@@ -557,7 +557,12 @@ def _observer(a, c, root, load, stamps, case):
         actor=actor,
         error=None,
         command_verified=True,
-        bootstrap=dict(pid=30, challenge=run, invocation_id="b" * 32),
+        bootstrap=dict(
+            schema_version="edge-fresh-source-observer-bootstrap/v1",
+            pid=30,
+            challenge=run,
+            invocation_id="b" * 32,
+        ),
         challenge=run,
         unit_properties=dict(MainPID="30", InvocationID="b" * 32),
         sidecars={},
