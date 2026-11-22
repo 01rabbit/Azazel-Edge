@@ -182,3 +182,9 @@ seventh input-call sidecar. stage_observer_config gains a checked prefix argumen
 whose default remains load; only fresh selects fresh, preserving Root-runtime
 staging checks and exclusive0444 semantics. No old schema, arm or auth gate is
 relaxed, and old default outputs/limits are unchanged. No additional authority.
+
+The collector additionally copies only the fixed top-level recipe-declaration.json
+(128KiB) published exclusively/fsynced before the first assigned case. Its exact
+fields are protocol_sha256,input_recipe_sha256,actual_input_hash_known (false).
+This declaration is outside the48 per-case original map and contains no actual
+raw-input hash. Missing cases remain NOTRUN in the static inventory.
