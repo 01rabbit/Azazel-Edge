@@ -816,7 +816,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             pos = BoundedInput.position(item["source_position"])
             record = selected[pos["offset"]]
             _need(
-                pos == record["position"]
+                _uint(item["observed_ns"], 2**63)
+                and pos == record["position"]
                 and item["source_checkpoint"] == record["checkpoint"]
                 and item["session_ref"] == cc["session_ref"]
                 and item["ingress_origin"] == record["event"]["ingress_origin"]
@@ -864,6 +865,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
         samples = [row for row in clock_rows if row["kind"] == "sample"]
         _need(
             samples
+            and _uint(rd["first_sample_seq"], 2**63)
+            and _uint(rd["observed_ns"], 2**63)
             and rd["first_sample_seq"] == samples[0]["seq"]
             and rd["input_ready_position"] in ready
             and rd["observed_ns"] <= load["writer"]["first_write_before_ns"],
@@ -1054,7 +1057,9 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 )
                 _fields(d, required)
                 _need(
-                    d["input_id"] in intents and d["input_id"] not in returns,
+                    type(d["input_id"]) is int
+                    and d["input_id"] in intents
+                    and d["input_id"] not in returns,
                     "one_handler_completion",
                 )
                 intent, record, eligible, stamp = intents[d["input_id"]]
@@ -1224,7 +1229,9 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 ),
             )
             _need(
-                footer
+                footer["normal_return"] is True
+                and footer["incomplete"] is False
+                and footer
                 == dict(
                     completed_inputs=7,
                     completed_callbacks=5,
@@ -1259,7 +1266,11 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             )
             cb = r["callback_facts"][0]
             _need(
-                boundary["handler_id"] == cb["input_id"]
+                all(
+                    _uint(boundary[k], 2**63)
+                    for k in ("handler_id", "event_call_id", "observed_ns")
+                )
+                and boundary["handler_id"] == cb["input_id"]
                 and boundary["event_call_id"] == cb["call_seq"]
                 and boundary["source_position"] == cb["source_position"]
                 and boundary["event_ref"] == "interrupt-one",

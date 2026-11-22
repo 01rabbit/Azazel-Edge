@@ -290,3 +290,11 @@ def test_synthetic_wire_replay_rejected_but_equal_eve_spans_remain_distinct(cont
     assert spans[0]["start_offset"] != spans[1]["start_offset"]
     with pytest.raises(OutcomeJournalError):
         verifier.verify(source + rows[0])
+
+
+def test_boolean_completed_input_id_cannot_impersonate_integer_one(controls):
+    def mutate(rows):
+        next(r for r in rows if r["kind"] == "input_return")["data"]["input_id"] = True
+
+    r = analyze(rewrite_inputs(controls, mutate))
+    assert r["status"] == "withheld" and r["callback_facts"] == []
