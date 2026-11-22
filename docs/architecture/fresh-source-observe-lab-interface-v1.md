@@ -171,3 +171,14 @@ SHA256(fresh_source_observer.py bytes + single NUL byte +
 fresh_source_recording.py bytes). Both helpers are adjacent Root-protected test
 source. No new file grant or alternate interpreter is introduced. Other reused
 shared recorder code remains covered by the externally retained source revision.
+
+## Default-preserving shared test-lab seams
+
+The existing finite_load_cost.ObserverProcess gains class attributes role_mode,
+bootstrap_schema,go_schema,side_files, defaulting to its exact existing finite-load
+mode/tags/six sidecars. Its existing command/identity/ref/drain checks read those
+attributes. FreshObserverProcess alone overrides them for the fresh entry and
+seventh input-call sidecar. stage_observer_config gains a checked prefix argument
+whose default remains load; only fresh selects fresh, preserving Root-runtime
+staging checks and exclusive0444 semantics. No old schema, arm or auth gate is
+relaxed, and old default outputs/limits are unchanged. No additional authority.
