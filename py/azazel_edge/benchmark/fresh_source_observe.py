@@ -353,7 +353,8 @@ def _actual_population(raw, receipts, case_id):
 
 def _journal_facts(raw, source, policy, anchors, identity):
     rows, tail, issue = _records(raw, maximum=4096, start_seq=1)
-    _need(rows and issue is None and not tail, "original_journal_chain")
+    _need(rows, "original_journal_prefix")
+    complete = issue is None and not tail
     header = rows[0]
     _need(
         header["kind"] == "header"
@@ -369,17 +370,41 @@ def _journal_facts(raw, source, policy, anchors, identity):
         if row["kind"] == "cursor":
             _fields(row["data"], {"position", "missed"})
             position = BoundedInput.position(row["data"]["position"])
-            _need(
+            if (
                 type(row["data"]["missed"]) is bool
                 and position["offset"] <= len(source)
-                and position["sha256"] == _sha(source[: position["offset"]]),
-                "actual_journal_cursor",
-            )
-            cursor_rows.append(row)
+                and position["sha256"] == _sha(source[: position["offset"]])
+            ):
+                cursor_rows.append(row)
+            else:
+                complete = False
         if row["kind"] == "input_ready":
             ready.append(BoundedInput.position(row["data"]))
     tips = _source_tips(source)
-    _verify_anchors(policy, anchors, tips, tips[len(source)])
+    try:
+        _verify_anchors(policy, anchors, tips, tips[len(source)])
+    except ERRORS:
+        complete = False
+        lines = anchors.splitlines(keepends=True)
+        offsets = [0]
+        for line in lines:
+            offsets.append(offsets[-1] + len(line))
+        # Validity of an immutable chained prefix is monotonic; binary search
+        # avoids repeatedly verifying every growing anchor prefix.
+        low, high = 0, len(lines)
+        while low < high:
+            middle = (low + high + 1) // 2
+            try:
+                state = _parse(lines[middle - 1])["state"]
+                tip = {
+                    k: state["source_" + k] for k in ("seq", "head", "size", "sha256")
+                }
+                _verify_anchors(policy, anchors[: offsets[middle]], tips, tip)
+            except ERRORS:
+                high = middle - 1
+            else:
+                low = middle
+        anchors = anchors[: offsets[low]]
     states = []
     for line in anchors.splitlines():
         state = _parse(line)["state"]
@@ -398,7 +423,7 @@ def _journal_facts(raw, source, policy, anchors, identity):
             for s in states
         )
 
-    return cursor_rows, ready, protected
+    return cursor_rows, ready, protected, complete
 
 
 def evaluate_fresh_source_case(artifacts, *, expected):
@@ -746,7 +771,22 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             _need(ctrl[field] == _sha(raw(name)), "fresh_original_file_pin:" + name)
         policy = TrustPolicy(_parse(raw("trust.json")))
         source = raw("source-after.raw")
-        SourceVerifier(policy).verify(source)
+        source_complete = True
+        try:
+            SourceVerifier(policy).verify(source)
+        except ERRORS as exc:
+            source_complete = False
+            r["reasons"].append("Source_suffix:" + str(exc))
+            prefix = b""
+            verifier = SourceVerifier(policy)
+            for line in source.splitlines(keepends=True):
+                try:
+                    verifier.verify(prefix + line)
+                except ERRORS:
+                    break
+                prefix += line
+            source = prefix
+            _need(source, "no_authenticated_Source_prefix")
         _need(
             r["finite"]["close"]["legs"].get("context") is True,
             "authenticated_selected_native_context",
@@ -807,7 +847,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             "bounded_actual_Source_observations",
         )
         observed_refs = set()
-        for item in ctrl["observations"]:
+
+        def observation(item):
             _fields(
                 item,
                 set(
@@ -828,6 +869,12 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 "exact_original_Source_observation",
             )
             observed_refs.add(item["event_ref"])
+            return True
+
+        observations_complete = True
+        for item in ctrl["observations"]:
+            if check("Source_observation", lambda: observation(item)) is not True:
+                observations_complete = False
         config = data("observer-config.json")
         _need(
             config["schema_version"] == "edge-fresh-source-observer-config/v1"
@@ -838,108 +885,128 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             and config["trust_sha256"] == cc["trust_sha256"],
             "fresh_original_config",
         )
-        journal = raw("observer-journal.raw")
-        jobj = load["observer"]["sidecars"]["journal"]["before"]
-        header = _parse(journal.splitlines()[0])["data"]["input_config"]
-        source_obj = cc["stores"]["source"]["after"]["object"]
-        _need(
-            header["device"] == source_obj["device"]
-            and header["inode"] == source_obj["inode"]
-            and header["uid"] == source_obj["owner_uid"]
-            and header["path_sha256"] == _sha(policy.data["source_path"].encode()),
-            "journal_actual_source_object",
-        )
-        cursor_rows, ready, protected = _journal_facts(
-            journal, source, policy, raw("anchors-after.raw"), jobj
-        )
+        journal = None
+
+        def journal_protection():
+            nonlocal journal
+            journal = raw("observer-journal.raw")
+            jobj = load["observer"]["sidecars"]["journal"]["before"]
+            header = _parse(journal.splitlines()[0])["data"]["input_config"]
+            source_obj = cc["stores"]["source"]["after"]["object"]
+            _need(
+                header["device"] == source_obj["device"]
+                and header["inode"] == source_obj["inode"]
+                and header["uid"] == source_obj["owner_uid"]
+                and header["path_sha256"] == _sha(policy.data["source_path"].encode()),
+                "journal_actual_source_object",
+            )
+            return _journal_facts(
+                journal, source, policy, raw("anchors-after.raw"), jobj
+            )
+
+        protection = check("cursor_protection", journal_protection)
+        protection_complete = False
+        if protection is None:
+            cursor_rows, ready, protected = [], [], lambda row: False
+        else:
+            cursor_rows, ready, protected, protection_complete = protection
         clock_rows, clock_tail, clock_error = _records(raw("observer-calls.raw"))
         _need(clock_rows, "original_clock_callback_prefix")
         if clock_error is not None:
             r["reasons"].append("clock_record_prefix:" + clock_error)
-        rd = ctrl["readiness"]
-        _fields(
-            rd,
-            set(
-                "observed_ns first_sample_seq clock_calls_checkpoint input_ready_position journal_checkpoint witness_boundary".split()
-            ),
-        )
-        samples = [row for row in clock_rows if row["kind"] == "sample"]
-        _need(
-            samples
-            and _uint(rd["first_sample_seq"], 2**63)
-            and _uint(rd["observed_ns"], 2**63)
-            and rd["first_sample_seq"] == samples[0]["seq"]
-            and rd["input_ready_position"] in ready
-            and rd["observed_ns"] <= load["writer"]["first_write_before_ns"],
-            "actual_original_recovery_and_sample_before_writer",
-        )
-        for name, checkpoint in (
-            ("observer-calls.raw", rd["clock_calls_checkpoint"]),
-            ("observer-journal.raw", rd["journal_checkpoint"]),
-        ):
-            _fields(checkpoint, {"size", "sha256"})
-            b = raw(name)
+
+        def readiness():
+            _need(journal is not None, "readiness_journal_original_missing")
+            jobj = load["observer"]["sidecars"]["journal"]["before"]
+            rd = ctrl["readiness"]
+            _fields(
+                rd,
+                set(
+                    "observed_ns first_sample_seq clock_calls_checkpoint input_ready_position journal_checkpoint witness_boundary".split()
+                ),
+            )
+            samples = [row for row in clock_rows if row["kind"] == "sample"]
             _need(
-                _uint(checkpoint["size"], 2**63)
-                and 0 < checkpoint["size"] <= len(b)
-                and b[checkpoint["size"] - 1 : checkpoint["size"]] == b"\n"
-                and _sha(b[: checkpoint["size"]]) == checkpoint["sha256"],
-                "actual_prewrite_readiness_prefix",
+                samples
+                and _uint(rd["first_sample_seq"], 2**63)
+                and _uint(rd["observed_ns"], 2**63)
+                and rd["first_sample_seq"] == samples[0]["seq"]
+                and rd["input_ready_position"] in ready
+                and rd["observed_ns"] <= load["writer"]["first_write_before_ns"],
+                "actual_original_recovery_and_sample_before_writer",
             )
-        ready_prefix_rows = _records(
-            journal[: rd["journal_checkpoint"]["size"]], start_seq=1, maximum=4096
-        )[0]
-        sample_prefix_rows = _records(
-            raw("observer-calls.raw")[: rd["clock_calls_checkpoint"]["size"]]
-        )[0]
-        _need(
-            any(row == samples[0] for row in sample_prefix_rows),
-            "original_sample_within_prewrite_prefix",
-        )
-        wb = rd["witness_boundary"]
-        _fields(wb, {"source_checkpoint", "anchor_checkpoint"})
-        ac = wb["anchor_checkpoint"]
-        _fields(ac, {"counter", "head", "size", "sha256"})
-        anchor_raw = raw("anchors-after.raw")
-        _need(
-            _uint(ac["size"], 2**63) and 0 < ac["size"] <= len(anchor_raw),
-            "readiness_witness_prefix_size",
-        )
-        anchor_prefix = anchor_raw[: ac["size"]]
-        _need(
-            anchor_prefix.endswith(b"\n")
-            and _sha(anchor_prefix) == ac["sha256"]
-            and _verify_anchors(policy, anchor_prefix, tips, wb["source_checkpoint"])
-            == ac,
-            "readiness_signed_witness_boundary",
-        )
-        witness_state = _parse(anchor_prefix.splitlines()[-1])["state"]
-        _need(
-            witness_state["journal_device"] == jobj["device"]
-            and witness_state["journal_inode"] == jobj["inode"]
-            and witness_state["journal_size"] <= rd["journal_checkpoint"]["size"]
-            and any(
-                row["kind"] == "input_ready"
-                and row["data"] == rd["input_ready_position"]
-                and row["seq"] <= witness_state["journal_seq"]
-                for row in ready_prefix_rows
+            for name, checkpoint in (
+                ("observer-calls.raw", rd["clock_calls_checkpoint"]),
+                ("observer-journal.raw", rd["journal_checkpoint"]),
+            ):
+                _fields(checkpoint, {"size", "sha256"})
+                b = raw(name)
+                _need(
+                    _uint(checkpoint["size"], 2**63)
+                    and 0 < checkpoint["size"] <= len(b)
+                    and b[checkpoint["size"] - 1 : checkpoint["size"]] == b"\n"
+                    and _sha(b[: checkpoint["size"]]) == checkpoint["sha256"],
+                    "actual_prewrite_readiness_prefix",
+                )
+            ready_prefix_rows = _records(
+                journal[: rd["journal_checkpoint"]["size"]], start_seq=1, maximum=4096
+            )[0]
+            sample_prefix_rows = _records(
+                raw("observer-calls.raw")[: rd["clock_calls_checkpoint"]["size"]]
+            )[0]
+            _need(
+                any(row == samples[0] for row in sample_prefix_rows),
+                "original_sample_within_prewrite_prefix",
             )
-            and _sha(journal[: witness_state["journal_size"]])
-            == witness_state["journal_sha256"],
-            "original_ready_journal_protected_before_writer",
-        )
-        _need(
-            any(
-                row["kind"] == "input_ready"
-                and row["data"] == rd["input_ready_position"]
-                for row in _records(
-                    journal[: rd["journal_checkpoint"]["size"]],
-                    start_seq=1,
-                    maximum=4096,
-                )[0]
-            ),
-            "original_input_ready_before_publication",
-        )
+            wb = rd["witness_boundary"]
+            _fields(wb, {"source_checkpoint", "anchor_checkpoint"})
+            ac = wb["anchor_checkpoint"]
+            _fields(ac, {"counter", "head", "size", "sha256"})
+            anchor_raw = raw("anchors-after.raw")
+            _need(
+                _uint(ac["size"], 2**63) and 0 < ac["size"] <= len(anchor_raw),
+                "readiness_witness_prefix_size",
+            )
+            anchor_prefix = anchor_raw[: ac["size"]]
+            _need(
+                anchor_prefix.endswith(b"\n")
+                and _sha(anchor_prefix) == ac["sha256"]
+                and _verify_anchors(
+                    policy, anchor_prefix, tips, wb["source_checkpoint"]
+                )
+                == ac,
+                "readiness_signed_witness_boundary",
+            )
+            witness_state = _parse(anchor_prefix.splitlines()[-1])["state"]
+            _need(
+                witness_state["journal_device"] == jobj["device"]
+                and witness_state["journal_inode"] == jobj["inode"]
+                and witness_state["journal_size"] <= rd["journal_checkpoint"]["size"]
+                and any(
+                    row["kind"] == "input_ready"
+                    and row["data"] == rd["input_ready_position"]
+                    and row["seq"] <= witness_state["journal_seq"]
+                    for row in ready_prefix_rows
+                )
+                and _sha(journal[: witness_state["journal_size"]])
+                == witness_state["journal_sha256"],
+                "original_ready_journal_protected_before_writer",
+            )
+            _need(
+                any(
+                    row["kind"] == "input_ready"
+                    and row["data"] == rd["input_ready_position"]
+                    for row in _records(
+                        journal[: rd["journal_checkpoint"]["size"]],
+                        start_seq=1,
+                        maximum=4096,
+                    )[0]
+                ),
+                "original_input_ready_before_publication",
+            )
+            return True
+
+        ready_verified = check("readiness", readiness) is True
         return (
             ctrl,
             load,
@@ -950,6 +1017,10 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
             clock_rows,
             clock_tail,
             clock_error,
+            source_complete
+            and protection_complete
+            and ready_verified
+            and observations_complete,
         )
 
     context = check("callback_context", originals)
@@ -965,6 +1036,7 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
         clock_rows,
         clock_tail,
         clock_error,
+        provenance_complete,
     ) = context
     rows, tail, error = _records(
         raw("observer-input-calls.raw"),
@@ -1144,27 +1216,29 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                         and d["cursor_after"] == record["position"],
                         "original_handler_cursor_return",
                     )
-                    cursors = [
-                        c
-                        for c in cursor_rows
-                        if c["data"]["position"] == record["position"]
-                    ]
-                    _need(
-                        len(cursors) == 1
-                        and cursors[0]["data"]["missed"] is (not eligible)
-                        and protected(cursors[0]),
-                        "actual_durable_missed_cursor_and_witness",
-                    )
-                    _need(
-                        len(d["callbacks"]) == int(eligible),
-                        "actual_guard_callback_disposition",
-                    )
-                    fact.update(
-                        callbacks_completed=len(d["callbacks"]),
-                        cursor_protected=True,
-                        missed=not eligible,
-                    )
+                    fact["callbacks_completed"] = len(d["callbacks"])
                     returns.add(d["input_id"])
+
+                    def durable():
+                        cursors = [
+                            c
+                            for c in cursor_rows
+                            if c["data"]["position"] == record["position"]
+                        ]
+                        _need(
+                            len(cursors) == 1
+                            and cursors[0]["data"]["missed"] is (not eligible)
+                            and protected(cursors[0]),
+                            "actual_durable_missed_cursor_and_witness",
+                        )
+                        _need(
+                            len(d["callbacks"]) == int(eligible),
+                            "actual_guard_callback_disposition",
+                        )
+                        return True
+
+                    if check("handler_durability", durable) is True:
+                        fact.update(cursor_protected=True, missed=not eligible)
                 r["handler_facts"].append(fact)
             elif row["kind"] == "end":
                 _need(footer is None and row is rows[-1], "terminal_input_footer")
@@ -1187,6 +1261,7 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
     )
 
     def qualification():
+        _need(provenance_complete, "complete_Source_cursor_readiness_provenance")
         _need(
             not prefix_failed and error is None and clock_error is None,
             "valid_input_record_prefix",
@@ -1201,7 +1276,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
         )
         _need(
             not r["scope_facts"]["unmatched_original_callbacks"]
-            and len(r["handler_facts"]) == len(returns),
+            and len(r["handler_facts"]) == len(returns)
+            and all(f["cursor_protected"] is True for f in r["handler_facts"]),
             "no_unbound_or_raised_handler",
         )
         _need(

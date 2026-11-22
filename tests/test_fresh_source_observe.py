@@ -211,7 +211,7 @@ def test_forged_readiness_witness_is_not_file_existence(controls):
         lambda c: c["readiness"].update(witness_boundary={}),
     )
     r = analyze(a)
-    assert r["status"] == "withheld" and r["callback_facts"] is None
+    assert r["status"] == "withheld" and len(r["callback_facts"]) == 5
 
 
 def test_short_load_not_promoted_by_complete_callback_count(controls):
@@ -309,3 +309,49 @@ def test_load_collection_error_is_not_overridden_by_successful_inputs(controls):
     r = analyze(a)
     assert r["status"] == "withheld" and r["load"] is None
     assert len(r["callback_facts"]) == 5
+
+
+@pytest.mark.parametrize("name", ["anchors-after.raw", "observer-journal.raw"])
+def test_missing_durability_does_not_erase_returned_calls(controls, name):
+    a = dict(controls)
+    a[name] = None
+    r = analyze(a)
+    assert r["status"] == "withheld" and len(r["callback_facts"]) == 5
+    assert len(r["handler_facts"]) == 7
+    assert all(
+        f["returned"] is True and f["cursor_protected"] is False
+        for f in r["handler_facts"]
+    )
+    assert all(f["missed"] is None for f in r["handler_facts"])
+
+
+@pytest.mark.parametrize(
+    "name", ["source-after.raw", "anchors-after.raw", "observer-journal.raw"]
+)
+def test_bad_suffix_retains_independently_authenticated_return_prefix(controls, name):
+    a = dict(controls)
+    a[name] += b'{"malformed":true}\n'
+    r = analyze(a)
+    assert r["status"] == "withheld" and len(r["callback_facts"]) == 5, r["reasons"]
+    assert r["scope_facts"]["observation_complete"] is False
+    assert r["scope_facts"]["later_callbacks"] is None
+
+
+def test_invalid_later_source_signature_keeps_only_authenticated_earlier_calls(
+    controls,
+):
+    a = dict(controls)
+    lines = a["source-after.raw"].splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        row = json.loads(line)
+        if row["event"].get("normalized", {}).get("sid") == 90233006:
+            row["signature"] = "A" * len(row["signature"])
+            lines[i] = fresh.wire(row)
+            break
+    else:
+        raise AssertionError("fixture missing final fresh decision")
+    a["source-after.raw"] = b"".join(lines)
+    r = analyze(a)
+    assert r["status"] == "withheld" and len(r["callback_facts"]) == 4, r["reasons"]
+    assert all(f["event_ref"] != "fresh-three" for f in r["callback_facts"])
+    assert r["scope_facts"]["later_callbacks"] is None
