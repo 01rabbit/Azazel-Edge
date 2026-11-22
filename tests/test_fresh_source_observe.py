@@ -298,3 +298,14 @@ def test_boolean_completed_input_id_cannot_impersonate_integer_one(controls):
 
     r = analyze(rewrite_inputs(controls, mutate))
     assert r["status"] == "withheld" and r["callback_facts"] == []
+
+
+def test_load_collection_error_is_not_overridden_by_successful_inputs(controls):
+    a = changed(
+        controls,
+        "load-controller.json",
+        lambda c: c.update(errors=[{"stage": "case", "type": "OSError"}]),
+    )
+    r = analyze(a)
+    assert r["status"] == "withheld" and r["load"] is None
+    assert len(r["callback_facts"]) == 5

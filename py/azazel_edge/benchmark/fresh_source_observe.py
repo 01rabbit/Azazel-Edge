@@ -547,6 +547,7 @@ def evaluate_fresh_source_case(artifacts, *, expected):
             and ctrl["session_ref"] == ic["session_ref"] == cc["session_ref"],
             "fresh_load_context",
         )
+        _need(ctrl["errors"] == [], "load_collection_without_errors")
         _identity(ctrl["controller_identity"], cc["boot_id"])
         _need(
             all(_uint(ctrl[k], 2**63) for k in ("started_ns", "finished_ns"))
