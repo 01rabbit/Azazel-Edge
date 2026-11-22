@@ -143,7 +143,14 @@ def denials(role, pid):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "mode", choices=["observer", "denials", "readonly-source", "finite-load"]
+        "mode",
+        choices=[
+            "observer",
+            "denials",
+            "readonly-source",
+            "finite-load",
+            "fresh-source",
+        ],
     )
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--role", choices=["capture", "observer", "witness"])
@@ -154,6 +161,10 @@ def main():
     args = parser.parse_args()
     if args.mode == "observer":
         observer(args.create)
+    elif args.mode == "fresh-source":
+        from fresh_source_observer import main as fresh_source_main
+
+        fresh_source_main(args.challenge, args.config, args.config_sha256, args.create)
     elif args.mode == "finite-load":
         from finite_load_observer import main as finite_load_main
 

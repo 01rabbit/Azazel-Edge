@@ -54,6 +54,8 @@ READBACK_CASES = frozenset(
         "load-off",
         "load-on",
         "load-faulted",
+        "fresh-controls",
+        "fresh-interrupted",
     )
 )
 PUBLIC_FILES = frozenset(
