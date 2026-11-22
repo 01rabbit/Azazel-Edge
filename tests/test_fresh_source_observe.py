@@ -272,3 +272,21 @@ def test_changed_original_without_new_pin_is_rejected(controls):
     )
     r = fresh.evaluate_fresh_source_case(a, expected=expected)
     assert r["status"] == "withheld" and r["callback_facts"] is None
+
+
+def test_synthetic_wire_replay_rejected_but_equal_eve_spans_remain_distinct(controls):
+    from azazel_edge.outcome.input_auth import SourceVerifier, TrustPolicy
+    from azazel_edge.outcome.journal import OutcomeJournalError
+
+    source = controls["source-after.raw"]
+    verifier = SourceVerifier(TrustPolicy(json.loads(controls["trust.json"])))
+    verifier.verify(source)
+    rows = source.splitlines(keepends=True)
+    events = [json.loads(x)["event"] for x in rows]
+    duplicated = [e for e in events if e.get("normalized", {}).get("sid") == 90233005]
+    assert len(duplicated) == 2
+    spans = [e["ingress_origin"] for e in duplicated]
+    assert spans[0]["raw_sha256"] == spans[1]["raw_sha256"]
+    assert spans[0]["start_offset"] != spans[1]["start_offset"]
+    with pytest.raises(OutcomeJournalError):
+        verifier.verify(source + rows[0])
