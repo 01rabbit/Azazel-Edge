@@ -106,7 +106,7 @@ bytes as measured denominator. Thread failures preserve actual partial prefixes.
 fresh-controller.json exact keys:
 {schema_version,case_id,protocol_sha256,input_recipe_sha256,session_ref,
 started_ns,finished_ns,timestamp_receipts_sha256,input_manifest_sha256,
-input_calls_sha256,observations,interrupt_boundary,errors}.
+input_calls_sha256,readiness,observations,interrupt_boundary,errors}.
 Schema edge-fresh-source-controller/v1. Hashes are actual final original file
 hashes or null, not producer claims. Started/finished are actual Root monotonic
 bounds. Observations is an ordered list, one per actually authenticated declared
@@ -148,3 +148,26 @@ and actual exit0; fail/unknown is retained adverse, never accepted as pass.
 Interrupted requires independently verified first callback/cursor/witness and
 actual SIGKILL, clock null, no fake end. Clean teardown preserves exact closed
 Source and disables/stops only owned fixture units. No new actor authority.
+
+## Original readiness and composite helper pin
+
+fresh-controller additionally has readiness, null until actually observed, then
+exactly `{observed_ns,first_sample_seq,clock_calls_checkpoint,input_ready_position,
+journal_checkpoint,witness_boundary}`. Checkpoints are actual `{size,sha256}`;
+position is `{offset,sha256}`. Root must observe the FIRST original returned
+record_sample row (its original CallRecording sequence), together with the
+journal's original input_ready fence and protected witness covering that fence,
+before starting the writer's fixed schedule. File existence is insufficient.
+Do not generate an extra sample, recover again, or select a later favorable
+sample. A returned sample may retain its actual missing metric coverage; this
+readiness proves callback completion, not complete telemetry. Original
+CallRecording prefix, final journal and final anchors retain the bounded prefix
+bytes needed for independent verification of these checkpoint pins. Missing
+readiness is adverse. Actual live_floor remains solely the original handler's
+supplied value captured by the dedicated context recorder.
+
+helper_sha256 pins fresh_source_observer.py only. metadata.code_sha256 is exactly
+SHA256(fresh_source_observer.py bytes + single NUL byte +
+fresh_source_recording.py bytes). Both helpers are adjacent Root-protected test
+source. No new file grant or alternate interpreter is introduced. Other reused
+shared recorder code remains covered by the externally retained source revision.
