@@ -62,7 +62,8 @@ Kinds/data fields are exact:
 Each callback object has exactly call_seq,event_sha256,return_value,
 observed_epoch,activity. call_seq is the ACTUAL original CallRecording event row
 sequence, observed only after its append/fsync returns. Its complete event must
-match the authenticated decoded Source event. return_value is actual observe_event
+match the authenticated decoded Source event. event_sha256 hashes canonical
+JSON of that exact event PLUS LF, matching decoded_event_sha256. return_value is actual observe_event
 return, distinct from callback occurrence or activity. activity is null or the
 actual super._record_activity return with exactly epoch,src_ip,dst_ip,target_port,
 sid,evidence_ref. No APPLIED/window/dedup claim is created by this instrumentation.
@@ -72,6 +73,6 @@ source_position maps actual cursor_after of the selected completed handler.
 Intent and return facts are buffered in bounded memory before publication.
 There is no context durable write/fsync before the original handler/callback.
 Flush intent+return after handler completion; only one context fsync at normal
-close, never per handler. Existing original callback recorder durability is
+close AFTER flushing its end footer, never per handler. Existing original callback recorder durability is
 unchanged. Actual original call/clock overhead remains adverse. Truncated bytes,
 missing callbacks, cursor failures or incomplete recordings stay unknown.

@@ -190,9 +190,13 @@ def test_context_intent_is_not_written_or_fsynced_before_actual_handler(
     called = []
     sync = []
     original_sync = fresh.os.fsync
-    monkeypatch.setattr(
-        fresh.os, "fsync", lambda fd: sync.append(fd) or original_sync(fd)
-    )
+
+    def close_sync(fd):
+        assert rows(path)[-1]["kind"] == "end"
+        sync.append(fd)
+        return original_sync(fd)
+
+    monkeypatch.setattr(fresh.os, "fsync", close_sync)
 
     def original(*args, **kwargs):
         assert path.read_bytes() == initial and sync == []

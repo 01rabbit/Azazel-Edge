@@ -152,7 +152,6 @@ class InputRecording:
         try:
             if normal_return and not self.incomplete and self.active is None:
                 self._flush()
-                os.fsync(self.fd)
                 self._buffer(
                     "end",
                     dict(
@@ -164,6 +163,7 @@ class InputRecording:
                     ),
                 )
                 self._flush()
+                os.fsync(self.fd)
         except BaseException:
             self.incomplete = True
         finally:
