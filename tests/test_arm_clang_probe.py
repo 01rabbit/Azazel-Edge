@@ -5,9 +5,13 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+REAL_RUN = subprocess.run
+
 
 SPEC = importlib.util.spec_from_file_location(
     "arm_clang_probe_under_test",
@@ -51,6 +55,10 @@ def compiler_fixture(tmp_path, monkeypatch, *, machine=183, timeout=False):
 
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
+        if len(argv) > 2 and argv[1] == "-c" and argv[2] == probe.PUBLIC_READER:
+            assert kwargs["user"] == kwargs["group"] == 1000
+            assert kwargs["extra_groups"] == [] and kwargs["timeout"] == 12
+            return run_reader(argv[3], argv[4], argv[5])
         if "-E" in argv:
             if timeout:
                 raise subprocess.TimeoutExpired(
@@ -133,9 +141,10 @@ def test_public_fixture_sole_root_owner_then_probe_and_index(tmp_path, monkeypat
     image, output, calls = compiler_fixture(tmp_path, monkeypatch)
     output.rmdir()  # No fixture-owned files exist yet.
     fixture = probe.public_export.__wrapped__()
-    root, inventory = next(fixture)
+    publication = next(fixture)
+    root, inventory = publication
     assert root == output and inventory
-    assert probe.approved_clang(root) == probe.CLANG
+    assert probe.approved_clang(root, publication=publication) == probe.CLANG
     original = (root / "toolchain-probe.json").read_bytes()
     assert len(calls) == 2
     with pytest.raises(FileExistsError):
@@ -145,3 +154,83 @@ def test_public_fixture_sole_root_owner_then_probe_and_index(tmp_path, monkeypat
     assert (root / "toolchain-probe.json").read_bytes() == original
     assert json.loads((root / "case-index.json").read_bytes()) == inventory
     assert calls[-1][1]["timeout"] == 12
+
+
+def run_reader(root, index_pin, probe_pin):
+    # Synthetic UID assertion only: execute the entire original reader body,
+    # filesystem opens, hashes, allowlists and parser without changing its logic.
+    return REAL_RUN(
+        [
+            sys.executable,
+            "-c",
+            "import os;os.geteuid=lambda:1000\n" + probe.PUBLIC_READER,
+            str(root),
+            index_pin,
+            probe_pin,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=12,
+    )
+
+
+def test_actual_public_reader_accepts_absent_diagnostic_before_probe(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "public"
+    monkeypatch.setenv("EDGE_ADVISORY_EXEC_PUBLIC_DIR", str(output))
+    fixture = probe.public_export.__wrapped__()
+    publication = next(fixture)
+    root, _ = publication
+    calls = []
+
+    def readback(argv, **kwargs):
+        calls.append(argv)
+        return run_reader(argv[3], argv[4], argv[5])
+
+    monkeypatch.setattr(probe.subprocess, "run", readback)
+    with pytest.raises(StopIteration):
+        next(fixture)
+    assert calls[0][5] == "-" and not (root / "toolchain-probe.json").exists()
+
+
+@pytest.mark.parametrize(
+    "fault", ["wrong_pin", "unpinned", "extra", "symlink", "schema", "bound"]
+)
+def test_actual_public_reader_strict_diagnostic_contract(tmp_path, monkeypatch, fault):
+    _, output, _ = compiler_fixture(tmp_path, monkeypatch)
+    output.rmdir()
+    fixture = probe.public_export.__wrapped__()
+    publication = next(fixture)
+    root, _ = publication
+    probe.approved_clang(root, publication=publication)
+    with pytest.raises(StopIteration):
+        next(fixture)
+    diagnostic = root / "toolchain-probe.json"
+    expected = publication.probe_sha256
+    index_pin = probe.sha((root / "case-index.json").read_bytes())
+    if fault == "wrong_pin":
+        expected = "0" * 64
+    elif fault == "unpinned":
+        expected = "-"
+    elif fault == "extra":
+        (root / "unrecognized.json").write_bytes(b"{}")
+    elif fault == "symlink":
+        target = root.parent / "diagnostic-copy"
+        target.write_bytes(diagnostic.read_bytes())
+        target.chmod(0o444)
+        diagnostic.unlink()
+        diagnostic.symlink_to(target)
+    else:
+        value = json.loads(diagnostic.read_bytes())
+        if fault == "schema":
+            value["schema_version"] = "unrecognized/v1"
+        else:
+            value["version"]["stdout_base64"] = "A" * 87385
+        raw = probe._json(value) + b"\n"
+        diagnostic.chmod(0o644)
+        diagnostic.write_bytes(raw)
+        diagnostic.chmod(0o444)
+        expected = probe.sha(raw)
+    checked = run_reader(root, index_pin, expected)
+    assert checked.returncode != 0

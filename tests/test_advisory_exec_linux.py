@@ -202,7 +202,7 @@ def _compiler_command(argv, *, input_bytes=None):
     return receipt, stdout
 
 
-def approved_clang(directory):
+def approved_clang(directory, *, publication=None):
     """Pin the installed native compiler; preserve setup failures before acquisition."""
     record = dict(
         schema_version="edge-arm-clang-probe/v1",
@@ -262,10 +262,15 @@ def approved_clang(directory):
         raise
     finally:
         try:
-            with (directory / "toolchain-probe.json").open("xb") as output:
-                output.write(_json(record) + b"\n")
+            raw = _json(record) + b"\n"
+            target = directory / "toolchain-probe.json"
+            with target.open("xb") as output:
+                output.write(raw)
                 output.flush()
+                os.fchmod(output.fileno(), 0o444)
                 os.fsync(output.fileno())
+            if publication is not None:
+                publication.probe_sha256 = sha(raw)
         except BaseException as publication_error:
             if failure is None:
                 raise
@@ -303,7 +308,9 @@ def approved_object(public_export):
                 check=True,
                 timeout=30,
             )
-        compiler = approved_clang(public_export[0] or directory)
+        compiler = approved_clang(
+            public_export[0] or directory, publication=public_export
+        )
         source = ROOT / "native/advisory_exec_observer.bpf.c"
         subprocess.run(
             [
@@ -565,23 +572,40 @@ def _save(path, raw):
     path.chmod(0o444)
 
 
+class PublicExport(tuple):
+    """Fixture-local retained publication pin; preserve two-value iteration."""
+
+    def __new__(cls, root, inventory):
+        result = super().__new__(cls, (root, inventory))
+        result.probe_sha256 = None
+        return result
+
+
 @pytest.fixture(scope="module")
 def public_export():
     path = os.environ.get("EDGE_ADVISORY_EXEC_PUBLIC_DIR")
     inventory = {name: dict(state="missing", manifest_sha256=None) for name in CASES}
     if not path:
-        yield None, inventory
+        yield PublicExport(None, inventory)
         return
     root = Path(path)
     root.mkdir(mode=0o755)
     root.chmod(0o755)
+    publication = PublicExport(root, inventory)
     try:
-        yield root, inventory
+        yield publication
     finally:
         index_raw = _json(inventory) + b"\n"
         _save(root / "case-index.json", index_raw)
         checked = subprocess.run(
-            [sys.executable, "-c", PUBLIC_READER, str(root), sha(index_raw)],
+            [
+                sys.executable,
+                "-c",
+                PUBLIC_READER,
+                str(root),
+                sha(index_raw),
+                publication.probe_sha256 or "-",
+            ],
             cwd="/",
             user=1000,
             group=1000,
@@ -614,12 +638,12 @@ def _export(public_export, case_id, plan, probe, governance, audit, control, res
 
 
 PUBLIC_READER = r"""
-import hashlib,json,os,stat,sys
+import base64,hashlib,json,os,re,stat,sys
 from pathlib import Path
 root=Path(sys.argv[1]);assert os.geteuid()==1000
 cases={'ordinary_advice','command_prose','extra_keys','forbidden_intent','execve_success','execve_failed','execveat_failed','creation_attempt','link_loss'}
 slots={'plan.json','probe.json','governance.raw','audit.raw','actor-control.json','diagnostic.json'}
-assert stat.S_IMODE(root.stat().st_mode)==0o755 and set(os.listdir(root))<=cases|{'case-index.json'}
+assert stat.S_IMODE(root.stat().st_mode)==0o755 and set(os.listdir(root))<=cases|{'case-index.json','toolchain-probe.json'}
 def read(path):
  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
  try:
@@ -631,6 +655,42 @@ def read(path):
    raw+=chunk
   assert len(raw)==i.st_size;return raw
  finally:os.close(fd)
+def text(value):return type(value) is str and len(value)<=4096
+def digest(value):return type(value) is str and re.fullmatch('[0-9a-f]{64}',value) is not None
+def error(value):
+ assert value is None or (type(value) is dict and set(value)=={'type','message'} and text(value['type']) and text(value['message']))
+def stage(value,macro=False):
+ if value is None:return
+ keys={'argv','started_ns','finished_ns','timeout_seconds','returncode','stdout_base64','stderr_base64','stdout_bytes','stderr_bytes','truncated','timed_out','error'}
+ assert type(value) is dict and set(value)==keys|({'stdin_sha256'} if macro else set())
+ assert type(value['argv']) is list and value['argv']==(['/usr/bin/clang','-E','-P','-x','c','-'] if macro else ['/usr/bin/clang','--version'])
+ assert type(value['started_ns']) is int and type(value['finished_ns']) is int and 0<=value['started_ns']<=value['finished_ns']
+ assert type(value['timeout_seconds']) is int and value['timeout_seconds']==10
+ assert value['returncode'] is None or type(value['returncode']) is int
+ assert type(value['truncated']) is bool and type(value['timed_out']) is bool
+ truncated=False
+ for name in ('stdout','stderr'):
+  total=value[name+'_bytes'];encoded=value[name+'_base64']
+  assert type(total) is int and total>=0 and type(encoded) is str and len(encoded)<=87384
+  data=base64.b64decode(encoded,validate=True);assert len(data)==min(total,65536)
+  assert base64.b64encode(data).decode()==encoded
+  truncated=truncated or total>65536
+ assert value['truncated'] is truncated
+ error(value['error'])
+ if macro:assert value['stdin_sha256']==hashlib.sha256(b'#include <asm/unistd.h>\n__NR_getpid __NR_execve __NR_execveat __NR_clone __NR_clone3\n').hexdigest()
+probe_pin=sys.argv[3]
+if probe_pin=='-':assert 'toolchain-probe.json' not in os.listdir(root)
+else:
+ assert digest(probe_pin)
+ diagnostic=read(root/'toolchain-probe.json');assert hashlib.sha256(diagnostic).hexdigest()==probe_pin
+ value=json.loads(diagnostic)
+ assert json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()+b'\n'==diagnostic
+ assert type(value) is dict and set(value)=={'schema_version','selected_path','resolved_path','elf_machine','sha256','path_lookup','path_lookup_resolved','version','macro_probe','error'}
+ assert value['schema_version']=='edge-arm-clang-probe/v1' and value['selected_path']=='/usr/bin/clang'
+ for name in ('resolved_path','path_lookup','path_lookup_resolved'):assert value[name] is None or text(value[name])
+ assert value['sha256'] is None or digest(value['sha256'])
+ assert value['elf_machine'] is None or (type(value['elf_machine']) is int and 0<=value['elf_machine']<=65535)
+ error(value['error']);stage(value['version']);stage(value['macro_probe'],True)
 raw=read(root/'case-index.json');assert hashlib.sha256(raw).hexdigest()==sys.argv[2]
 index=json.loads(raw);assert set(index)==cases
 for name,item in index.items():
