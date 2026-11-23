@@ -492,6 +492,7 @@ def main():
     parser.add_argument("--finite-load-cost", action="store_true")
     parser.add_argument("--fresh-source-observe", action="store_true")
     parser.add_argument("--fresh-source-observe-v2", action="store_true")
+    parser.add_argument("--fresh-source-observe-v3", action="store_true")
     args = parser.parse_args()
     if args.receipt_fault and not args.native_core:
         parser.error("receipt fault requires the existing native-core profile")
@@ -503,12 +504,23 @@ def main():
         not args.native_core or args.receipt_fault or args.finite_ingress
     ):
         parser.error("finite load requires its separate native-core variant")
-    if (args.fresh_source_observe or args.fresh_source_observe_v2) and (
+    if (
+        args.fresh_source_observe
+        or args.fresh_source_observe_v2
+        or args.fresh_source_observe_v3
+    ) and (
         not args.native_core
         or args.finite_load_cost
         or args.finite_ingress
         or args.receipt_fault
-        or (args.fresh_source_observe and args.fresh_source_observe_v2)
+        or sum(
+            (
+                args.fresh_source_observe,
+                args.fresh_source_observe_v2,
+                args.fresh_source_observe_v3,
+            )
+        )
+        > 1
     ):
         parser.error("fresh source requires its separate native-core variant")
     global \
@@ -520,8 +532,16 @@ def main():
     NATIVE = args.native_core
     FINITE_INGRESS = args.finite_ingress
     FINITE_LOAD_COST = args.finite_load_cost
-    FRESH_SOURCE_OBSERVE = args.fresh_source_observe or args.fresh_source_observe_v2
-    FRESH_SOURCE_VERSION = 2 if args.fresh_source_observe_v2 else 1
+    FRESH_SOURCE_OBSERVE = (
+        args.fresh_source_observe
+        or args.fresh_source_observe_v2
+        or args.fresh_source_observe_v3
+    )
+    FRESH_SOURCE_VERSION = (
+        3
+        if args.fresh_source_observe_v3
+        else (2 if args.fresh_source_observe_v2 else 1)
+    )
     g.guard()
     configure()
     if args.phase == "prepare":
@@ -548,13 +568,14 @@ def main():
             from fresh_source_observe import (
                 FreshSourceObserveLab,
                 FreshSourceObserveV2Lab,
+                FreshSourceObserveV3Lab,
             )
 
-            lab_type = (
-                FreshSourceObserveV2Lab
-                if FRESH_SOURCE_VERSION == 2
-                else FreshSourceObserveLab
-            )
+            lab_type = {
+                1: FreshSourceObserveLab,
+                2: FreshSourceObserveV2Lab,
+                3: FreshSourceObserveV3Lab,
+            }[FRESH_SOURCE_VERSION]
             lab_type(g, role_command).exercise()
         elif FINITE_LOAD_COST:
             from finite_load_cost import FiniteLoadCostLab

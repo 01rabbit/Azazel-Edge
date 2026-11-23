@@ -43,11 +43,21 @@ class FreshObserverProcessV2(FreshObserverProcess):
     side_files = dict(SIDE_FILES, publication="observer-publication.raw")
 
 
+class FreshObserverProcessV3(FreshObserverProcessV2):
+    role_mode = "fresh-source-v3"
+    bootstrap_schema = "edge-fresh-source-observer-bootstrap/v3"
+    go_schema = "edge-fresh-source-observer-go/v3"
+
+
 def audit_role(g, role_command, create=False, *, version=1):
-    assert type(version) is int and version in (1, 2)
+    assert type(version) is int and version in (1, 2, 3)
     actor, failure = None, None
     try:
-        process_type = FreshObserverProcess if version == 1 else FreshObserverProcessV2
+        process_type = {
+            1: FreshObserverProcess,
+            2: FreshObserverProcessV2,
+            3: FreshObserverProcessV3,
+        }[version]
         actor = process_type(g, role_command, create=create)
         out = actor.wait()
         assert (
@@ -214,7 +224,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
                 + (
                     b"\0"
                     + Path(__file__).with_name("fresh_publication.py").read_bytes()
-                    if self.version == 2
+                    if self.version >= 2
                     else b""
                 )
             ),
@@ -853,7 +863,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             if context.get("observer_process") and context["exported"]:
                 try:
                     context["observer_process"].close(
-                        original=sys.exc_info()[1] if self.version == 2 else None
+                        original=sys.exc_info()[1] if self.version >= 2 else None
                     )
                 except BaseException as error:
                     hook = getattr(self, "post_snapshot_error", None)
@@ -1039,6 +1049,25 @@ def _fresh_phase_facts(raw, *, metadata, identity, complete, version=1):
         allow_partial=True,
     )
     assert rows[0]["kind"] == "header"
+    if version == 3:
+        for row in rows:
+            data = row["data"]
+            assert "previous_write_cost" not in data and "previous_enqueue_cost" in data
+            cost = data["previous_enqueue_cost"]
+            if row["seq"] == 1:
+                assert cost is None
+            else:
+                assert cost["seq"] == row["seq"] - 1
+                for start, end in (
+                    ("start_ns", "end_ns"),
+                    ("process_cpu_start_ns", "process_cpu_end_ns"),
+                    ("thread_cpu_start_ns", "thread_cpu_end_ns"),
+                ):
+                    assert (
+                        type(cost[start]) is int
+                        and type(cost[end]) is int
+                        and 0 <= cost[start] <= cost[end]
+                    )
     header = rows[0]["data"]
     assert all(header[k] == v for k, v in metadata.items())
     assert all(header[k] == v for k, v in identity.items())
@@ -1120,14 +1149,15 @@ def evaluate_fresh_observer_originals(artifacts, expected, *, version=1):
     from signed_network_recording import decode_calls
     from signed_network_clock import qualify_clock
 
-    assert version in (1, 2)
+    assert version in (1, 2, 3)
     profile = importlib.import_module(
-        "azazel_edge.benchmark.fresh_source_observe" + ("_v2" if version == 2 else "")
+        "azazel_edge.benchmark.fresh_source_observe"
+        + (f"_v{version}" if version >= 2 else "")
     )
     self_files = profile.FILES
     side_files = (
         dict(SIDE_FILES, publication="observer-publication.raw")
-        if version == 2
+        if version >= 2
         else SIDE_FILES
     )
 
@@ -1284,7 +1314,7 @@ def evaluate_fresh_observer_originals(artifacts, expected, *, version=1):
             _verify_fresh_fault_boundary(
                 controller, observer, original, version=version
             )
-            if version == 2:
+            if version >= 2:
                 assert (
                     profile.evaluate_publication(artifacts, expected=expected)["status"]
                     == "qualified"
@@ -1369,7 +1399,7 @@ def evaluate_fresh_observer_originals(artifacts, expected, *, version=1):
         )
         for key in (
             ("phase", "calls", "context", "input_calls", "publication")
-            if version == 2
+            if version >= 2
             else ("phase", "calls", "context", "input_calls")
         ):
             raw = original(side_files[key])
@@ -1411,7 +1441,7 @@ def evaluate_fresh_observer_originals(artifacts, expected, *, version=1):
             controller_end=anchors["after"],
             recorded=calls,
         )
-        if version == 2:
+        if version >= 2:
             closed = completion["publication"]
             assert set(closed) == {
                 "joined",
@@ -1598,20 +1628,24 @@ def exclusive_public(path, raw):
         os.fsync(target.fileno())
 
 
-def publication_commits(context, needs):
+def publication_commits(context, needs, *, version=2):
     """Root read-only checks of pinned helper fsynced prefix reports."""
+    assert type(version) is int and version in (2, 3)
     paths = json.loads(context["files"]["observer-config.json"])["paths"]
     publication, _ = stable_read(Path(paths["publication"]), 1024 * 1024)
     rows, tail = old._rows(
         publication,
-        "edge-observer-publication/v1",
+        "edge-observer-publication/v2"
+        if version == 3
+        else "edge-observer-publication/v1",
         limit=1024 * 1024,
         max_rows=4096,
         allow_partial=True,
     )
     config = json.loads(context["files"]["observer-config.json"])
     assert (
-        rows[0]["kind"] == "header"
+        rows
+        and rows[0]["kind"] == "header"
         and rows[0]["data"]["metadata"] == config["metadata"]
         and rows[0]["data"]["identity"] == context["load"]["observer"]["identity"]
     )
@@ -1683,6 +1717,12 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
             for case in CASES
         }
 
+    def barrier_streams(self, context, call_seq):
+        return {"calls": call_seq}
+
+    def extra_checkpoints(self, streams):
+        return {}
+
     def ready(self, context, paths):
         super().ready(context, paths)
 
@@ -1690,7 +1730,10 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
             try:
                 result = publication_commits(
                     context,
-                    {"calls": context["fresh"]["readiness"]["first_sample_seq"]},
+                    self.barrier_streams(
+                        context, context["fresh"]["readiness"]["first_sample_seq"]
+                    ),
+                    version=self.version,
                 )
                 if result is None:
                     return False
@@ -1698,10 +1741,11 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
                 context["fresh"]["readiness"].update(
                     clock_calls_checkpoint=streams["calls"],
                     publication_checkpoint=checkpoint,
+                    **self.extra_checkpoints(streams),
                     observed_ns=time.monotonic_ns(),
                 )
                 return True
-            except (OSError, ValueError, KeyError, AssertionError):
+            except (OSError, ValueError, KeyError, AssertionError, StopIteration):
                 return False
 
         self.g.wait_for(committed)
@@ -1714,7 +1758,7 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
         def committed():
             try:
                 raw, _ = stable_read(Path(paths["input_calls"]), 4 * 1024 * 1024)
-                rows, _ = input_prefix(raw, version=2)
+                rows, _ = input_prefix(raw, version=self.version)
                 ret = next(
                     row
                     for row in rows
@@ -1723,7 +1767,11 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
                 )
                 result = publication_commits(
                     context,
-                    {"calls": selected["event_call_id"], "input_calls": ret["seq"]},
+                    dict(
+                        self.barrier_streams(context, selected["event_call_id"]),
+                        input_calls=ret["seq"],
+                    ),
+                    version=self.version,
                 )
                 if result is None:
                     return False
@@ -1732,6 +1780,7 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
                 selected.update(
                     input_calls_checkpoint=streams["input_calls"],
                     publication_checkpoint=checkpoint,
+                    **self.extra_checkpoints(streams),
                     observed_ns=now,
                 )
                 context["load"]["observer"]["fault_boundary"]["observed_ns"] = now
@@ -1787,7 +1836,7 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
         try:
             result = self.core.evaluate_fresh_source_case(artifacts, expected=pins)
             result["observer"] = evaluate_fresh_observer_originals(
-                artifacts, pins, version=2
+                artifacts, pins, version=self.version
             )
             evaluation = accounting.canonical(result)
             exclusive_public(directory / "evaluation.json", evaluation)
@@ -1975,3 +2024,85 @@ class FreshSourceObserveV2Lab(FreshSourceObserveLab):
                     error=old.error_value(error),
                     primary_error_preserved=True,
                 )
+
+
+def four_stream_barrier_needs(context, call_seq):
+    """Root selects completed measurement rows inside the original call bracket."""
+    config = json.loads(context["files"]["observer-config.json"])
+    paths = config["paths"]
+    raw, _ = stable_read(Path(paths["calls"]), 4 * 1024 * 1024)
+    calls = decode_calls_prefix(raw)["calls"]
+    call = next(row for row in calls if row["seq"] == call_seq)
+    assert call["kind"] in ("sample", "event")
+    phase_raw, _ = stable_read(Path(paths["phase"]), 4 * 1024 * 1024)
+    rows, _ = old._rows(
+        phase_raw,
+        "edge-fresh-phase-timing-record/v3",
+        limit=4 * 1024 * 1024,
+        max_rows=4096,
+        allow_partial=True,
+    )
+    assert rows and rows[0]["kind"] == "header"
+    identity = context["load"]["observer"]["identity"]
+    assert all(
+        rows[0]["data"][k] == v for k, v in dict(config["metadata"], **identity).items()
+    )
+    # A worker commit must cover both original intent and completed matching span.
+    intents = {
+        row["data"]["span_id"]: row["data"] for row in rows if row["kind"] == "intent"
+    }
+    selected = next(
+        row
+        for row in rows
+        if row["kind"] == "span"
+        and row["data"]["phase"] == "observation_" + call["kind"]
+        and row["data"]["outcome"] == "returned"
+        and call["data"]["start_ns"]
+        <= row["data"]["start_ns"]
+        <= row["data"]["end_ns"]
+        <= call["data"]["end_ns"]
+    )
+    data = selected["data"]
+    intent = intents[data["span_id"]]
+    assert all(
+        data[k] == intent[k]
+        for k in (
+            "span_id",
+            "parent_id",
+            "phase",
+            "event_kind",
+            "event_seq",
+            "operation",
+        )
+    )
+    assert data["native_tid"] == identity["native_tid"]
+    context_raw, _ = stable_read(Path(paths["context"]), 16384)
+    contexts, _ = old._rows(
+        context_raw,
+        "edge-fresh-clock-context/v3",
+        limit=16384,
+        max_rows=2,
+        allow_partial=True,
+    )
+    assert contexts and contexts[0]["kind"] == "begin"
+    assert contexts[0]["data"]["metadata"] == config["metadata"]
+    assert contexts[0]["data"]["identity"] == identity
+    return dict(calls=call_seq, phase=selected["seq"], context=contexts[0]["seq"])
+
+
+class FreshSourceObserveV3Lab(FreshSourceObserveV2Lab):
+    version = 3
+    protocol_name = "fresh-source-observe-protocol-v3.json"
+    protocol_digest = "01f653e970f4313aaa6066219ded163e21c0753ee97d5ded5cbfedd2872a938a"
+    public_name = "fresh-source-observe-v3-public"
+    core_module = "azazel_edge.benchmark.fresh_source_observe_v3"
+    process_type = FreshObserverProcessV3
+    side_files = FreshObserverProcessV3.side_files
+
+    def barrier_streams(self, context, call_seq):
+        return four_stream_barrier_needs(context, call_seq)
+
+    def extra_checkpoints(self, streams):
+        return dict(
+            phase_checkpoint=streams["phase"], context_checkpoint=streams["context"]
+        )

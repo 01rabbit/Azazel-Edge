@@ -156,8 +156,8 @@ def test_v2_collector_and_dispatch_leave_v1_default_available(monkeypatch):
     )
     workflow = (REAL.parents[1] / ".github/workflows/ci.yml").read_text()
     assert (
-        "--native-core --fresh-source-observe-v2" in workflow
-        and "collect_fresh_source_observe.py --v2" in workflow
+        "--native-core --fresh-source-observe-v3" in workflow
+        and "collect_fresh_source_observe.py --v3" in workflow
     )
 
 

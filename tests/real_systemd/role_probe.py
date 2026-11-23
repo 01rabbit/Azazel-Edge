@@ -151,6 +151,7 @@ def main():
             "finite-load",
             "fresh-source",
             "fresh-source-v2",
+            "fresh-source-v3",
         ],
     )
     parser.add_argument("--create", action="store_true")
@@ -162,7 +163,7 @@ def main():
     args = parser.parse_args()
     if args.mode == "observer":
         observer(args.create)
-    elif args.mode in ("fresh-source", "fresh-source-v2"):
+    elif args.mode in ("fresh-source", "fresh-source-v2", "fresh-source-v3"):
         from fresh_source_observer import main as fresh_source_main
 
         fresh_source_main(
@@ -170,7 +171,7 @@ def main():
             args.config,
             args.config_sha256,
             args.create,
-            version=2 if args.mode == "fresh-source-v2" else 1,
+            version=int(args.mode[-1]) if args.mode != "fresh-source" else 1,
         )
     elif args.mode == "finite-load":
         from finite_load_observer import main as finite_load_main

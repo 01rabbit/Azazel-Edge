@@ -68,24 +68,24 @@ def file_limit(name):
 
 
 def collect(*, version=1):
-    assert version in (1, 2)
-    names = NAMES | {"observer-publication.raw"} if version == 2 else NAMES
+    assert version in (1, 2, 3)
+    names = NAMES | {"observer-publication.raw"} if version >= 2 else NAMES
     source = (
         Path(
             str(BASE).replace(
-                "fresh-source-observe-public", "fresh-source-observe-v2-public"
+                "fresh-source-observe-public", f"fresh-source-observe-v{version}-public"
             )
         )
-        if version == 2
+        if version >= 2
         else BASE
     )
     target = (
         Path(
             str(TARGET).replace(
-                "fresh-source-observe-public", "fresh-source-observe-v2-public"
+                "fresh-source-observe-public", f"fresh-source-observe-v{version}-public"
             )
         )
-        if version == 2
+        if version >= 2
         else TARGET
     )
     cases = CASES
@@ -142,7 +142,7 @@ def collect(*, version=1):
             "fresh-interrupted-snapshot.json",
             "disposition.json",
         )
-        if version == 2
+        if version >= 2
         else ("recipe-declaration.json",)
     ):
         try:
@@ -173,7 +173,9 @@ def collect(*, version=1):
             errors.append(dict(path=name, error=type(error).__name__))
     manifest = dict(
         schema_version="edge-finite-load-public-inventory/v1",
-        flavor="fresh-source-observe-v2" if version == 2 else "fresh-source-observe",
+        flavor=f"fresh-source-observe-v{version}"
+        if version >= 2
+        else "fresh-source-observe",
         cases=list(cases),
         files=files,
         missing=missing,
@@ -205,7 +207,7 @@ def collect(*, version=1):
             "evaluation.json",
         )
     }
-    if version == 2:
+    if version >= 2:
         required |= {case + "/observer-publication.raw" for case in cases}
         required |= {
             "recipe-declaration.json",
@@ -219,6 +221,6 @@ def collect(*, version=1):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in ([], ["--v2"]):
-        raise SystemExit("fixed fresh-source collector accepts only --v2")
-    collect(version=2 if sys.argv[1:] == ["--v2"] else 1)
+    if sys.argv[1:] not in ([], ["--v2"], ["--v3"]):
+        raise SystemExit("fixed fresh-source collector accepts only --v2 or --v3")
+    collect(version=int(sys.argv[1][-1]) if sys.argv[1:] else 1)
