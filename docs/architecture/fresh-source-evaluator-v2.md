@@ -43,3 +43,12 @@ null-slot appearance, stale hash, invalid source_revision or wrong run/protocol
 rejects that envelope, never silently discards its error. No self-referential pin:
 the leaf proof ignores its own stored evaluation slot, while the external snapshot
 and outer disposition pin that file after write.
+
+Prospective error-array clarification, before acquisition: top-level disposition
+errors contain exactly {stage,type,message}, with stage run or final-replay and
+bounded typed strings. This preserves the producing Root stage explicitly; it is
+not the per-case error (which remains null or {type,message}). A real pre-seal
+controller failure must copy its original typed error into collection_failed;
+post-seal errors stay outside the immutable snapshot. Valid failed envelopes must
+replay as validated failed dispositions with retained leaf facts, rather than
+accidentally fail only because producer/parser error shapes disagree.
