@@ -958,7 +958,12 @@ def _evaluate_callbacks(
                 set(
                     "observed_ns first_sample_seq clock_calls_checkpoint input_ready_position journal_checkpoint witness_boundary".split()
                 )
-                | ({"publication_checkpoint"} if version == 2 else set()),
+                | ({"publication_checkpoint"} if version >= 2 else set())
+                | (
+                    {"phase_checkpoint", "context_checkpoint"}
+                    if version == 3
+                    else set()
+                ),
             )
             samples = [row for row in clock_rows if row["kind"] == "sample"]
             _need(
@@ -1375,7 +1380,12 @@ def _evaluate_callbacks(
                 set(
                     "observed_ns event_ref input_calls_checkpoint handler_id event_call_id source_position".split()
                 )
-                | ({"publication_checkpoint"} if version == 2 else set()),
+                | ({"publication_checkpoint"} if version >= 2 else set())
+                | (
+                    {"phase_checkpoint", "context_checkpoint"}
+                    if version == 3
+                    else set()
+                ),
             )
             cb = r["callback_facts"][0]
             _need(

@@ -69,11 +69,17 @@ def _raw_reader(artifacts, expected):
     return raw, data
 
 
-def _records(stream, raw):
+def _records(stream, raw, *, version=2):
     if stream == "calls":
         return legacy._records(raw, maximum=900)
+    names = {
+        "input_calls": ("input-record", 256),
+        "phase": ("phase-timing-record", 4096),
+        "context": ("clock-context", 2),
+    }
+    name, maximum = names[stream]
     return legacy._records(
-        raw, schema="edge-fresh-input-record/v2", convention="full", maximum=256
+        raw, schema=f"edge-fresh-{name}/v{version}", convention="full", maximum=maximum
     )
 
 
@@ -95,17 +101,90 @@ def _root_object(meta):
     )
 
 
+def _ordered_phase_prefix(rows):
+    """A partial stack is known unfinished; a return needs a unique earlier intent."""
+    _need(rows and rows[0]["kind"] == "header", "phase_prefix_header")
+    active, seen, stack = {}, set(), []
+    for index, row in enumerate(rows[1:], 1):
+        body, kind = row["data"], row["kind"]
+        if kind == "intent":
+            sid, parent = body["span_id"], body["parent_id"]
+            _need(
+                _uint(sid, 2**64) and sid > 0 and sid not in seen,
+                "unique_ordered_phase_intent",
+            )
+            _need(
+                parent is None
+                if not stack
+                else type(parent) is int and parent == stack[-1],
+                "actual_phase_parent_stack",
+            )
+            active[sid] = body
+            seen.add(sid)
+            stack.append(sid)
+        elif kind == "span":
+            sid = body["span_id"]
+            _need(
+                _uint(sid, 2**64) and sid in active and stack and stack[-1] == sid,
+                "phase_return_requires_prior_active_intent",
+            )
+            intent = active.pop(sid)
+            stack.pop()
+            _need(
+                all(
+                    body[k] == intent[k]
+                    for k in (
+                        "span_id",
+                        "parent_id",
+                        "phase",
+                        "event_kind",
+                        "event_seq",
+                        "operation",
+                    )
+                ),
+                "ordered_phase_return_context",
+            )
+            _need(body["outcome"] in ("returned", "raised"), "actual_phase_disposition")
+        elif kind == "end":
+            _need(
+                index == len(rows) - 1
+                and not active
+                and not stack
+                and body["normal_return"] is True
+                and body["incomplete"] is False,
+                "genuine_quiescent_phase_footer",
+            )
+        else:
+            raise ValueError("unknown_ordered_phase_record")
+
+
 def evaluate_publication(artifacts, *, expected):
+    return _evaluate_publication_profile(artifacts, expected=expected)
+
+
+def _evaluate_publication_profile(
+    artifacts,
+    *,
+    expected,
+    version=2,
+    protocol_sha256=PROTOCOL_SHA256,
+    publication_version=1,
+    streams=STREAMS,
+    limits=LIMITS,
+):
     result = dict(
-        schema_version="edge-observer-publication-analysis/v1",
+        schema_version=f"edge-observer-publication-analysis/v{publication_version}",
         status="withheld",
-        streams=dict.fromkeys(STREAMS),
+        streams=dict.fromkeys(streams),
         normal_complete=False,
         readiness_verified=False,
         interrupt_verified=False,
         reasons=[],
     )
     raw, data = _raw_reader(artifacts, expected)
+
+    def decode_stream(stream, value):
+        return _records(stream, value, version=version)
 
     def check(name, fn):
         try:
@@ -121,11 +200,11 @@ def evaluate_publication(artifacts, *, expected):
             data("fresh-controller.json"),
         )
         _need(
-            config["schema_version"] == "edge-fresh-source-observer-config/v2"
-            and load["schema_version"] == "edge-fresh-load-controller/v2"
-            and control["schema_version"] == "edge-fresh-source-controller/v2"
+            config["schema_version"] == f"edge-fresh-source-observer-config/v{version}"
+            and load["schema_version"] == f"edge-fresh-load-controller/v{version}"
+            and control["schema_version"] == f"edge-fresh-source-controller/v{version}"
             and all(
-                v["protocol_sha256"] == PROTOCOL_SHA256 for v in (config, load, control)
+                v["protocol_sha256"] == protocol_sha256 for v in (config, load, control)
             )
             and all(v["case_id"] == control["case_id"] for v in (config, load)),
             "explicit_v2_publication_context",
@@ -138,7 +217,10 @@ def evaluate_publication(artifacts, *, expected):
         )
         b = raw("observer-publication.raw")
         rows, tail, issue = legacy._records(
-            b, schema="edge-observer-publication/v1", convention="full", maximum=4096
+            b,
+            schema=f"edge-observer-publication/v{publication_version}",
+            convention="full",
+            maximum=4096,
         )
         _need(rows and rows[0]["kind"] == "header", "publication_header")
         header = rows[0]["data"]
@@ -146,7 +228,7 @@ def evaluate_publication(artifacts, *, expected):
         _need(
             header["metadata"] == config["metadata"]
             and header["identity"] == load["observer"]["identity"]
-            and header["limits"] == LIMITS,
+            and header["limits"] == limits,
             "pinned_publication_header",
         )
         return config, load, control, rows, tail, issue, b
@@ -174,7 +256,7 @@ def evaluate_publication(artifacts, *, expected):
                 )
                 stream = d["stream"]
                 _need(
-                    type(stream) is str and stream in STREAMS,
+                    type(stream) is str and stream in streams,
                     "known_measurement_stream",
                 )
                 _need(
@@ -224,14 +306,14 @@ def evaluate_publication(artifacts, *, expected):
                     d["first_seq"] == first and d["first_seq"] <= d["last_seq"],
                     "contiguous_committed_rows",
                 )
-                b = raw(STREAMS[stream])
+                b = raw(streams[stream])
                 _need(
                     0 < d["bytes"] <= len(b)
                     and b[d["bytes"] - 1 : d["bytes"]] == b"\n"
                     and legacy._sha(b[: d["bytes"]]) == d["sha256"],
                     "actual_committed_prefix_hash",
                 )
-                decoded, rest, error = _records(stream, b[: d["bytes"]])
+                decoded, rest, error = decode_stream(stream, b[: d["bytes"]])
                 _need(
                     decoded
                     and not rest
@@ -241,6 +323,19 @@ def evaluate_publication(artifacts, *, expected):
                     and (prior is None or d["bytes"] > prior["bytes"]),
                     "exact_committed_stream_prefix",
                 )
+                if version == 3 and stream == "phase":
+                    _ordered_phase_prefix(decoded)
+                if version == 3 and stream == "context":
+                    _need(
+                        decoded[0]["kind"] == "begin"
+                        and (len(decoded) == 1 or decoded[1]["kind"] == "end"),
+                        "ordered_context_begin_end",
+                    )
+                if version == 3 and control["case_id"] == CASES[1]:
+                    _need(
+                        all(row["kind"] != "end" for row in decoded),
+                        "interrupted_stream_cannot_have_normal_footer",
+                    )
                 known_returns = []
                 for original in decoded:
                     body = original["data"]
@@ -257,6 +352,55 @@ def evaluate_publication(artifacts, *, expected):
                         stamp = body["end_ns"]
                     elif stream == "input_calls" and original["kind"] == "input_intent":
                         stamp = body["start_ns"]
+                    elif version == 3 and stream == "phase":
+                        _need(
+                            "previous_write_cost" not in body
+                            and "previous_enqueue_cost" in body,
+                            "explicit_phase_enqueue_cost_semantics",
+                        )
+                        enqueued = body["previous_enqueue_cost"]
+                        _need(
+                            (original["seq"] == 1 and enqueued is None)
+                            or (original["seq"] > 1 and enqueued is not None),
+                            "measured_previous_enqueue_not_missing",
+                        )
+                        if enqueued is not None:
+                            _fields(enqueued, CLOCK | {"seq"})
+                            _need(
+                                _uint(enqueued["seq"], 2**64)
+                                and enqueued["seq"] == original["seq"] - 1,
+                                "actual_previous_enqueue_row",
+                            )
+                            _clock({k: enqueued[k] for k in CLOCK})
+                            _need(
+                                life["started_ns"]
+                                <= enqueued["start_ns"]
+                                <= enqueued["end_ns"]
+                                <= life["finished_ns"],
+                                "enqueue_inside_actual_observer_lifetime",
+                            )
+                            known_returns.append(enqueued["end_ns"])
+                        if original["kind"] != "span":
+                            continue
+                        _clock({k: body[k] for k in CLOCK})
+                        _need(
+                            life["started_ns"]
+                            <= body["start_ns"]
+                            <= body["end_ns"]
+                            <= life["finished_ns"],
+                            "phase_inside_actual_observer_lifetime",
+                        )
+                        stamp = body["end_ns"]
+                    elif version == 3 and stream == "context":
+                        legacy._anchor(body["anchor"])
+                        _need(
+                            life["started_ns"]
+                            <= body["anchor"]["monotonic_before_ns"]
+                            <= body["anchor"]["monotonic_after_ns"]
+                            <= life["finished_ns"],
+                            "context_inside_actual_observer_lifetime",
+                        )
+                        stamp = body["anchor"]["monotonic_after_ns"]
                     else:
                         continue
                     _need(_uint(stamp, 2**64), "original_queued_row_time")
@@ -322,7 +466,7 @@ def evaluate_publication(artifacts, *, expected):
         )
         verified, partial, err = legacy._records(
             publication[:n],
-            schema="edge-observer-publication/v1",
+            schema=f"edge-observer-publication/v{publication_version}",
             convention="full",
             maximum=4096,
         )
@@ -336,7 +480,7 @@ def evaluate_publication(artifacts, *, expected):
 
         def covers(stream, checkpoint, row_kind, seq):
             _fields(checkpoint, {"size", "sha256"})
-            prefix = raw(STREAMS[stream])[: checkpoint["size"]]
+            prefix = raw(streams[stream])[: checkpoint["size"]]
             _need(
                 _uint(checkpoint["size"], 2**64)
                 and checkpoint["size"] > 0
@@ -347,7 +491,7 @@ def evaluate_publication(artifacts, *, expected):
                 and available[stream]["bytes"] >= len(prefix),
                 "barrier_fsynced_measurement_prefix",
             )
-            rr, t, e = _records(stream, prefix)
+            rr, t, e = decode_stream(stream, prefix)
             _need(
                 rr
                 and not t
@@ -357,12 +501,21 @@ def evaluate_publication(artifacts, *, expected):
             )
             return rr
 
+        selected_call = None
         if not need_input:
-            covers(
+            selected_calls = covers(
                 "calls",
                 value["clock_calls_checkpoint"],
                 "sample",
                 value["first_sample_seq"],
+            )
+            selected_call = next(
+                (
+                    r
+                    for r in selected_calls
+                    if r["kind"] == "sample" and r["seq"] == value["first_sample_seq"]
+                ),
+                None,
             )
         else:
             rr = covers(
@@ -399,6 +552,90 @@ def evaluate_publication(artifacts, *, expected):
                 ),
                 "barrier_exact_event_committed",
             )
+            selected_call = next(
+                (
+                    r
+                    for r in cc
+                    if r["kind"] == "event" and r["seq"] == value["event_call_id"]
+                ),
+                None,
+            )
+        if version == 3:
+            _need(selected_call is not None, "barrier_selected_original_call")
+            phase_rows = covers("phase", value["phase_checkpoint"], "header", 1)
+            context_rows = covers("context", value["context_checkpoint"], "begin", 1)
+            header = phase_rows[0]["data"]
+            _need(
+                all(header[k] == v for k, v in config["metadata"].items())
+                and all(
+                    header[k] == v for k, v in load["observer"]["identity"].items()
+                ),
+                "barrier_phase_original_identity",
+            )
+            context_begin = context_rows[0]["data"]
+            _need(
+                context_rows[0]["kind"] == "begin"
+                and context_begin["metadata"] == config["metadata"]
+                and context_begin["identity"] == load["observer"]["identity"],
+                "barrier_original_context_begin",
+            )
+            legacy._anchor(context_begin["anchor"])
+            original_call = selected_call["data"]
+            _need(
+                context_begin["anchor"]["monotonic_after_ns"]
+                <= original_call["clock_before"]["monotonic_before_ns"],
+                "context_before_original_selected_call",
+            )
+            phase_name = "observation_event" if need_input else "observation_sample"
+            intents = {
+                r["data"]["span_id"]: r["data"]
+                for r in phase_rows
+                if r["kind"] == "intent"
+            }
+            matched = []
+            for phase_row in phase_rows:
+                if phase_row["kind"] != "span":
+                    continue
+                span = phase_row["data"]
+                if span["phase"] != phase_name:
+                    continue
+                _clock({k: span[k] for k in CLOCK})
+                if (
+                    original_call["start_ns"]
+                    <= span["start_ns"]
+                    <= span["end_ns"]
+                    <= original_call["end_ns"]
+                ):
+                    _need(
+                        span["outcome"] == "returned"
+                        and _uint(span["span_id"], 2**64)
+                        and span["span_id"] > 0
+                        and (
+                            span["parent_id"] is None
+                            or (
+                                _uint(span["parent_id"], 2**64)
+                                and 0 < span["parent_id"] < span["span_id"]
+                            )
+                        )
+                        and type(span["native_tid"]) is int
+                        and span["native_tid"]
+                        == load["observer"]["identity"]["native_tid"]
+                        and span["span_id"] in intents
+                        and all(
+                            span[k] == intents[span["span_id"]][k]
+                            for k in (
+                                "span_id",
+                                "parent_id",
+                                "phase",
+                                "event_kind",
+                                "event_seq",
+                                "operation",
+                            )
+                        ),
+                        "barrier_paired_original_phase_return",
+                    )
+                    matched.append(span)
+            _need(len(matched) == 1, "barrier_exact_completed_phase_span")
         return True
 
     result["readiness_verified"] = (
@@ -414,6 +651,19 @@ def evaluate_publication(artifacts, *, expected):
     )
     case = control["case_id"]
     if case == CASES[1]:
+        if version == 3:
+
+            def interrupted_streams():
+                for stream, name in streams.items():
+                    visible_rows, _, _ = decode_stream(stream, raw(name))
+                    _need(
+                        all(row["kind"] != "end" for row in visible_rows),
+                        "interrupted_visible_stream_has_normal_footer",
+                    )
+                return True
+
+            if check("interrupted_streams", interrupted_streams) is not True:
+                failed = True
         result["interrupt_verified"] = (
             check(
                 "interrupt",
@@ -452,8 +702,8 @@ def evaluate_publication(artifacts, *, expected):
             and previous_end <= footer["close"]["end_ns"],
             "fixed_close_deadline",
         )
-        _fields(footer["streams"], set(STREAMS))
-        for stream, name in STREAMS.items():
+        _fields(footer["streams"], set(streams))
+        for stream, name in streams.items():
             marks = footer["streams"][stream]
             _fields(marks, {"enqueued", "written", "fsynced"})
             expected_mark = {k: result["streams"][stream][k] for k in WATERMARK}
@@ -461,6 +711,25 @@ def evaluate_publication(artifacts, *, expected):
                 _fields(mark, WATERMARK)
                 _need(mark == expected_mark, "all_enqueued_rows_fsynced")
             _need(expected_mark["bytes"] == len(raw(name)), "no_uncommitted_final_tail")
+            if version == 3:
+                final_rows, partial, record_issue = decode_stream(stream, raw(name))
+                _need(
+                    final_rows
+                    and not partial
+                    and record_issue is None
+                    and final_rows[-1]["kind"] == "end",
+                    "genuine_four_stream_footer",
+                )
+                if stream in ("phase", "context"):
+                    _need(
+                        final_rows[-1]["data"]["normal_return"] is True,
+                        "original_phase_context_normal_return",
+                    )
+                if stream == "phase":
+                    _need(
+                        final_rows[-1]["data"]["incomplete"] is False,
+                        "original_phase_complete_not_invented",
+                    )
         completion = data("observer-completion.json")
         owner = completion["publication"]
         _fields(owner, {"joined", "complete", "incomplete", "error", "owner_close"})
@@ -519,14 +788,25 @@ def evaluate_publication(artifacts, *, expected):
 
 
 def evaluate_fresh_source_case(artifacts, *, expected):
+    return _evaluate_fresh_source_profile(artifacts, expected=expected)
+
+
+def _evaluate_fresh_source_profile(
+    artifacts,
+    *,
+    expected,
+    version=2,
+    protocol_sha256=PROTOCOL_SHA256,
+    publication_verifier=evaluate_publication,
+):
     result = legacy._evaluate_fresh_profile(
         artifacts,
         expected=expected,
-        protocol_sha256=PROTOCOL_SHA256,
-        version=2,
+        protocol_sha256=protocol_sha256,
+        version=version,
         files=FILES,
     )
-    result["publication"] = evaluate_publication(artifacts, expected=expected)
+    result["publication"] = publication_verifier(artifacts, expected=expected)
     if result["publication"]["status"] != "qualified":
         result["status"] = "withheld"
         result["reasons"].append("publication_not_qualified")
@@ -545,7 +825,20 @@ def _typed_error(value):
 
 
 def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
-    """Verify an immutable envelope; original clock/fault composition stays external."""
+    return _evaluate_run_profile(cases, snapshots, disposition, expected=expected)
+
+
+def _evaluate_run_profile(
+    cases,
+    snapshots,
+    disposition,
+    *,
+    expected,
+    version=2,
+    protocol_sha256=PROTOCOL_SHA256,
+    leaf_evaluator=evaluate_fresh_source_case,
+):
+    """Explicit new-profile dispatch; stored metadata never chooses its verifier."""
     result = dict(
         schema_version="edge-fresh-run-analysis/v1",
         status="withheld",
@@ -574,7 +867,7 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
         result["reasons"].append("fixed_two_case_assignment")
         return result
     for case in CASES:
-        result["cases"][case] = evaluate_fresh_source_case(
+        result["cases"][case] = leaf_evaluator(
             cases[case], expected=expected["cases"][case]
         )
 
@@ -600,7 +893,7 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
         )
         _need(
             d["schema_version"] == "edge-fresh-run-disposition/v1"
-            and d["protocol_sha256"] == PROTOCOL_SHA256
+            and d["protocol_sha256"] == protocol_sha256
             and _hash(d["source_revision"], 40)
             and _hash(d["run_ref"], 32)
             and _uint(d["started_ns"], 2**64)
@@ -706,7 +999,7 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
                 snapshot["schema_version"] == "edge-fresh-snapshot/v1"
                 and snapshot["case_id"] == case
                 and snapshot["run_ref"] == d["run_ref"]
-                and snapshot["protocol_sha256"] == PROTOCOL_SHA256
+                and snapshot["protocol_sha256"] == protocol_sha256
                 and snapshot["source_revision"] == d["source_revision"]
                 and item["snapshot_manifest_sha256"] == legacy._sha(snapshot_raw)
                 and snapshot["files"] == pins,
@@ -730,7 +1023,8 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
             )
             original_evaluation = legacy._parse(a["evaluation.json"])
             _need(
-                original_evaluation["schema_version"] == "edge-fresh-source-analysis/v2"
+                original_evaluation["schema_version"]
+                == f"edge-fresh-source-analysis/v{version}"
                 and original_evaluation["case_id"] == case,
                 "sealed_evaluation_identity",
             )
