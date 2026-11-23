@@ -256,7 +256,9 @@ def _records(
     return rows, tail, issue
 
 
-def _actual_population(raw, receipts, case_id):
+def _actual_population(
+    raw, receipts, case_id, *, protocol_sha256=PROTOCOL_SHA256, version=1
+):
     """Validate every actual timestamp/span and all immutable EVE bytes."""
     _fields(
         receipts,
@@ -265,9 +267,9 @@ def _actual_population(raw, receipts, case_id):
         ),
     )
     _need(
-        receipts["schema_version"] == "edge-fresh-timestamp-receipts/v1"
+        receipts["schema_version"] == f"edge-fresh-timestamp-receipts/v{version}"
         and receipts["case_id"] == case_id
-        and receipts["protocol_sha256"] == PROTOCOL_SHA256
+        and receipts["protocol_sha256"] == protocol_sha256
         and receipts["input_recipe_sha256"] == RECIPE_SHA256
         and receipts["errors"] == [],
         "timestamp_receipt_context",
@@ -427,8 +429,15 @@ def _journal_facts(raw, source, policy, anchors, identity):
 
 
 def evaluate_fresh_source_case(artifacts, *, expected):
+    return _evaluate_fresh_profile(artifacts, expected=expected)
+
+
+def _evaluate_fresh_profile(
+    artifacts, *, expected, protocol_sha256=PROTOCOL_SHA256, version=1, files=FILES
+):
+    """Explicit trusted entry profiles; observed metadata never selects a profile."""
     r = dict(
-        schema_version="edge-fresh-source-analysis/v1",
+        schema_version=f"edge-fresh-source-analysis/v{version}",
         case_id=None,
         status="withheld",
         raw_sha256={},
@@ -447,14 +456,20 @@ def evaluate_fresh_source_case(artifacts, *, expected):
     if (
         type(artifacts) is not dict
         or type(expected) is not dict
-        or set(artifacts) != FILES
-        or set(expected) != FILES
+        or set(artifacts) != files
+        or set(expected) != files
     ):
-        r["reasons"].append("exact48_original_pin_envelope")
+        r["reasons"].append(f"exact{len(files)}_original_pin_envelope")
         return r
-    for name in sorted(FILES):
+    for name in sorted(files):
         b, pin = artifacts[name], expected[name]
-        digest = _sha(b) if type(b) is bytes and len(b) <= file_limit(name) else None
+        digest = (
+            _sha(b)
+            if type(b) is bytes
+            and len(b)
+            <= (1048576 if name == "observer-publication.raw" else file_limit(name))
+            else None
+        )
         r["raw_sha256"][name] = digest
         r["pins"][name] = type(pin) is str and digest == pin
         if name == "evaluation.json":
@@ -489,8 +504,9 @@ def evaluate_fresh_source_case(artifacts, *, expected):
     def population():
         protocol = data("protocol.json")
         _need(
-            _sha(raw("protocol.json")) == PROTOCOL_SHA256
-            and protocol["schema_version"] == "edge-fresh-source-observe-protocol/v1"
+            _sha(raw("protocol.json")) == protocol_sha256
+            and protocol["schema_version"]
+            == f"edge-fresh-source-observe-protocol/v{version}"
             and _sha(wire(protocol["input_recipe"])) == RECIPE_SHA256,
             "fixed_protocol_recipe",
         )
@@ -498,11 +514,17 @@ def evaluate_fresh_source_case(artifacts, *, expected):
         _fields(manifest, MANIFEST)
         receipts = data("fresh-timestamp-receipts.json")
         observed = raw("eve-after-writer.raw")
-        markers, refs = _actual_population(observed, receipts, case_id)
+        markers, refs = _actual_population(
+            observed,
+            receipts,
+            case_id,
+            protocol_sha256=protocol_sha256,
+            version=version,
+        )
         _need(
-            manifest["schema_version"] == "edge-fresh-input-manifest/v1"
+            manifest["schema_version"] == f"edge-fresh-input-manifest/v{version}"
             and manifest["case_id"] == case_id
-            and manifest["protocol_sha256"] == PROTOCOL_SHA256
+            and manifest["protocol_sha256"] == protocol_sha256
             and manifest["input_recipe_sha256"] == RECIPE_SHA256
             and manifest["sha256"] == _sha(observed)
             and type(manifest["bytes"]) is int
@@ -529,7 +551,7 @@ def evaluate_fresh_source_case(artifacts, *, expected):
     )
     specs = event_specs(case_id)
     profile = dict(
-        protocol_sha256=PROTOCOL_SHA256,
+        protocol_sha256=protocol_sha256,
         cases={name: ("normal_stop", None) for name in CASES},
         case_specs={
             name: dict(
@@ -539,7 +561,8 @@ def evaluate_fresh_source_case(artifacts, *, expected):
             for name in CASES
         },
         close_profile=dict(
-            load_cost=True, protocol_schema="edge-fresh-source-observe-protocol/v1"
+            load_cost=True,
+            protocol_schema=f"edge-fresh-source-observe-protocol/v{version}",
         ),
     )
     bound = finite._evaluate_finite_profile(
@@ -564,9 +587,9 @@ def evaluate_fresh_source_case(artifacts, *, expected):
         )
         _fields(ctrl, cost.CONTROL | {"input_recipe_sha256"})
         _need(
-            ctrl["schema_version"] == "edge-fresh-load-controller/v1"
+            ctrl["schema_version"] == f"edge-fresh-load-controller/v{version}"
             and ctrl["case_id"] == case_id
-            and ctrl["protocol_sha256"] == PROTOCOL_SHA256
+            and ctrl["protocol_sha256"] == protocol_sha256
             and ctrl["input_recipe_sha256"] == RECIPE_SHA256
             and ctrl["corpus_sha256"] == manifest["sha256"]
             and ctrl["session_ref"] == ic["session_ref"] == cc["session_ref"],
@@ -735,11 +758,22 @@ def evaluate_fresh_source_case(artifacts, *, expected):
         )
 
     r["intake"] = check("intake", intake)
-    _evaluate_callbacks(r, raw, data, check, by_ref, specs)
+    _evaluate_callbacks(
+        r,
+        raw,
+        data,
+        check,
+        by_ref,
+        specs,
+        protocol_sha256=protocol_sha256,
+        version=version,
+    )
     return r
 
 
-def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
+def _evaluate_callbacks(
+    r, raw, data, check, by_ref, specs, *, protocol_sha256, version
+):
     """Independent Source-position oracle, retaining validated returned prefixes."""
     case_id = r["case_id"]
 
@@ -751,9 +785,9 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
         )
         _fields(ctrl, CONTROL)
         _need(
-            ctrl["schema_version"] == "edge-fresh-source-controller/v1"
+            ctrl["schema_version"] == f"edge-fresh-source-controller/v{version}"
             and ctrl["case_id"] == case_id
-            and ctrl["protocol_sha256"] == PROTOCOL_SHA256
+            and ctrl["protocol_sha256"] == protocol_sha256
             and ctrl["input_recipe_sha256"] == RECIPE_SHA256
             and ctrl["session_ref"] == cc["session_ref"] == load["session_ref"],
             "fresh_provenance_context",
@@ -877,9 +911,9 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 observations_complete = False
         config = data("observer-config.json")
         _need(
-            config["schema_version"] == "edge-fresh-source-observer-config/v1"
+            config["schema_version"] == f"edge-fresh-source-observer-config/v{version}"
             and config["case_id"] == case_id
-            and config["protocol_sha256"] == PROTOCOL_SHA256
+            and config["protocol_sha256"] == protocol_sha256
             and config["input_recipe_sha256"] == RECIPE_SHA256
             and config["registration_sha256"] == cc["registration_sha256"]
             and config["trust_sha256"] == cc["trust_sha256"],
@@ -923,7 +957,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 rd,
                 set(
                     "observed_ns first_sample_seq clock_calls_checkpoint input_ready_position journal_checkpoint witness_boundary".split()
-                ),
+                )
+                | ({"publication_checkpoint"} if version == 2 else set()),
             )
             samples = [row for row in clock_rows if row["kind"] == "sample"]
             _need(
@@ -1040,7 +1075,7 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
     ) = context
     rows, tail, error = _records(
         raw("observer-input-calls.raw"),
-        schema="edge-fresh-input-record/v1",
+        schema=f"edge-fresh-input-record/v{version}",
         convention="full",
         maximum=256,
     )
@@ -1339,7 +1374,8 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 boundary,
                 set(
                     "observed_ns event_ref input_calls_checkpoint handler_id event_call_id source_position".split()
-                ),
+                )
+                | ({"publication_checkpoint"} if version == 2 else set()),
             )
             cb = r["callback_facts"][0]
             _need(
@@ -1364,7 +1400,7 @@ def _evaluate_callbacks(r, raw, data, check, by_ref, specs):
                 and b[size - 1 : size] == b"\n"
                 and _records(
                     b[:size],
-                    schema="edge-fresh-input-record/v1",
+                    schema=f"edge-fresh-input-record/v{version}",
                     convention="full",
                     maximum=256,
                 )[0][-1]["kind"]
