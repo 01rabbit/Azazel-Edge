@@ -296,8 +296,9 @@ def test_new_100ms_context_keeps_original_freshness_guard(age, missed, tmp_path)
         "composite_pin",
     ],
 )
+@pytest.mark.parametrize("version", [1, 2])
 def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
-    monkeypatch, fault
+    monkeypatch, fault, version
 ):
     run = "a" * 32
     path = Path("/opt/edge400-runtime/finite-load-configs") / (
@@ -317,21 +318,35 @@ def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
     paths.update(
         {key: str(helper.BASE / "observer" / (run + "-" + key)) for key in helper.EXTRA}
     )
+    if version == 2:
+        paths["publication"] = str(helper.BASE / "observer" / (run + "-publication"))
     metadata = dict(
         run_id=run,
         arm="fresh-controls",
         role="observer",
         input_recipe_sha256=helper.RECIPE_SHA256,
-        code_sha256=hashlib.sha256(top + b"\0" + adjacent).hexdigest(),
+        code_sha256=hashlib.sha256(
+            top
+            + b"\0"
+            + adjacent
+            + (
+                b"\0"
+                + Path(helper.__file__).with_name("fresh_publication.py").read_bytes()
+                if version == 2
+                else b""
+            )
+        ).hexdigest(),
         core_sha256="c" * 64,
         interpreter_sha256=hashlib.sha256(
             Path(sys.executable).resolve().read_bytes()
         ).hexdigest(),
     )
     config = dict(
-        schema_version="edge-fresh-source-observer-config/v1",
+        schema_version=f"edge-fresh-source-observer-config/v{version}",
         case_id="fresh-controls",
-        protocol_sha256=helper.PROTOCOL_SHA256,
+        protocol_sha256=helper.PROTOCOL_SHA256
+        if version == 1
+        else helper.V2_PROTOCOL_SHA256,
         input_recipe_sha256=helper.RECIPE_SHA256,
         registration_sha256=hashlib.sha256(b"registration").hexdigest(),
         trust_sha256=hashlib.sha256(b"trust").hexdigest(),
@@ -378,11 +393,13 @@ def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
     )
     monkeypatch.setattr(helper.input_live, "registration", lambda *args: registration)
     if fault == "valid":
-        got, trust = helper.load_config(path, hashlib.sha256(raw).hexdigest())
+        got, trust = helper.load_config(
+            path, hashlib.sha256(raw).hexdigest(), version=version
+        )
         assert got == config and trust is policy_object
     else:
         with pytest.raises(ValueError):
-            helper.load_config(path, hashlib.sha256(raw).hexdigest())
+            helper.load_config(path, hashlib.sha256(raw).hexdigest(), version=version)
 
 
 def test_fresh_context_restores_all_original_hooks_on_recording_failure(
@@ -465,8 +482,9 @@ def test_synthetic_cursor_failure_after_actual_callback_keeps_prefix_not_handler
     assert not any(r["kind"] == "input_return" for r in context)
 
 
+@pytest.mark.parametrize("version", [1, 2])
 def test_new_phase_and_clock_versions_are_not_relabelled_legacy_files(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, version
 ):
     identity = dict(pid=123, start_ticks=456, native_tid=123, boot_id="synthetic")
     monkeypatch.setattr(helper.phase, "_identity", lambda: identity.copy())
@@ -480,19 +498,25 @@ def test_new_phase_and_clock_versions_are_not_relabelled_legacy_files(
         core_sha256="c" * 64,
         interpreter_sha256="d" * 64,
     )
-    recorder = helper.FreshPhaseRecording(tmp_path / "phase", metadata=metadata)
+    recorder = helper.FreshPhaseRecording(
+        tmp_path / "phase", metadata=metadata, version=version
+    )
     calls = []
     assert recorder.call("observation_event", lambda: calls.append(1) or False) is False
     recorder.close(normal_return=True)
     assert calls == [1]
     assert all(
-        r["schema_version"] == helper.PHASE_SCHEMA for r in rows(tmp_path / "phase")
+        r["schema_version"] == f"edge-fresh-phase-timing-record/v{version}"
+        for r in rows(tmp_path / "phase")
     )
-    clock = helper.FreshClockContext(tmp_path / "context", metadata=metadata)
+    clock = helper.FreshClockContext(
+        tmp_path / "context", metadata=metadata, version=version
+    )
     clock.append("end", dict(anchor=helper._clock_anchor(), normal_return=True))
     clock.close()
     assert all(
-        r["schema_version"] == helper.CLOCK_SCHEMA for r in rows(tmp_path / "context")
+        r["schema_version"] == f"edge-fresh-clock-context/v{version}"
+        for r in rows(tmp_path / "context")
     )
     assert helper.phase.SCHEMA == "edge-phase-timing-record/v1"
     assert helper.clock.SCHEMA == "edge-load-clock-context/v1"

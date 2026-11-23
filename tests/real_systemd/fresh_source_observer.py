@@ -25,6 +25,7 @@ BASE = Path("/var/lib/edge400-systemd-lab/bundle")
 POLICY = (
     Path(__file__).resolve().parents[1] / "fixtures/signed_network_observer_policy.json"
 )
+V2_PROTOCOL_SHA256 = "107595f5c7d85d410d65517a7f50bdb6e3dd3b31bdb4cffcd3936be98b65ea59"
 PROTOCOL_SHA256 = "f12b5d79b277856251ee674994e5a3527cb07c7ae2c161ebf9241a73c3488bf2"
 EXTRA = (
     "phase",
@@ -45,7 +46,8 @@ def need(value, message):
         raise ValueError(message)
 
 
-def bootstrap(challenge):
+def bootstrap(challenge, *, version=1):
+    need(type(version) is int and version in (1, 2), "explicit helper version")
     need(
         type(challenge) is str and re.fullmatch("[0-9a-f]{32}", challenge), "challenge"
     )
@@ -76,7 +78,7 @@ def bootstrap(challenge):
     print(
         json.dumps(
             dict(
-                schema_version="edge-fresh-source-observer-bootstrap/v1",
+                schema_version=f"edge-fresh-source-observer-bootstrap/v{version}",
                 pid=os.getpid(),
                 challenge=challenge,
                 invocation_id=os.environ.get("INVOCATION_ID"),
@@ -93,7 +95,7 @@ def bootstrap(challenge):
     go = json.loads(raw)
     need(
         set(go) == {"schema_version", "challenge", "identity"}
-        and go["schema_version"] == "edge-fresh-source-observer-go/v1"
+        and go["schema_version"] == f"edge-fresh-source-observer-go/v{version}"
         and go["challenge"] == challenge,
         "Root GO differs",
     )
@@ -136,7 +138,10 @@ def bound_identity(identity):
 class FreshPhaseRecording(phase.PhaseRecording):
     """New initializer only; original phase recorder and old arm gates stay unchanged."""
 
-    def __init__(self, path, *, metadata):
+    def __init__(self, path, *, metadata, version=1):
+        self.schema = (
+            PHASE_SCHEMA if version == 1 else "edge-fresh-phase-timing-record/v2"
+        )
         need(
             set(metadata)
             == {
@@ -203,7 +208,7 @@ class FreshPhaseRecording(phase.PhaseRecording):
                 data = dict(data, previous_write_cost=self.previous_write_cost)
                 raw = phase.canonical(
                     dict(
-                        schema_version=PHASE_SCHEMA,
+                        schema_version=self.schema,
                         seq=self.count + 1,
                         prev=self.previous,
                         kind=kind,
@@ -228,7 +233,8 @@ class FreshPhaseRecording(phase.PhaseRecording):
                 self.incomplete = True
 
 
-def load_config(path, digest):
+def load_config(path, digest, *, version=1):
+    need(type(version) is int and version in (1, 2), "explicit helper version")
     path = Path(path)
     need(
         path.parent == Path("/opt/edge400-runtime/finite-load-configs")
@@ -259,20 +265,22 @@ def load_config(path, digest):
         "config fields",
     )
     need(
-        config["schema_version"] == "edge-fresh-source-observer-config/v1"
+        config["schema_version"] == f"edge-fresh-source-observer-config/v{version}"
         and config["case_id"] in ("fresh-controls", "fresh-interrupted")
-        and config["protocol_sha256"] == PROTOCOL_SHA256,
+        and config["protocol_sha256"]
+        == (PROTOCOL_SHA256 if version == 1 else V2_PROTOCOL_SHA256),
         "explicit load profile required",
     )
     paths = config["paths"]
-    need(set(paths) == {"registration", "trust", "policy", *EXTRA}, "config paths")
+    extras = EXTRA if version == 1 else (*EXTRA, "publication")
+    need(set(paths) == {"registration", "trust", "policy", *extras}, "config paths")
     need(
         paths["registration"] == str(BASE / "origin.json")
         and paths["trust"] == str(BASE / "trust.json")
         and paths["policy"] == str(POLICY),
         "fixed public paths",
     )
-    for key in EXTRA:
+    for key in extras:
         need(
             Path(paths[key]).parent == BASE / "observer",
             "existing writable directory only",
@@ -320,8 +328,13 @@ def load_config(path, digest):
     # Immutable Root-staged source is covered directly by existing tests/** read access.
     # A trusted-path walk would require denied ancestor-directory reads.
     adjacent = Path(__file__).with_name("fresh_source_recording.py").read_bytes()
+    composite = top + b"\0" + adjacent
+    if version == 2:
+        composite += (
+            b"\0" + Path(__file__).with_name("fresh_publication.py").read_bytes()
+        )
     need(
-        accounting.sha256(top + b"\0" + adjacent) == config["metadata"]["code_sha256"],
+        accounting.sha256(composite) == config["metadata"]["code_sha256"],
         "composite helper pin differs",
     )
     need(
@@ -365,12 +378,16 @@ def audit(create=False):
 
 
 class FreshClockContext(clock.ClockContext):
+    def __init__(self, path, *, metadata, version=1):
+        self.schema = CLOCK_SCHEMA if version == 1 else "edge-fresh-clock-context/v2"
+        super().__init__(path, metadata=metadata)
+
     def append(self, kind, data):
         if self.closed or self.seq >= clock.MAX_CONTEXT_ROWS:
             raise ValueError("clock context closed or full")
         raw = phase.canonical(
             dict(
-                schema_version=CLOCK_SCHEMA,
+                schema_version=self.schema,
                 seq=self.seq + 1,
                 prev=self.previous,
                 kind=kind,
@@ -391,11 +408,23 @@ class FreshClockContext(clock.ClockContext):
 
 
 @contextmanager
-def record_clock(calls_path, context_path, *, metadata, policy, policy_source_ref):
-    context = FreshClockContext(context_path, metadata=metadata)
+def record_clock(
+    calls_path,
+    context_path,
+    *,
+    metadata,
+    policy,
+    policy_source_ref,
+    publisher=None,
+    version=1,
+):
+    context = FreshClockContext(context_path, metadata=metadata, version=version)
     try:
         with original_recording.record_collector(
-            calls_path, policy=policy, policy_source_ref=policy_source_ref
+            calls_path,
+            policy=policy,
+            policy_source_ref=policy_source_ref,
+            sink_factory=None if publisher is None else publisher.call_sink,
         ):
             yield
         context.append("end", dict(anchor=_clock_anchor(), normal_return=True))
@@ -403,7 +432,8 @@ def record_clock(calls_path, context_path, *, metadata, policy, policy_source_re
         context.close()
 
 
-def run(config, trust):
+def run(config, trust, *, version=1):
+    need(type(version) is int and version in (1, 2), "explicit helper version")
     paths, p = config["paths"], trust.data
     options = {
         "--policy": paths["policy"],
@@ -421,7 +451,25 @@ def run(config, trust):
         normal_stop=dict(profile="phase_and_clock", receipt_path=paths["completion"]),
         input_calls_path=paths["input_calls"],
     )
-    recorder = FreshPhaseRecording(paths["phase"], metadata=config["metadata"])
+    publisher = None
+    if version == 2:
+        from fresh_publication import Publisher
+
+        publisher = Publisher(
+            {k: paths[k] for k in ("calls", "input_calls")},
+            paths["publication"],
+            metadata=config["metadata"],
+            identity=phase._identity(),
+        )
+        compatible.update(publication_path=paths["publication"], version=2)
+    try:
+        recorder = FreshPhaseRecording(
+            paths["phase"], metadata=config["metadata"], version=version
+        )
+    except BaseException:
+        if publisher is not None:
+            publisher.close(normal_return=False)
+        raise
     complete = False
     try:
         with normal.capture_control(compatible, options) as captured:
@@ -432,6 +480,8 @@ def run(config, trust):
                     metadata=config["metadata"],
                     policy=json.loads(POLICY.read_bytes()),
                     policy_source_ref=str(POLICY),
+                    publisher=publisher,
+                    version=version,
                 ):
                     binding = dict(
                         case_id=config["case_id"],
@@ -445,6 +495,8 @@ def run(config, trust):
                         metadata=config["metadata"],
                         identity=phase._identity(),
                         binding=binding,
+                        publisher=publisher,
+                        version=version,
                     ) as inputs:
                         telemetry.run_live(
                             input_path=Path(p["source_path"]),
@@ -473,12 +525,24 @@ def run(config, trust):
 
             complete = True
         recorder.close(normal_return=True)
-        publish_completion(captured, phase_recorder=recorder, input_recorder=inputs)
+        publication = None if publisher is None else publisher.close(normal_return=True)
+        if publication is not None:
+            need(publication["complete"], "measurement publication close incomplete")
+        publish_completion(
+            captured,
+            phase_recorder=recorder,
+            input_recorder=inputs,
+            publication=publication,
+        )
     finally:
         recorder.close(normal_return=complete)
+        if publisher is not None and publisher.result is None:
+            publisher.close(normal_return=False)
 
 
-def publish_completion(captured, *, phase_recorder=None, input_recorder=None):
+def publish_completion(
+    captured, *, phase_recorder=None, input_recorder=None, publication=None
+):
     """Publish only after handler restoration and every required sidecar close."""
     need(
         captured.restored and not captured.published,
@@ -538,7 +602,7 @@ def publish_completion(captured, *, phase_recorder=None, input_recorder=None):
         "input end absent",
     )
     receipt = dict(
-        schema_version="edge-fresh-observer-completion/v1",
+        schema_version=f"edge-fresh-observer-completion/v{config.get('version', 1)}",
         metadata=dict(config["metadata"], role="observer"),
         identity=identity,
         policy_context=captured.policy_context,
@@ -547,6 +611,15 @@ def publish_completion(captured, *, phase_recorder=None, input_recorder=None):
         sidecars=sidecars,
         completion_anchor=_clock_anchor(),
     )
+    if config.get("version") == 2:
+        need(
+            publication is not None and publication["complete"],
+            "publication barrier absent",
+        )
+        _, receipt["sidecars"]["publication"] = normal._sidecar(
+            config["publication_path"], 1048576
+        )
+        receipt["publication"] = publication
     raw = phase.canonical(receipt)
     need(len(raw) <= normal.MAX_RECEIPT_BYTES, "completion receipt byte bound")
     fd = os.open(
@@ -567,12 +640,12 @@ def publish_completion(captured, *, phase_recorder=None, input_recorder=None):
     return receipt
 
 
-def main(challenge, config_path=None, config_sha256=None, create=False):
-    identity = bootstrap(challenge)
+def main(challenge, config_path=None, config_sha256=None, create=False, *, version=1):
+    identity = bootstrap(challenge, version=version)
     with bound_identity(identity):
         if config_path is None:
             print(json.dumps(dict(status=audit(create))), flush=True)
         else:
-            config, trust = load_config(config_path, config_sha256)
-            run(config, trust)
+            config, trust = load_config(config_path, config_sha256, version=version)
+            run(config, trust, version=version)
             print(json.dumps(dict(completed=True, anchor=_clock_anchor())), flush=True)

@@ -20,11 +20,17 @@ def canonical(value):
 
 
 class InputRecording:
-    def __init__(self, path, *, metadata, identity, binding):
-        self.fd = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o600,
+    def __init__(self, path, *, metadata, identity, binding, publisher=None, version=1):
+        self.publisher = publisher
+        self.schema = SCHEMA if version == 1 else "edge-fresh-input-record/v2"
+        self.fd = (
+            None
+            if publisher is not None
+            else os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+            )
         )
         self.count = self.size = self.inputs = self.completed = self.callbacks = 0
         self.previous = "0" * 64
@@ -49,7 +55,7 @@ class InputRecording:
         try:
             raw = canonical(
                 dict(
-                    schema_version=SCHEMA,
+                    schema_version=self.schema,
                     seq=self.count + 1,
                     prev=self.previous,
                     kind=kind,
@@ -70,6 +76,15 @@ class InputRecording:
             return
         try:
             for raw in self.pending:
+                if self.publisher is not None:
+                    import json
+
+                    if not self.publisher.submit(
+                        "input_calls", raw, json.loads(raw)["seq"]
+                    ):
+                        self.incomplete = True
+                        break
+                    continue
                 view = memoryview(raw)
                 while view:
                     count = os.write(self.fd, view)
@@ -163,12 +178,14 @@ class InputRecording:
                     ),
                 )
                 self._flush()
-                os.fsync(self.fd)
+                if self.publisher is None:
+                    os.fsync(self.fd)
         except BaseException:
             self.incomplete = True
         finally:
             try:
-                os.close(self.fd)
+                if self.fd is not None:
+                    os.close(self.fd)
             except BaseException:
                 self.incomplete = True
             self.closed = True
@@ -176,9 +193,16 @@ class InputRecording:
 
 
 @contextmanager
-def record_inputs(path, *, metadata, identity, binding):
+def record_inputs(path, *, metadata, identity, binding, publisher=None, version=1):
     """Inside original record_collector: preserve every original method and exception."""
-    sink = InputRecording(path, metadata=metadata, identity=identity, binding=binding)
+    sink = InputRecording(
+        path,
+        metadata=metadata,
+        identity=identity,
+        binding=binding,
+        publisher=publisher,
+        version=version,
+    )
     original_input = input_resume.observe_input
     recorded_collector = input_resume.OutcomeTelemetryCollector
     original_append = original_recording.CallRecording.append
@@ -201,7 +225,7 @@ def record_inputs(path, *, metadata, identity, binding):
             return result
 
     def append(recording, kind, data):
-        result = original_append(recording, kind, data)
+        result = original_append(recording, kind, data) if publisher is None else None
         if kind == "event" and sink.active is not None:
             try:
                 if len(sink.active["callbacks"]) >= 1:
@@ -229,7 +253,10 @@ def record_inputs(path, *, metadata, identity, binding):
 
     input_resume.OutcomeTelemetryCollector = Collector
     input_resume.observe_input = observe
-    original_recording.CallRecording.append = append
+    if publisher is None:
+        original_recording.CallRecording.append = append
+    else:
+        publisher.on_call = append
     complete = False
     try:
         yield sink
@@ -237,5 +264,8 @@ def record_inputs(path, *, metadata, identity, binding):
     finally:
         input_resume.observe_input = original_input
         input_resume.OutcomeTelemetryCollector = recorded_collector
-        original_recording.CallRecording.append = original_append
+        if publisher is None:
+            original_recording.CallRecording.append = original_append
+        else:
+            publisher.on_call = None
         sink.close(normal_return=complete)

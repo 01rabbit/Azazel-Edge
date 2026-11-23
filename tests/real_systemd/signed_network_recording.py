@@ -102,7 +102,7 @@ class CallRecording:
 
 
 @contextmanager
-def record_collector(path, *, policy, policy_source_ref):
+def record_collector(path, *, policy, policy_source_ref, sink_factory=None):
     """Only this single-threaded test observer replaces the constructor binding.
 
     Every super call/return is unchanged; no additional sample/finalize is made.
@@ -116,7 +116,7 @@ def record_collector(path, *, policy, policy_source_ref):
     expected_ref = OutcomeTelemetryPolicy.from_mapping(
         policy, source_ref=policy_source_ref
     ).policy_ref
-    sink = CallRecording(
+    sink = (CallRecording if sink_factory is None else sink_factory)(
         path,
         metadata=dict(
             policy_sha256=manifest_digest(policy),
