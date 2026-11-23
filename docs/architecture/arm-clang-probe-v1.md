@@ -30,3 +30,20 @@ as public CI evidence, independently of absent acquisition cases. No environment
 secrets or unrestricted environment dump. A missing compiler/header ordinarily
 fails nonzero; the diagnostic distinguishes tool resolution/startup/macro stages,
 without claiming an existing unobserved root cause.
+
+## Exclusive public-root ownership correction
+
+Prospective correction after actual v2 CI45164558889: the toolchain probe created
+`advisory-exec-public` before the existing public fixture exclusively created the
+same directory. The resulting FileExistsError is a fixture ordering bug, not a
+compiler failure. The `public_export` fixture remains the single exclusive owner
+of public-root creation. `approved_object` explicitly depends on that fixture;
+`approved_clang` receives its already-created root and only exclusively creates
+`toolchain-probe.json`. With no configured public export, the same fixture owns
+an exclusive temporary diagnostic root. No exist_ok acceptance, deletion, or
+reuse of an unrelated existing public directory is allowed. Preserve probe bytes
+through case-index publication and fixture teardown. A composed synthetic test
+must drive actual fixture creation, probe publication, and public-index teardown;
+BTF/compiler execution and the unprivileged readback subprocess may be mocked.
+Compiler selections, inputs, deadlines, native assertions and nine actual cases
+remain unchanged.
