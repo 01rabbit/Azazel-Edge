@@ -73,7 +73,13 @@ def test_original_returns_once_while_measurement_fsync_blocked_and_actual_ack_is
         assert p.thread.is_alive()
     release.set()
     out = p.close(normal_return=True)
-    assert out == dict(joined=True, complete=True, incomplete=False, error=None)
+    assert {k: out[k] for k in ("joined", "complete", "incomplete", "error")} == dict(
+        joined=True, complete=True, incomplete=False, error=None
+    )
+    assert (
+        out["owner_close"]["end_ns"] - out["owner_close"]["start_ns"]
+        <= pub.LIMITS["close_ns"]
+    )
     commits = [
         r["data"] for r in rows(tmp_path / "publication") if r["kind"] == "commit"
     ]
@@ -285,3 +291,62 @@ def test_join_timeout_never_closes_worker_fd_or_invents_success(tmp_path, monkey
     assert not p.thread.is_alive()
     end = rows(tmp_path / "publication")[-1]["data"]
     assert not end["complete"] and end["incomplete"]
+
+
+def test_late_successful_join_observation_is_incomplete(tmp_path, monkeypatch):
+    p, paths = setup(tmp_path)
+    original = p.thread.join
+
+    def join(timeout):
+        original(timeout)
+        assert not p.thread.is_alive()
+        # A scheduling gap after worker exit still belongs to the deadline.
+        p.close_start["start_ns"] -= pub.LIMITS["close_ns"] + 1
+
+    monkeypatch.setattr(p.thread, "join", join)
+    out = p.close(normal_return=True)
+    assert out["joined"] and not out["complete"] and out["incomplete"]
+    assert out["error"]["type"] == "TimeoutError"
+    assert (
+        out["owner_close"]["end_ns"] - out["owner_close"]["start_ns"]
+        > pub.LIMITS["close_ns"]
+    )
+    # A successful worker footer is retained, not rewritten after late observation.
+    assert rows(tmp_path / "publication")[-1]["data"]["complete"] is True
+
+
+def test_join_failure_cleanup_never_masks_original_exception(tmp_path, monkeypatch):
+    p, paths = setup(tmp_path)
+    error = RuntimeError("original handler exception")
+
+    def broken(timeout):
+        raise OSError("join diagnostic failure")
+
+    monkeypatch.setattr(p.thread, "join", broken)
+    with pytest.raises(RuntimeError) as caught:
+        try:
+            raise error
+        finally:
+            out = p.close(normal_return=False)
+    assert caught.value is error
+    assert not out["complete"] and out["incomplete"] and out["owner_close"] is None
+    assert out["error"]["type"] == "OSError"
+    # Test teardown only; runtime does not retry or close underneath its worker.
+    threading.Thread.join(p.thread, 2)
+
+
+def test_worker_and_owner_close_cpu_endpoints_are_same_thread(tmp_path, monkeypatch):
+    p, paths = setup(tmp_path)
+    assert p.submit("calls", b"{}\n", 0)
+    out = p.close(normal_return=True)
+    worker = rows(tmp_path / "publication")[-1]["data"]["close"]
+    assert out["complete"]
+    for span in (worker, out["owner_close"]):
+        assert span["thread_cpu_start_ns"] <= span["thread_cpu_end_ns"]
+        assert span["process_cpu_start_ns"] <= span["process_cpu_end_ns"]
+    assert (
+        out["owner_close"]["start_ns"]
+        <= worker["start_ns"]
+        <= worker["end_ns"]
+        <= out["owner_close"]["end_ns"]
+    )

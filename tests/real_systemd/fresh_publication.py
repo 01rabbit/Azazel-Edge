@@ -151,28 +151,55 @@ class Publisher:
         return CallSink(self, metadata)
 
     def close(self, *, normal_return):
-        with self.lock:
-            if self.close_start is None:
-                self.close_start = clocks()
-                self.normal_return = normal_return
+        if self.result is not None:
+            return dict(self.result)
+        joined = False
+        owner_close = None
+        try:
+            with self.lock:
+                if not self.closing:
+                    self.close_start = clocks()
+                    self.normal_return = normal_return
+                    self.accepting = False
+                    self.closing = True
+            self.wake.set()
+            remaining = max(
+                0,
+                (
+                    self.close_start["start_ns"]
+                    + LIMITS["close_ns"]
+                    - time.monotonic_ns()
+                )
+                / 1e9,
+            )
+            self.thread.join(remaining)
+            joined = not self.thread.is_alive()
+            # Main-thread CPU endpoints must stay on the same main thread.
+            owner_close = finish(self.close_start)
+            if (
+                not joined
+                or owner_close["end_ns"] - owner_close["start_ns"] > LIMITS["close_ns"]
+            ):
+                self.fail(
+                    TimeoutError("measurement worker close timeout or late observation")
+                )
+        except BaseException as error:
+            self.fail(error)
+            # Cleanup is measurement only; never replace an original exception.
+            with self.lock:
                 self.accepting = False
                 self.closing = True
-        self.wake.set()
-        remaining = max(
-            0,
-            (self.close_start["start_ns"] + LIMITS["close_ns"] - time.monotonic_ns())
-            / 1e9,
-        )
-        self.thread.join(remaining)
-        joined = not self.thread.is_alive()
-        if not joined:
-            self.fail(TimeoutError("measurement worker close timeout"))
+            self.wake.set()
         self.closed = joined
         self.result = dict(
             joined=joined,
-            complete=joined and not self.incomplete and self.normal_return,
+            complete=joined
+            and owner_close is not None
+            and not self.incomplete
+            and self.normal_return,
             incomplete=self.incomplete or not joined,
             error=self.error,
+            owner_close=owner_close,
         )
         return dict(self.result)
 
@@ -185,6 +212,7 @@ class Publisher:
         written = {s: watermark() for s in self.paths}
         fsynced = {s: watermark() for s in self.paths}
         hashes = {s: hashlib.sha256() for s in self.paths}
+        worker_close_start = None
 
         def publish(kind, data):
             nonlocal seq, previous, size
@@ -226,6 +254,8 @@ class Publisher:
                     self.queue.clear()
                     self.pending_bytes = 0
                     closing = self.closing
+                if closing and worker_close_start is None:
+                    worker_close_start = clocks()
                 for stream in self.paths:
                     items = [item for item in batch if item[0] == stream]
                     if not items:
@@ -297,7 +327,7 @@ class Publisher:
                     incomplete=self.incomplete,
                     error=self.error,
                     streams=streams,
-                    close=finish(self.close_start),
+                    close=finish(worker_close_start),
                 )
             publish("end", data)
         except BaseException as error:
