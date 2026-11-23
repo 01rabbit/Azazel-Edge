@@ -39,8 +39,8 @@ same directory. The resulting FileExistsError is a fixture ordering bug, not a
 compiler failure. The `public_export` fixture remains the single exclusive owner
 of public-root creation. `approved_object` explicitly depends on that fixture;
 `approved_clang` receives its already-created root and only exclusively creates
-`toolchain-probe.json`. With no configured public export, the same fixture owns
-an exclusive temporary diagnostic root. No exist_ok acceptance, deletion, or
+`toolchain-probe.json`. With no configured public export, approved_object uses its already exclusive
+temporary compiler directory for the diagnostic. No exist_ok acceptance, deletion, or
 reuse of an unrelated existing public directory is allowed. Preserve probe bytes
 through case-index publication and fixture teardown. A composed synthetic test
 must drive actual fixture creation, probe publication, and public-index teardown;

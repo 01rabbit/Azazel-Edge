@@ -202,7 +202,7 @@ def _compiler_command(argv, *, input_bytes=None):
     return receipt, stdout
 
 
-def approved_clang():
+def approved_clang(directory):
     """Pin the installed native compiler; preserve setup failures before acquisition."""
     record = dict(
         schema_version="edge-arm-clang-probe/v1",
@@ -262,12 +262,6 @@ def approved_clang():
         raise
     finally:
         try:
-            directory = Path(
-                os.environ.get(
-                    "EDGE_ADVISORY_EXEC_PUBLIC_DIR", str(ROOT / "advisory-exec-public")
-                )
-            )
-            directory.mkdir(mode=0o755, parents=True, exist_ok=True)
             with (directory / "toolchain-probe.json").open("xb") as output:
                 output.write(_json(record) + b"\n")
                 output.flush()
@@ -283,7 +277,7 @@ def approved_clang():
 
 
 @pytest.fixture(scope="module")
-def approved_object():
+def approved_object(public_export):
     assert platform.machine() == "aarch64", (
         "other architectures unsupported, not a skipped acquisition"
     )
@@ -309,7 +303,7 @@ def approved_object():
                 check=True,
                 timeout=30,
             )
-        compiler = approved_clang()
+        compiler = approved_clang(public_export[0] or directory)
         source = ROOT / "native/advisory_exec_observer.bpf.c"
         subprocess.run(
             [

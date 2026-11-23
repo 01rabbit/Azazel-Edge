@@ -25,6 +25,7 @@ def compiler_fixture(tmp_path, monkeypatch, *, machine=183, timeout=False):
     image.write_bytes(raw)
     output = tmp_path / "public"
     monkeypatch.setenv("EDGE_ADVISORY_EXEC_PUBLIC_DIR", str(output))
+    output.mkdir(mode=0o755)
     monkeypatch.setattr(probe.shutil, "which", lambda name: "/path/shadow/clang")
     original_resolve = Path.resolve
 
@@ -69,7 +70,7 @@ def test_selected_absolute_native_compiler_and_exact_original_macro_probe(
     tmp_path, monkeypatch
 ):
     image, output, calls = compiler_fixture(tmp_path, monkeypatch)
-    assert probe.approved_clang() == "/usr/bin/clang"
+    assert probe.approved_clang(output) == "/usr/bin/clang"
     record = json.loads((output / "toolchain-probe.json").read_bytes())
     assert record["path_lookup"] == "/path/shadow/clang" and record[
         "resolved_path"
@@ -92,7 +93,7 @@ def test_same_ten_second_timeout_preserves_partial_original_stdout_stderr(
 ):
     image, output, calls = compiler_fixture(tmp_path, monkeypatch, timeout=True)
     with pytest.raises(AssertionError, match="preprocessing failed"):
-        probe.approved_clang()
+        probe.approved_clang(output)
     record = json.loads((output / "toolchain-probe.json").read_bytes())
     assert (
         record["macro_probe"]["timed_out"] is True
@@ -118,7 +119,7 @@ def test_wrong_native_elf_fails_before_any_compiler_command_but_keeps_provenance
 ):
     image, output, calls = compiler_fixture(tmp_path, monkeypatch, machine=62)
     with pytest.raises(AssertionError, match="AArch64"):
-        probe.approved_clang()
+        probe.approved_clang(output)
     record = json.loads((output / "toolchain-probe.json").read_bytes())
     assert (
         record["elf_machine"] == 62
@@ -126,3 +127,21 @@ def test_wrong_native_elf_fails_before_any_compiler_command_but_keeps_provenance
         and record["macro_probe"] is None
     )
     assert calls == [] and record["error"]["type"] == "AssertionError"
+
+
+def test_public_fixture_sole_root_owner_then_probe_and_index(tmp_path, monkeypatch):
+    image, output, calls = compiler_fixture(tmp_path, monkeypatch)
+    output.rmdir()  # No fixture-owned files exist yet.
+    fixture = probe.public_export.__wrapped__()
+    root, inventory = next(fixture)
+    assert root == output and inventory
+    assert probe.approved_clang(root) == probe.CLANG
+    original = (root / "toolchain-probe.json").read_bytes()
+    assert len(calls) == 2
+    with pytest.raises(FileExistsError):
+        next(probe.public_export.__wrapped__())
+    with pytest.raises(StopIteration):
+        next(fixture)
+    assert (root / "toolchain-probe.json").read_bytes() == original
+    assert json.loads((root / "case-index.json").read_bytes()) == inventory
+    assert calls[-1][1]["timeout"] == 12
