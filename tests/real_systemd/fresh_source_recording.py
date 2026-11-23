@@ -22,7 +22,7 @@ def canonical(value):
 class InputRecording:
     def __init__(self, path, *, metadata, identity, binding, publisher=None, version=1):
         self.publisher = publisher
-        self.schema = SCHEMA if version == 1 else "edge-fresh-input-record/v2"
+        self.schema = f"edge-fresh-input-record/v{version}"
         self.fd = (
             None
             if publisher is not None

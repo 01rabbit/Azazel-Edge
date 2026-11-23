@@ -296,7 +296,7 @@ def test_new_100ms_context_keeps_original_freshness_guard(age, missed, tmp_path)
         "composite_pin",
     ],
 )
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
     monkeypatch, fault, version
 ):
@@ -318,7 +318,7 @@ def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
     paths.update(
         {key: str(helper.BASE / "observer" / (run + "-" + key)) for key in helper.EXTRA}
     )
-    if version == 2:
+    if version >= 2:
         paths["publication"] = str(helper.BASE / "observer" / (run + "-publication"))
     metadata = dict(
         run_id=run,
@@ -332,7 +332,7 @@ def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
             + (
                 b"\0"
                 + Path(helper.__file__).with_name("fresh_publication.py").read_bytes()
-                if version == 2
+                if version >= 2
                 else b""
             )
         ).hexdigest(),
@@ -344,9 +344,11 @@ def test_config_is_fresh_version_pinned_and_uses_only_existing_paths(
     config = dict(
         schema_version=f"edge-fresh-source-observer-config/v{version}",
         case_id="fresh-controls",
-        protocol_sha256=helper.PROTOCOL_SHA256
-        if version == 1
-        else helper.V2_PROTOCOL_SHA256,
+        protocol_sha256={
+            1: helper.PROTOCOL_SHA256,
+            2: helper.V2_PROTOCOL_SHA256,
+            3: helper.V3_PROTOCOL_SHA256,
+        }[version],
         input_recipe_sha256=helper.RECIPE_SHA256,
         registration_sha256=hashlib.sha256(b"registration").hexdigest(),
         trust_sha256=hashlib.sha256(b"trust").hexdigest(),

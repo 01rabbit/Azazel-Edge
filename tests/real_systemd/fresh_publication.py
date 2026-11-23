@@ -22,6 +22,14 @@ LIMITS = dict(
     close_ns=5_000_000_000,
 )
 
+V3_LIMITS = dict(
+    LIMITS,
+    queue_rows=5254,
+    queue_bytes=12599296,
+    stream_rows=dict(calls=900, input_calls=256, phase=4096, context=2),
+    stream_bytes=dict(calls=4194304, input_calls=4194304, phase=4194304, context=16384),
+)
+
 
 def canonical(value):
     return _json(value) + b"\n"
@@ -59,10 +67,14 @@ def write_all(fd, raw):
 
 
 class Publisher:
-    def __init__(self, paths, publication_path, *, metadata, identity):
+    def __init__(self, paths, publication_path, *, metadata, identity, version=2):
+        if type(version) is not int or version not in (2, 3):
+            raise ValueError("explicit publisher profile required")
+        self.limits = LIMITS if version == 2 else V3_LIMITS
+        self.schema = f"edge-observer-publication/v{version - 1}"
         if (
-            set(paths) != {"calls", "input_calls"}
-            or len(set(map(str, paths.values()))) != 2
+            set(paths) != set(self.limits["stream_rows"])
+            or len(set(map(str, paths.values()))) != len(self.limits["stream_rows"])
             or str(publication_path) in set(map(str, paths.values()))
         ):
             raise ValueError("exact distinct measurement paths required")
@@ -123,10 +135,10 @@ class Publisher:
                 )
                 if (
                     seq != expected
-                    or old["rows"] >= LIMITS["stream_rows"][stream]
-                    or old["bytes"] + len(raw) > LIMITS["stream_bytes"][stream]
-                    or len(self.queue) >= LIMITS["queue_rows"]
-                    or self.pending_bytes + len(raw) > LIMITS["queue_bytes"]
+                    or old["rows"] >= self.limits["stream_rows"][stream]
+                    or old["bytes"] + len(raw) > self.limits["stream_bytes"][stream]
+                    or len(self.queue) >= self.limits["queue_rows"]
+                    or self.pending_bytes + len(raw) > self.limits["queue_bytes"]
                 ):
                     raise ValueError("measurement queue/stream capacity or sequence")
                 self.hashes[stream].update(raw)
@@ -138,7 +150,7 @@ class Publisher:
                 )
                 self.queue.append((stream, raw, seq))
                 self.pending_bytes += len(raw)
-                if self.pending_bytes >= LIMITS["batch_bytes"]:
+                if self.pending_bytes >= self.limits["batch_bytes"]:
                     self.wake.set()
             return True
         except BaseException as error:
@@ -167,7 +179,7 @@ class Publisher:
                 0,
                 (
                     self.close_start["start_ns"]
-                    + LIMITS["close_ns"]
+                    + self.limits["close_ns"]
                     - time.monotonic_ns()
                 )
                 / 1e9,
@@ -178,7 +190,8 @@ class Publisher:
             owner_close = finish(self.close_start)
             if (
                 not joined
-                or owner_close["end_ns"] - owner_close["start_ns"] > LIMITS["close_ns"]
+                or owner_close["end_ns"] - owner_close["start_ns"]
+                > self.limits["close_ns"]
             ):
                 self.fail(
                     TimeoutError("measurement worker close timeout or late observation")
@@ -218,7 +231,7 @@ class Publisher:
             nonlocal seq, previous, size
             row = canonical(
                 dict(
-                    schema_version="edge-observer-publication/v1",
+                    schema_version=self.schema,
                     seq=seq + 1,
                     prev=previous,
                     kind=kind,
@@ -226,8 +239,8 @@ class Publisher:
                 )
             )
             if (
-                seq >= LIMITS["publication_rows"]
-                or size + len(row) > LIMITS["publication_bytes"]
+                seq >= self.limits["publication_rows"]
+                or size + len(row) > self.limits["publication_bytes"]
             ):
                 raise ValueError("publication capacity")
             write_all(publication, row)
@@ -243,11 +256,13 @@ class Publisher:
             publication = os.open(self.publication_path, flags, 0o600)
             publish(
                 "header",
-                dict(metadata=self.metadata, identity=self.identity, limits=LIMITS),
+                dict(
+                    metadata=self.metadata, identity=self.identity, limits=self.limits
+                ),
             )
             self.ready.set()
             while True:
-                self.wake.wait(LIMITS["batch_ns"] / 1e9)
+                self.wake.wait(self.limits["batch_ns"] / 1e9)
                 self.wake.clear()
                 with self.lock:
                     batch = list(self.queue)

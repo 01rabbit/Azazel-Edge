@@ -350,3 +350,191 @@ def test_worker_and_owner_close_cpu_endpoints_are_same_thread(tmp_path, monkeypa
         <= worker["end_ns"]
         <= out["owner_close"]["end_ns"]
     )
+
+
+@pytest.mark.parametrize("stream", ["phase", "context"])
+def test_v3_measurement_io_is_worker_only_and_original_calls_return_while_blocked(
+    tmp_path, monkeypatch, stream
+):
+    import fresh_source_observer as helper
+
+    main = threading.get_native_id()
+    identity = dict(pid=1, start_ticks=2, native_tid=main, boot_id="synthetic")
+    monkeypatch.setattr(helper.phase, "_identity", lambda: identity.copy())
+    monkeypatch.setattr(helper.clock, "_identity", lambda: identity.copy())
+    paths = {s: tmp_path / s for s in ("calls", "input_calls", "phase", "context")}
+    original_open = pub.os.open
+    original_write = pub.os.write
+    original_sync = pub.os.fsync
+    entered = threading.Event()
+    release = threading.Event()
+    operations = []
+    owned = {}
+
+    def opened(path, *args, **kwargs):
+        fd = original_open(path, *args, **kwargs)
+        if str(path).startswith(str(tmp_path)):
+            owned[fd] = str(path)
+            operations.append(("open", threading.get_native_id()))
+        return fd
+
+    def write(fd, raw):
+        if fd in owned:
+            operations.append(("write", threading.get_native_id()))
+        return original_write(fd, raw)
+
+    def sync(fd):
+        if fd in owned:
+            operations.append(("fsync", threading.get_native_id()))
+            if owned[fd] == str(paths[stream]):
+                entered.set()
+                assert release.wait(2)
+        return original_sync(fd)
+
+    monkeypatch.setattr(pub.os, "open", opened)
+    monkeypatch.setattr(pub.os, "write", write)
+    monkeypatch.setattr(pub.os, "fsync", sync)
+    p = pub.Publisher(
+        paths, tmp_path / "publication", metadata={}, identity=identity, version=3
+    )
+    metadata = dict(
+        run_id="a" * 32,
+        arm="fresh-controls",
+        role="observer",
+        input_recipe_sha256=helper.RECIPE_SHA256,
+        code_sha256="b" * 64,
+        core_sha256="c" * 64,
+        interpreter_sha256="d" * 64,
+    )
+    phase = helper.FreshPhaseRecording(
+        paths["phase"], metadata=metadata, version=3, publisher=p
+    )
+    context = helper.FreshClockContext(
+        paths["context"], metadata=metadata, version=3, publisher=p
+    )
+    calls = []
+    assert (
+        phase.call("observation_sample", lambda: calls.append("original") or False)
+        is False
+    )
+    assert calls == ["original"] and entered.wait(1)
+    # Another original operation must run while the measurement fd fsync is stuck.
+    assert (
+        phase.call("observation_event", lambda: calls.append("second") or False)
+        is False
+    )
+    assert calls == ["original", "second"]
+    context.append("end", dict(anchor=helper._clock_anchor(), normal_return=True))
+    context.close()
+    phase.close(normal_return=True)
+    release.set()
+    assert p.close(normal_return=True)["complete"]
+    assert operations and all(tid != main for _, tid in operations)
+    phase_rows = rows(paths["phase"])
+    context_rows = rows(paths["context"])
+    assert all(
+        r["schema_version"] == "edge-fresh-phase-timing-record/v3" for r in phase_rows
+    )
+    assert all(
+        "previous_enqueue_cost" in r["data"] and "previous_write_cost" not in r["data"]
+        for r in phase_rows
+    )
+    assert all(
+        r["schema_version"] == "edge-fresh-clock-context/v3" for r in context_rows
+    )
+    receipts = rows(tmp_path / "publication")
+    assert receipts[0]["schema_version"] == "edge-observer-publication/v2"
+    assert receipts[0]["data"]["limits"] == pub.V3_LIMITS
+    assert set(receipts[-1]["data"]["streams"]) == set(paths)
+
+
+@pytest.mark.parametrize(
+    "stream,limit", [("phase", "stream_rows"), ("context", "stream_bytes")]
+)
+def test_v3_new_stream_bounds_sticky_incomplete(tmp_path, monkeypatch, stream, limit):
+    paths = {s: tmp_path / s for s in ("calls", "input_calls", "phase", "context")}
+    p = pub.Publisher(
+        paths, tmp_path / "publication", metadata={}, identity={}, version=3
+    )
+    monkeypatch.setitem(pub.V3_LIMITS[limit], stream, 0)
+    assert not p.submit(stream, b"{}\n", 1)
+    assert not p.close(normal_return=True)["complete"]
+    assert p.incomplete
+
+
+def test_v3_original_sample_callback_and_all_four_genuine_footers(
+    tmp_path, monkeypatch
+):
+    import fresh_source_observer as helper
+
+    identity = dict(
+        pid=1, start_ticks=2, native_tid=threading.get_native_id(), boot_id="synthetic"
+    )
+    monkeypatch.setattr(helper.phase, "_identity", lambda: identity.copy())
+    monkeypatch.setattr(helper.clock, "_identity", lambda: identity.copy())
+    paths = {s: tmp_path / s for s in ("calls", "input_calls", "phase", "context")}
+    p = pub.Publisher(
+        paths, tmp_path / "publication", metadata={}, identity=identity, version=3
+    )
+    metadata = dict(
+        run_id="a" * 32,
+        arm="fresh-controls",
+        role="observer",
+        input_recipe_sha256=helper.RECIPE_SHA256,
+        code_sha256="b" * 64,
+        core_sha256="c" * 64,
+        interpreter_sha256="d" * 64,
+    )
+    phase = helper.FreshPhaseRecording(
+        paths["phase"], metadata=metadata, version=3, publisher=p
+    )
+    j = Journal()
+    with helper.phase.record_observer(phase):
+        with helper.record_clock(
+            paths["calls"],
+            paths["context"],
+            metadata=metadata,
+            policy=POLICY,
+            policy_source_ref="unit",
+            publisher=p,
+            version=3,
+        ):
+            with inputs.record_inputs(
+                paths["input_calls"],
+                metadata=metadata,
+                identity=identity,
+                binding={},
+                publisher=p,
+                version=3,
+            ):
+                collector = input_resume.OutcomeTelemetryCollector(
+                    source=Source(),
+                    policy=OutcomeTelemetryPolicy.from_mapping(
+                        POLICY, source_ref="unit"
+                    ),
+                    interface="lo",
+                    sample_interval_seconds=0.1,
+                )
+                sample = collector.record_sample(epoch=1000)
+                assert sample.epoch == 1000
+                input_resume.observe_input(
+                    line(event(1000.01), 0), j, collector, live_floor=1000, now=1000.05
+                )
+                assert len(collector.activity) == 1 and len(j.advanced) == 1
+    phase.close(normal_return=True)
+    assert p.close(normal_return=True)["complete"]
+    actual = recording.decode_calls(paths["calls"].read_bytes())
+    assert [r["kind"] for r in actual["calls"]] == ["sample", "event"]
+    assert actual["calls"][1]["data"]["accepted"] is False
+    for stream in paths:
+        assert rows(paths[stream])[-1]["kind"] == "end"
+    phase_rows = rows(paths["phase"])
+    assert {r["data"].get("phase") for r in phase_rows if r["kind"] == "span"} >= {
+        "observation_sample",
+        "observation_event",
+        "observation",
+    }
+    assert all(
+        r["schema_version"] == "edge-fresh-input-record/v3"
+        for r in rows(paths["input_calls"])
+    )

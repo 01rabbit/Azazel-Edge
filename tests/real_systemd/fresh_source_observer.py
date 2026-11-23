@@ -25,6 +25,7 @@ BASE = Path("/var/lib/edge400-systemd-lab/bundle")
 POLICY = (
     Path(__file__).resolve().parents[1] / "fixtures/signed_network_observer_policy.json"
 )
+V3_PROTOCOL_SHA256 = "01f653e970f4313aaa6066219ded163e21c0753ee97d5ded5cbfedd2872a938a"
 V2_PROTOCOL_SHA256 = "107595f5c7d85d410d65517a7f50bdb6e3dd3b31bdb4cffcd3936be98b65ea59"
 PROTOCOL_SHA256 = "f12b5d79b277856251ee674994e5a3527cb07c7ae2c161ebf9241a73c3488bf2"
 EXTRA = (
@@ -47,7 +48,7 @@ def need(value, message):
 
 
 def bootstrap(challenge, *, version=1):
-    need(type(version) is int and version in (1, 2), "explicit helper version")
+    need(type(version) is int and version in (1, 2, 3), "explicit helper version")
     need(
         type(challenge) is str and re.fullmatch("[0-9a-f]{32}", challenge), "challenge"
     )
@@ -138,10 +139,11 @@ def bound_identity(identity):
 class FreshPhaseRecording(phase.PhaseRecording):
     """New initializer only; original phase recorder and old arm gates stay unchanged."""
 
-    def __init__(self, path, *, metadata, version=1):
-        self.schema = (
-            PHASE_SCHEMA if version == 1 else "edge-fresh-phase-timing-record/v2"
-        )
+    def __init__(self, path, *, metadata, version=1, publisher=None):
+        self.publisher = publisher if version == 3 else None
+        need(version != 3 or publisher is not None, "v3 phase publisher required")
+        self.schema = f"edge-fresh-phase-timing-record/v{version}"
+        self.previous_enqueue_cost = None
         need(
             set(metadata)
             == {
@@ -179,15 +181,19 @@ class FreshPhaseRecording(phase.PhaseRecording):
         self.incomplete = self.closed = False
         self.lock, self.local = threading.RLock(), threading.local()
         self.max_rows, self.max_bytes = phase.MAX_ROWS, phase.MAX_BYTES
-        self.fd = os.open(
-            path,
-            os.O_WRONLY
-            | os.O_APPEND
-            | os.O_CREAT
-            | os.O_EXCL
-            | os.O_NOFOLLOW
-            | os.O_CLOEXEC,
-            0o600,
+        self.fd = (
+            None
+            if self.publisher is not None
+            else os.open(
+                path,
+                os.O_WRONLY
+                | os.O_APPEND
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_NOFOLLOW
+                | os.O_CLOEXEC,
+                0o600,
+            )
         )
         self._append(
             "header",
@@ -202,10 +208,21 @@ class FreshPhaseRecording(phase.PhaseRecording):
 
     def _append(self, kind, data):
         with self.lock:
-            if self.incomplete or self.closed or self.fd is None:
+            if (
+                self.incomplete
+                or self.closed
+                or (self.fd is None and self.publisher is None)
+            ):
                 return
             try:
-                data = dict(data, previous_write_cost=self.previous_write_cost)
+                data = dict(
+                    data,
+                    **(
+                        {"previous_enqueue_cost": self.previous_enqueue_cost}
+                        if self.publisher is not None
+                        else {"previous_write_cost": self.previous_write_cost}
+                    ),
+                )
                 raw = phase.canonical(
                     dict(
                         schema_version=self.schema,
@@ -218,23 +235,40 @@ class FreshPhaseRecording(phase.PhaseRecording):
                 if self.count >= self.max_rows or self.size + len(raw) > self.max_bytes:
                     raise ValueError("phase recording capacity")
                 start = phase._clocks()
-                view = memoryview(raw)
-                while view:
-                    wrote = os.write(self.fd, view)
-                    if wrote <= 0:
-                        raise OSError("phase short write")
-                    view = view[wrote:]
+                if self.publisher is not None:
+                    if not self.publisher.submit("phase", raw, self.count + 1):
+                        self.incomplete = True
+                        return
+                else:
+                    view = memoryview(raw)
+                    while view:
+                        wrote = os.write(self.fd, view)
+                        if wrote <= 0:
+                            raise OSError("phase short write")
+                        view = view[wrote:]
+                enqueue_hash = (
+                    hashlib.sha256(raw).hexdigest()
+                    if self.publisher is not None
+                    else None
+                )
                 cost = phase._finished(start)
                 self.count += 1
                 self.size += len(raw)
-                self.previous = hashlib.sha256(raw).hexdigest()
-                self.previous_write_cost = dict(seq=self.count, **cost)
+                self.previous = (
+                    enqueue_hash
+                    if self.publisher is not None
+                    else hashlib.sha256(raw).hexdigest()
+                )
+                if self.publisher is not None:
+                    self.previous_enqueue_cost = dict(seq=self.count, **cost)
+                else:
+                    self.previous_write_cost = dict(seq=self.count, **cost)
             except BaseException:
                 self.incomplete = True
 
 
 def load_config(path, digest, *, version=1):
-    need(type(version) is int and version in (1, 2), "explicit helper version")
+    need(type(version) is int and version in (1, 2, 3), "explicit helper version")
     path = Path(path)
     need(
         path.parent == Path("/opt/edge400-runtime/finite-load-configs")
@@ -268,7 +302,7 @@ def load_config(path, digest, *, version=1):
         config["schema_version"] == f"edge-fresh-source-observer-config/v{version}"
         and config["case_id"] in ("fresh-controls", "fresh-interrupted")
         and config["protocol_sha256"]
-        == (PROTOCOL_SHA256 if version == 1 else V2_PROTOCOL_SHA256),
+        == {1: PROTOCOL_SHA256, 2: V2_PROTOCOL_SHA256, 3: V3_PROTOCOL_SHA256}[version],
         "explicit load profile required",
     )
     paths = config["paths"]
@@ -329,7 +363,7 @@ def load_config(path, digest, *, version=1):
     # A trusted-path walk would require denied ancestor-directory reads.
     adjacent = Path(__file__).with_name("fresh_source_recording.py").read_bytes()
     composite = top + b"\0" + adjacent
-    if version == 2:
+    if version >= 2:
         composite += (
             b"\0" + Path(__file__).with_name("fresh_publication.py").read_bytes()
         )
@@ -378,9 +412,25 @@ def audit(create=False):
 
 
 class FreshClockContext(clock.ClockContext):
-    def __init__(self, path, *, metadata, version=1):
-        self.schema = CLOCK_SCHEMA if version == 1 else "edge-fresh-clock-context/v2"
-        super().__init__(path, metadata=metadata)
+    def __init__(self, path, *, metadata, version=1, publisher=None):
+        self.schema = f"edge-fresh-clock-context/v{version}"
+        self.publisher = publisher if version == 3 else None
+        if version == 3:
+            need(publisher is not None, "v3 context publisher required")
+            self.fd = None
+            self.seq = self.size = 0
+            self.previous = "0" * 64
+            self.closed = False
+            self.append(
+                "begin",
+                dict(
+                    metadata=dict(metadata),
+                    identity=clock._identity(),
+                    anchor=_clock_anchor(),
+                ),
+            )
+        else:
+            super().__init__(path, metadata=metadata)
 
     def append(self, kind, data):
         if self.closed or self.seq >= clock.MAX_CONTEXT_ROWS:
@@ -396,15 +446,25 @@ class FreshClockContext(clock.ClockContext):
         )
         if self.size + len(raw) > clock.MAX_CONTEXT_BYTES:
             raise ValueError("clock context byte bound")
-        view = memoryview(raw)
-        while view:
-            count = os.write(self.fd, view)
-            if count <= 0:
-                raise OSError("clock context write made no progress")
-            view = view[count:]
+        if self.publisher is not None:
+            if not self.publisher.submit("context", raw, self.seq + 1):
+                return
+        else:
+            view = memoryview(raw)
+            while view:
+                count = os.write(self.fd, view)
+                if count <= 0:
+                    raise OSError("clock context write made no progress")
+                view = view[count:]
         self.size += len(raw)
         self.seq += 1
         self.previous = hashlib.sha256(raw).hexdigest()
+
+    def close(self):
+        if self.publisher is not None:
+            self.closed = True
+        else:
+            super().close()
 
 
 @contextmanager
@@ -418,7 +478,9 @@ def record_clock(
     publisher=None,
     version=1,
 ):
-    context = FreshClockContext(context_path, metadata=metadata, version=version)
+    context = FreshClockContext(
+        context_path, metadata=metadata, version=version, publisher=publisher
+    )
     try:
         with original_recording.record_collector(
             calls_path,
@@ -433,7 +495,7 @@ def record_clock(
 
 
 def run(config, trust, *, version=1):
-    need(type(version) is int and version in (1, 2), "explicit helper version")
+    need(type(version) is int and version in (1, 2, 3), "explicit helper version")
     paths, p = config["paths"], trust.data
     options = {
         "--policy": paths["policy"],
@@ -452,19 +514,30 @@ def run(config, trust, *, version=1):
         input_calls_path=paths["input_calls"],
     )
     publisher = None
-    if version == 2:
+    if version >= 2:
         from fresh_publication import Publisher
 
         publisher = Publisher(
-            {k: paths[k] for k in ("calls", "input_calls")},
+            {
+                k: paths[k]
+                for k in (
+                    ("calls", "input_calls")
+                    if version == 2
+                    else ("calls", "input_calls", "phase", "context")
+                )
+            },
             paths["publication"],
             metadata=config["metadata"],
             identity=phase._identity(),
+            version=version,
         )
-        compatible.update(publication_path=paths["publication"], version=2)
+        compatible.update(publication_path=paths["publication"], version=version)
     try:
         recorder = FreshPhaseRecording(
-            paths["phase"], metadata=config["metadata"], version=version
+            paths["phase"],
+            metadata=config["metadata"],
+            version=version,
+            publisher=publisher,
         )
     except BaseException:
         if publisher is not None:
@@ -611,7 +684,7 @@ def publish_completion(
         sidecars=sidecars,
         completion_anchor=_clock_anchor(),
     )
-    if config.get("version") == 2:
+    if config.get("version", 1) >= 2:
         need(
             publication is not None and publication["complete"],
             "publication barrier absent",
