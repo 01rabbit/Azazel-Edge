@@ -11,6 +11,9 @@ export AZAZEL_DEV_STATE="${AZAZEL_DEV_STATE:-$HOME/.azazel-edge-dev}"
 RUN_DIR="$AZAZEL_DEV_STATE/run"
 LOG_DIR="$AZAZEL_DEV_STATE/log"
 LIB_DIR="$AZAZEL_DEV_STATE/lib"
+# A state directory created here holds the web token: create it 0700 (an
+# existing one is left as it is).
+[[ -d "$AZAZEL_DEV_STATE" ]] || mkdir -p -m 700 "$AZAZEL_DEV_STATE"
 mkdir -p "$RUN_DIR/triage-sessions" "$LOG_DIR" "$LIB_DIR" "$AZAZEL_DEV_STATE/suricata"
 
 export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/py${PYTHONPATH:+:$PYTHONPATH}"
@@ -73,9 +76,66 @@ export AZAZEL_EVE_PATH="$AZAZEL_DEV_STATE/suricata/eve.json"
 export AZAZEL_NORMALIZED_EVENT_LOG="$LOG_DIR/normalized-events.jsonl"
 export AZAZEL_DEFENSE_ENFORCE_LEVEL="${AZAZEL_DEFENSE_ENFORCE_LEVEL:-advisory}"
 
-# one-time web token
-if [[ ! -s "$AZAZEL_WEB_TOKEN_FILE" ]]; then
-  python3 -c "import secrets; print(secrets.token_urlsafe(24))" > "$AZAZEL_WEB_TOKEN_FILE"
-fi
+# Writes stdin to $1 without the content ever being in a file other than a
+# private (0600) temp file in the same directory, then renames it onto $1.
+# An existing regular target is replaced, not truncated. A symlink (to a file
+# or a directory) or a non-regular target is refused: the content must land at
+# exactly this path. umask stays in a subshell, so the caller's umask is never
+# touched.
+# The parent directory must be owned by the current user, not a symlink, and
+# not group- or other-writable; with that, nobody else can swap paths in it,
+# so the plain-file check plus the same-directory mv below are sufficient (no
+# check-then-use race).
+macdev_require_private_parent() {
+  local dir wide
+  dir="$(dirname -- "$1")"
+  if [[ -L "${dir}" || ! -d "${dir}" || ! -O "${dir}" ]]; then
+    echo "macdev: refusing to write secrets in ${dir}: it must be a real directory owned by you" >&2
+    return 1
+  fi
+  # Fail closed: if find cannot judge the mode, the directory is not trusted.
+  if ! wide="$(find "${dir}" -maxdepth 0 \( -perm -020 -o -perm -002 \) 2>/dev/null)" || [[ -n "${wide}" ]]; then
+    echo "macdev: refusing to write secrets in ${dir}: it is group/other-writable or its mode could not be checked" >&2
+    return 1
+  fi
+}
+
+macdev_write_private_file() {
+  local dst="$1" tmp
+  macdev_require_private_parent "${dst}" || return 1
+  if [[ -L "${dst}" || ( -e "${dst}" && ! -f "${dst}" ) ]]; then
+    echo "macdev: refusing to write ${dst}: not a plain file (symlink or directory)" >&2
+    return 1
+  fi
+  tmp="$( (umask 077; mktemp "${dst}.XXXXXX") )" || return 1
+  if ! cat > "${tmp}" || ! chmod 0600 "${tmp}" || ! mv -f -- "${tmp}" "${dst}"; then
+    rm -f -- "${tmp}"
+    return 1
+  fi
+}
+
+# One-time web token. A valid existing token is kept and only tightened to
+# 0600; a symlink or non-regular file is refused; a generation or save failure
+# is the exit status of `source` (no set -e needed).
+_macdev_ensure_web_token() {
+  local f="$AZAZEL_WEB_TOKEN_FILE" tok
+  macdev_require_private_parent "$f" || return 1
+  if [[ -L "$f" || ( -e "$f" && ! -f "$f" ) ]]; then
+    echo "macdev: $f is a symlink or not a regular file; refusing" >&2
+    return 1
+  fi
+  if [[ -s "$f" ]]; then
+    chmod 0600 "$f" || return 1
+    return 0
+  fi
+  tok="$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")" || return 1
+  [[ -n "$tok" ]] || { echo "macdev: token generator produced no output" >&2; return 1; }
+  printf '%s\n' "$tok" | macdev_write_private_file "$f"
+}
+_macdev_ensure_web_token
+_macdev_rc=$?
+unset -f _macdev_ensure_web_token
 
 unset _MACDEV_SELF RUN_DIR LOG_DIR LIB_DIR
+if [[ "${_macdev_rc}" -ne 0 ]]; then unset _macdev_rc; return 1; fi
+unset _macdev_rc

@@ -46,7 +46,7 @@ if [[ -z "${MM_PASSWORD}" ]]; then
   MM_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')-Az"
   # Kept before the account is created, so a run that stops half way does
   # not lose it; write_outputs rewrites the whole file at the end.
-  (umask 077 && printf 'MATTERMOST_EMAIL=%s\nMATTERMOST_PASSWORD=%s\n' "${MM_EMAIL}" "${MM_PASSWORD}" > "${CRED_ENV}")
+  printf 'MATTERMOST_EMAIL=%s\nMATTERMOST_PASSWORD=%s\n' "${MM_EMAIL}" "${MM_PASSWORD}" | macdev_write_private_file "${CRED_ENV}"
 fi
 
 AUTH_TOKEN=""; USER_ID=""; TEAM_ID=""; CHANNEL_ID=""; BOT_TOKEN=""; WEBHOOK_URL=""
@@ -64,15 +64,18 @@ json_get() {
 # (installer/internal/provision_mattermost_*.sh) keep them off argv.
 api_call() {
   local method="$1" path="$2" body="${3:-}" token="${4:-${AUTH_TOKEN}}"
-  local headers_file body_file
-  headers_file="$(mktemp)"; body_file="$(mktemp)"
+  local headers_file body_file rc=0
+  headers_file="$(mktemp "${TMPDIR:-/tmp}/azazel-dev-mm.XXXXXX")" || return 1
+  body_file="$(mktemp "${TMPDIR:-/tmp}/azazel-dev-mm.XXXXXX")" || { rm -f "${headers_file}"; return 1; }
   local curl_args=(-sS -D "${headers_file}" -o "${body_file}" -X "${method}" "${API_URL}${path}")
   [[ -n "${token}" ]] && curl_args+=(-H "Authorization: Bearer ${token}")
   [[ -n "${body}" ]] && curl_args+=(-H "Content-Type: application/json" --data "${body}")
-  LAST_STATUS="$(curl "${curl_args[@]}" -w "%{http_code}")"
-  LAST_HEADERS="$(cat "${headers_file}")"
-  LAST_BODY="$(cat "${body_file}")"
+  # The mktemp files are 0600; they are removed on every path (curl or cat failing too).
+  LAST_STATUS="$(curl "${curl_args[@]}" -w "%{http_code}")" \
+    && LAST_HEADERS="$(cat "${headers_file}")" \
+    && LAST_BODY="$(cat "${body_file}")" || rc=1
   rm -f "${headers_file}" "${body_file}"
+  return "${rc}"
 }
 
 mmctl_local() { docker exec "${MM_CONTAINER}" mmctl --local "$@"; }
@@ -191,12 +194,12 @@ ensure_command() {
   else
     info "slash command /${trigger} already registered"
   fi
-  printf '%s\n' "${existing_token}" > "${token_path}"
-  chmod 0600 "${token_path}"
+  printf '%s\n' "${existing_token}" | macdev_write_private_file "${token_path}"
 }
 
 write_outputs() {
-  cat > "${CRED_ENV}" <<EOF
+  # Both files hold secrets: written to a 0600 temp file and moved into place.
+  macdev_write_private_file "${CRED_ENV}" <<EOF
 MATTERMOST_USERNAME=${MM_USERNAME}
 MATTERMOST_EMAIL=${MM_EMAIL}
 MATTERMOST_PASSWORD=${MM_PASSWORD}
@@ -204,9 +207,8 @@ MATTERMOST_URL=${BASE_URL}
 MATTERMOST_TEAM=${MM_TEAM}
 MATTERMOST_CHANNEL=${MM_CHANNEL}
 EOF
-  chmod 0600 "${CRED_ENV}"
 
-  cat > "${WEB_ENV}" <<EOF
+  macdev_write_private_file "${WEB_ENV}" <<EOF
 AZAZEL_MATTERMOST_HOST=127.0.0.1
 AZAZEL_MATTERMOST_PORT=18065
 AZAZEL_MATTERMOST_TEAM=${MM_TEAM}
@@ -218,7 +220,6 @@ AZAZEL_MATTERMOST_BOT_TOKEN=${BOT_TOKEN}
 AZAZEL_MATTERMOST_CHANNEL_ID=${CHANNEL_ID}
 AZAZEL_MATTERMOST_COMMAND_TOKEN_FILE=${COMMAND_TOKEN_FILE}
 EOF
-  chmod 0600 "${WEB_ENV}"
 }
 
 wait_for_ping
