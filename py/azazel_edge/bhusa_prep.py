@@ -54,6 +54,26 @@ def _add_common_paths(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional audit JSONL path for isolated booth verification evidence.",
     )
+    parser.add_argument(
+        "--status-doc-path",
+        default=None,
+        help="Optional status doc path for --write-status-doc (default: the tracked repo status doc).",
+    )
+    parser.add_argument(
+        "--links-path",
+        default=None,
+        help="Optional created-issue-links doc path for sync-links --write (default: the tracked repo links doc).",
+    )
+    parser.add_argument(
+        "--parent-comment-path",
+        default=None,
+        help="Optional parent comment path for parent-comment --write (default: the tracked repo parent comment).",
+    )
+    parser.add_argument(
+        "--progress-comment-path",
+        default=None,
+        help="Optional progress comment path for progress-comment --write (default: the tracked repo progress comment).",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -223,6 +243,11 @@ def _freeze_pack(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _status_doc_args(args: argparse.Namespace) -> List[str]:
+    path = getattr(args, "status_doc_path", None)
+    return ["--status-doc-path", path] if path else []
+
+
 def _repo_sync(args: argparse.Namespace) -> Dict[str, Any]:
     status = _invoke(
         [
@@ -232,6 +257,7 @@ def _repo_sync(args: argparse.Namespace) -> Dict[str, Any]:
             *(["--explanations-path", args.explanations_path] if args.explanations_path else []),
             *(["--audit-path", args.audit_path] if args.audit_path else []),
             "--write-status-doc",
+            *_status_doc_args(args),
             "--json",
         ],
         context="azazel-edge-bhusa-status",
@@ -240,6 +266,7 @@ def _repo_sync(args: argparse.Namespace) -> Dict[str, Any]:
         [
             str(BIN_DIR / "azazel-edge-bhusa-issues"),
             "sync-links",
+            *(["--links-path", args.links_path] if getattr(args, "links_path", None) else []),
             "--write",
             "--json",
         ],
@@ -249,6 +276,8 @@ def _repo_sync(args: argparse.Namespace) -> Dict[str, Any]:
         [
             str(BIN_DIR / "azazel-edge-bhusa-issues"),
             "parent-comment",
+            *(["--links-path", args.links_path] if getattr(args, "links_path", None) else []),
+            *(["--output-path", args.parent_comment_path] if getattr(args, "parent_comment_path", None) else []),
             "--write",
             "--json",
         ],
@@ -260,6 +289,7 @@ def _repo_sync(args: argparse.Namespace) -> Dict[str, Any]:
             "progress-comment",
             "--record-path",
             args.record_path,
+            *(["--output-path", args.progress_comment_path] if getattr(args, "progress_comment_path", None) else []),
             *(["--write"]),
             *(["--json"]),
         ],
@@ -356,6 +386,10 @@ def _daily_pack(args: argparse.Namespace) -> Dict[str, Any]:
         output_root=str(root / "repo-sync"),
         explanations_path=args.explanations_path,
         audit_path=args.audit_path,
+        status_doc_path=args.status_doc_path,
+        progress_comment_path=args.progress_comment_path,
+        links_path=args.links_path,
+        parent_comment_path=args.parent_comment_path,
     )
     ops_args = argparse.Namespace(
         record_path=args.record_path,
@@ -382,6 +416,10 @@ def _candidate_pack(args: argparse.Namespace) -> Dict[str, Any]:
         output_root=str(root / "repo-sync"),
         explanations_path=args.explanations_path,
         audit_path=args.audit_path,
+        status_doc_path=args.status_doc_path,
+        progress_comment_path=args.progress_comment_path,
+        links_path=args.links_path,
+        parent_comment_path=args.parent_comment_path,
     )
     ops_args = argparse.Namespace(
         record_path=args.record_path,
@@ -410,6 +448,7 @@ def _candidate_pack(args: argparse.Namespace) -> Dict[str, Any]:
             *(["--explanations-path", args.explanations_path] if args.explanations_path else []),
             *(["--audit-path", args.audit_path] if args.audit_path else []),
             "--write-status-doc",
+            *_status_doc_args(args),
             "--json",
         ],
         context="azazel-edge-bhusa-status",

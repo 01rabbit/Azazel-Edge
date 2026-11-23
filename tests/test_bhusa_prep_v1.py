@@ -13,6 +13,28 @@ REHEARSE = ROOT / "bin" / "azazel-edge-bhusa-rehearse"
 
 
 class BhusaPrepV1Tests(unittest.TestCase):
+    def _assert_docs_redirected(self, repo_sync: dict, tmp: Path) -> None:
+        """Each redirected doc must be reported at, and exist at, its tmp path."""
+        expected = {
+            ("status", "status_doc_path"): "15-status.md",
+            ("sync_links", "links_path"): "43-created-issue-links-placeholder.md",
+            ("parent_comment", "output_path"): "72-parent-issue-comment.md",
+            ("progress_comment", "output_path"): "71-parent-progress-comment.md",
+        }
+        for (section, key), name in expected.items():
+            self.assertEqual(repo_sync[section][key], str(tmp / name))
+            self.assertTrue((tmp / name).is_file())
+
+    @staticmethod
+    def _doc_args(tmp: Path) -> list[str]:
+        """Keep tracked repo docs untouched by redirecting their write targets."""
+        return [
+            "--status-doc-path", str(tmp / "15-status.md"),
+            "--progress-comment-path", str(tmp / "71-parent-progress-comment.md"),
+            "--links-path", str(tmp / "43-created-issue-links-placeholder.md"),
+            "--parent-comment-path", str(tmp / "72-parent-issue-comment.md"),
+        ]
+
     def test_ops_pack_generates_bundle_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             record_path = Path(tmp) / "rehearsal.jsonl"
@@ -92,7 +114,7 @@ class BhusaPrepV1Tests(unittest.TestCase):
                     capture_output=True, text=True, cwd=str(ROOT), check=True
                 )
             result = subprocess.run(
-                [str(PREP), "repo-sync", "--record-path", str(record_path), "--output-root", str(out_root), "--json"],
+                [str(PREP), "repo-sync", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp)), "--json"],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             payload = json.loads(result.stdout)
@@ -103,6 +125,7 @@ class BhusaPrepV1Tests(unittest.TestCase):
             self.assertTrue(payload["sync_links"]["written"])
             self.assertTrue(payload["parent_comment"]["written"])
             self.assertTrue(payload["progress_comment"]["written"])
+            self._assert_docs_redirected(payload, Path(tmp))
 
     def test_repo_sync_text_output_reports_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,7 +137,7 @@ class BhusaPrepV1Tests(unittest.TestCase):
                     capture_output=True, text=True, cwd=str(ROOT), check=True
                 )
             result = subprocess.run(
-                [str(PREP), "repo-sync", "--record-path", str(record_path), "--output-root", str(out_root)],
+                [str(PREP), "repo-sync", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp))],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             output = result.stdout
@@ -137,13 +160,14 @@ class BhusaPrepV1Tests(unittest.TestCase):
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             result = subprocess.run(
-                [str(PREP), "daily-pack", "--record-path", str(record_path), "--output-root", str(out_root), "--force", "--json"],
+                [str(PREP), "daily-pack", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp)), "--force", "--json"],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             payload = json.loads(result.stdout)
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["mode"], "daily-pack")
             self.assertTrue(payload["repo_sync"]["status"]["status_doc_path"].endswith("15-status.md"))
+            self._assert_docs_redirected(payload["repo_sync"], Path(tmp))
             self.assertTrue((out_root / "ops-pack" / "offline-bundle" / "INDEX.md").exists())
             self.assertTrue((out_root / "ops-pack" / "report" / "REPORT.md").exists())
 
@@ -161,7 +185,7 @@ class BhusaPrepV1Tests(unittest.TestCase):
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             result = subprocess.run(
-                [str(PREP), "daily-pack", "--record-path", str(record_path), "--output-root", str(out_root), "--force"],
+                [str(PREP), "daily-pack", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp)), "--force"],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             output = result.stdout
@@ -184,13 +208,14 @@ class BhusaPrepV1Tests(unittest.TestCase):
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             result = subprocess.run(
-                [str(PREP), "candidate-pack", "--record-path", str(record_path), "--output-root", str(out_root), "--force", "--json"],
+                [str(PREP), "candidate-pack", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp)), "--force", "--json"],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             payload = json.loads(result.stdout)
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["mode"], "candidate-pack")
             self.assertTrue(payload["repo_sync"]["status"]["status_doc_path"].endswith("15-status.md"))
+            self._assert_docs_redirected(payload["repo_sync"], Path(tmp))
             self.assertIsNotNone(payload["repo_sync"]["status"]["freeze_check"])
             self.assertTrue(payload["repo_sync"]["status"]["freeze_check"]["ok"])
             self.assertEqual(len(payload["repo_sync"]["status"]["freeze_check"]["offline_doc_checks"]), 1)
@@ -225,7 +250,7 @@ class BhusaPrepV1Tests(unittest.TestCase):
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             result = subprocess.run(
-                [str(PREP), "candidate-pack", "--record-path", str(record_path), "--output-root", str(out_root), "--force"],
+                [str(PREP), "candidate-pack", "--record-path", str(record_path), "--output-root", str(out_root), *self._doc_args(Path(tmp)), "--force"],
                 capture_output=True, text=True, cwd=str(ROOT), check=True
             )
             output = result.stdout
