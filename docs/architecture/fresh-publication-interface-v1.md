@@ -58,3 +58,25 @@ Readiness and pre-kill barriers require valid signed Source/journal/witness plus
 commits whose exact measurement prefix bytes contain the original required calls
 and input_return; visible/queued/written alone is insufficient. Publication is
 pinned helper self-report, not independent kernel or power-loss attestation.
+
+## Close timing correction before acquisition
+
+The main close result has EXACT `joined,complete,incomplete,error,owner_close`.
+owner_close is the six-clock span measured wholly on the MAIN thread, from the
+initial close request until AFTER join completion is actually observed. It is null
+only when measurement/join fails; that result must be incomplete and never complete.
+A normal result requires successful worker join AND actual main span end-start
+<=5000000000ns. A late main observation, even after worker successfully exited,
+remains incomplete with TimeoutError. The one deadline is never restarted.
+
+Publication footer.close is a six-clock WORKER-only span: it starts when closing
+is observed, before its final batch drain, and ends after stream descriptors close.
+Its explicit scope excludes final publication footer write/fsync/publicationFD
+close and main scheduling. owner_close includes every final worker stage and the
+main join observation, and is the sole whole-close deadline proof. Do not combine
+main-thread CPU start with worker CPU end. A successful worker footer cannot
+upgrade a failed/late main completion. Preserve all actual prefix/footer bytes.
+
+Close clocks/join/cleanup failures are caught into sticky incomplete evidence;
+cleanup must not replace an original exception. Missing timing stays null/unknown,
+never zero/substitute epochs or fabricated successful stages.
