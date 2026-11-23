@@ -32,6 +32,8 @@ def metadata(info):
 
 
 def file_limit(name):
+    if name == "observer-publication.raw":
+        return 1024 * 1024
     if name == "fresh-timestamp-receipts.json":
         return 65536
     if name == "observer-input-calls.raw":
@@ -65,18 +67,38 @@ def file_limit(name):
     return 8 * 1024 * 1024
 
 
-def collect():
+def collect(*, version=1):
+    assert version in (1, 2)
+    names = NAMES | {"observer-publication.raw"} if version == 2 else NAMES
+    source = (
+        Path(
+            str(BASE).replace(
+                "fresh-source-observe-public", "fresh-source-observe-v2-public"
+            )
+        )
+        if version == 2
+        else BASE
+    )
+    target = (
+        Path(
+            str(TARGET).replace(
+                "fresh-source-observe-public", "fresh-source-observe-v2-public"
+            )
+        )
+        if version == 2
+        else TARGET
+    )
     cases = CASES
-    TARGET.mkdir(mode=0o755)
+    target.mkdir(mode=0o755)
     files, missing, errors = {}, [], []
     for case in cases:
-        (TARGET / case).mkdir(mode=0o755)
+        (target / case).mkdir(mode=0o755)
         total_eve = 0
-        for name in sorted(NAMES):
+        for name in sorted(names):
             relative, fd = case + "/" + name, None
             limit = file_limit(name)
             try:
-                path = BASE / relative
+                path = source / relative
                 before = path.lstat()
                 assert stat.S_ISREG(before.st_mode) and before.st_uid == 0
                 assert before.st_nlink == 1 and not before.st_mode & 0o022
@@ -100,9 +122,9 @@ def collect():
                 if name.startswith("eve-"):
                     total_eve += len(raw)
                     assert total_eve <= 64 * 1024 * 1024
-                with (TARGET / relative).open("xb") as output:
+                with (target / relative).open("xb") as output:
                     output.write(raw)
-                (TARGET / relative).chmod(0o644)
+                (target / relative).chmod(0o644)
                 files[relative] = dict(
                     bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()
                 )
@@ -113,9 +135,18 @@ def collect():
             finally:
                 if fd is not None:
                     os.close(fd)
-    for name in ("recipe-declaration.json",):
+    for name in (
+        (
+            "recipe-declaration.json",
+            "fresh-controls-snapshot.json",
+            "fresh-interrupted-snapshot.json",
+            "disposition.json",
+        )
+        if version == 2
+        else ("recipe-declaration.json",)
+    ):
         try:
-            path = BASE / name
+            path = source / name
             before = path.lstat()
             assert (
                 stat.S_ISREG(before.st_mode)
@@ -133,7 +164,7 @@ def collect():
                 ) == metadata(path.lstat()) == metadata(before)
             finally:
                 os.close(fd)
-            with (TARGET / name).open("xb") as output:
+            with (target / name).open("xb") as output:
                 output.write(raw)
             files[name] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
         except FileNotFoundError:
@@ -142,17 +173,17 @@ def collect():
             errors.append(dict(path=name, error=type(error).__name__))
     manifest = dict(
         schema_version="edge-finite-load-public-inventory/v1",
-        flavor="fresh-source-observe",
+        flavor="fresh-source-observe-v2" if version == 2 else "fresh-source-observe",
         cases=list(cases),
         files=files,
         missing=missing,
         errors=errors,
         private_keys_exported=False,
     )
-    with (TARGET / "manifest.json").open("x") as output:
+    with (target / "manifest.json").open("x") as output:
         json.dump(manifest, output, sort_keys=True, separators=(",", ":"))
         output.write("\n")
-    (TARGET / "manifest.json").chmod(0o644)
+    (target / "manifest.json").chmod(0o644)
     required = {
         case + "/" + name
         for case in cases
@@ -174,12 +205,20 @@ def collect():
             "evaluation.json",
         )
     }
+    if version == 2:
+        required |= {case + "/observer-publication.raw" for case in cases}
+        required |= {
+            "recipe-declaration.json",
+            "fresh-controls-snapshot.json",
+            "fresh-interrupted-snapshot.json",
+            "disposition.json",
+        }
     assert not errors and required <= files.keys(), (
         "finite load originals missing or rejected"
     )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 1:
-        raise SystemExit("fixed finite-load flavor takes no arguments")
-    collect()
+    if sys.argv[1:] not in ([], ["--v2"]):
+        raise SystemExit("fixed fresh-source collector accepts only --v2")
+    collect(version=2 if sys.argv[1:] == ["--v2"] else 1)

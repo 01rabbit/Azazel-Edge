@@ -145,6 +145,7 @@ NATIVE = False
 FINITE_INGRESS = None
 FINITE_LOAD_COST = False
 FRESH_SOURCE_OBSERVE = False
+FRESH_SOURCE_VERSION = 1
 
 
 def configure():
@@ -201,7 +202,9 @@ def configure():
         from fresh_source_observe import audit_role as fresh_audit_role
 
         def fresh_audit(create=False):
-            status, receipt = fresh_audit_role(g, role_command, create)
+            status, receipt = fresh_audit_role(
+                g, role_command, create, version=FRESH_SOURCE_VERSION
+            )
             g.record("fresh-source-independent-audit", receipt=receipt)
             return status
 
@@ -488,6 +491,7 @@ def main():
     parser.add_argument("--finite-ingress", choices=["main", "fault"])
     parser.add_argument("--finite-load-cost", action="store_true")
     parser.add_argument("--fresh-source-observe", action="store_true")
+    parser.add_argument("--fresh-source-observe-v2", action="store_true")
     args = parser.parse_args()
     if args.receipt_fault and not args.native_core:
         parser.error("receipt fault requires the existing native-core profile")
@@ -499,18 +503,25 @@ def main():
         not args.native_core or args.receipt_fault or args.finite_ingress
     ):
         parser.error("finite load requires its separate native-core variant")
-    if args.fresh_source_observe and (
+    if (args.fresh_source_observe or args.fresh_source_observe_v2) and (
         not args.native_core
         or args.finite_load_cost
         or args.finite_ingress
         or args.receipt_fault
+        or (args.fresh_source_observe and args.fresh_source_observe_v2)
     ):
         parser.error("fresh source requires its separate native-core variant")
-    global NATIVE, FINITE_INGRESS, FINITE_LOAD_COST, FRESH_SOURCE_OBSERVE
+    global \
+        NATIVE, \
+        FINITE_INGRESS, \
+        FINITE_LOAD_COST, \
+        FRESH_SOURCE_OBSERVE, \
+        FRESH_SOURCE_VERSION
     NATIVE = args.native_core
     FINITE_INGRESS = args.finite_ingress
     FINITE_LOAD_COST = args.finite_load_cost
-    FRESH_SOURCE_OBSERVE = args.fresh_source_observe
+    FRESH_SOURCE_OBSERVE = args.fresh_source_observe or args.fresh_source_observe_v2
+    FRESH_SOURCE_VERSION = 2 if args.fresh_source_observe_v2 else 1
     g.guard()
     configure()
     if args.phase == "prepare":
@@ -534,9 +545,17 @@ def main():
         )
     elif args.phase == "exercise":
         if FRESH_SOURCE_OBSERVE:
-            from fresh_source_observe import FreshSourceObserveLab
+            from fresh_source_observe import (
+                FreshSourceObserveLab,
+                FreshSourceObserveV2Lab,
+            )
 
-            FreshSourceObserveLab(g, role_command).exercise()
+            lab_type = (
+                FreshSourceObserveV2Lab
+                if FRESH_SOURCE_VERSION == 2
+                else FreshSourceObserveLab
+            )
+            lab_type(g, role_command).exercise()
         elif FINITE_LOAD_COST:
             from finite_load_cost import FiniteLoadCostLab
 

@@ -3,10 +3,13 @@
 import copy
 import fcntl
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
 import signal
+import secrets
+import sys
 import threading
 import time
 
@@ -33,10 +36,19 @@ class FreshObserverProcess(old.ObserverProcess):
     side_files = SIDE_FILES
 
 
-def audit_role(g, role_command, create=False):
+class FreshObserverProcessV2(FreshObserverProcess):
+    role_mode = "fresh-source-v2"
+    bootstrap_schema = "edge-fresh-source-observer-bootstrap/v2"
+    go_schema = "edge-fresh-source-observer-go/v2"
+    side_files = dict(SIDE_FILES, publication="observer-publication.raw")
+
+
+def audit_role(g, role_command, create=False, *, version=1):
+    assert type(version) is int and version in (1, 2)
     actor, failure = None, None
     try:
-        actor = FreshObserverProcess(g, role_command, create=create)
+        process_type = FreshObserverProcess if version == 1 else FreshObserverProcessV2
+        actor = process_type(g, role_command, create=create)
         out = actor.wait()
         assert (
             actor.process.returncode == 0
@@ -69,11 +81,11 @@ def audit_role(g, role_command, create=False):
             actor.close(failure)
 
 
-def input_prefix(raw):
+def input_prefix(raw, *, version=1):
     """Verify complete original context rows; never repair an interrupted tail."""
     rows, tail = old._rows(
         raw,
-        "edge-fresh-input-record/v1",
+        f"edge-fresh-input-record/v{version}",
         limit=4 * 1024 * 1024,
         max_rows=256,
         allow_partial=True,
@@ -82,21 +94,29 @@ def input_prefix(raw):
 
 
 class FreshSourceObserveLab(old.FiniteLoadCostLab):
+    version = 1
+    protocol_name = PROTOCOL_NAME
+    protocol_digest = PROTOCOL_SHA256
+    public_name = "fresh-source-observe-public"
+    core_module = "azazel_edge.benchmark.fresh_source_observe"
+    process_type = FreshObserverProcess
+    side_files = SIDE_FILES
+
     def __init__(self, g, role_command):
-        from azazel_edge.benchmark import fresh_source_observe as core
+        core = importlib.import_module(self.core_module)
 
         self.core = core
         self.g, self.role_command, self.variant = g, role_command, "main"
-        self.protocol_raw = Path(__file__).with_name(PROTOCOL_NAME).read_bytes()
-        assert accounting.sha256(self.protocol_raw) == PROTOCOL_SHA256
+        self.protocol_raw = Path(__file__).with_name(self.protocol_name).read_bytes()
+        assert accounting.sha256(self.protocol_raw) == self.protocol_digest
         self.protocol = json.loads(self.protocol_raw)
         assert (
             accounting.sha256(accounting.canonical(self.protocol["input_recipe"]))
             == RECIPE_SHA256
         )
-        self.protocol_sha256 = PROTOCOL_SHA256
+        self.protocol_sha256 = self.protocol_digest
         self.allowed_case_ids = frozenset(CASES)
-        self.public_directory = "fresh-source-observe-public"
+        self.public_directory = self.public_name
         self.custody_schema = "outcome-live-close-custody/v3"
         self.cases = {
             case: dict(action="normal_stop", custody_mode="live_parent_and_children")
@@ -109,13 +129,13 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
     def begin(self, case_id, *, previous_session=None):
         FiniteIngressLab.begin(self, case_id, previous_session=previous_session)
         context = self.contexts[case_id]
-        context["ingress"]["protocol_sha256"] = PROTOCOL_SHA256
+        context["ingress"]["protocol_sha256"] = self.protocol_sha256
         anchor = _clock_anchor()
         started = time.monotonic_ns()
         context["load"] = dict(
-            schema_version="edge-fresh-load-controller/v1",
+            schema_version=f"edge-fresh-load-controller/v{self.version}",
             case_id=case_id,
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=self.protocol_sha256,
             input_recipe_sha256=RECIPE_SHA256,
             corpus_sha256=None,
             session_ref=None,
@@ -139,9 +159,9 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             errors=[],
         )
         context["fresh"] = dict(
-            schema_version="edge-fresh-source-controller/v1",
+            schema_version=f"edge-fresh-source-controller/v{self.version}",
             case_id=case_id,
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=self.protocol_sha256,
             input_recipe_sha256=RECIPE_SHA256,
             session_ref=None,
             started_ns=started,
@@ -155,9 +175,9 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             errors=[],
         )
         context["timestamps"] = dict(
-            schema_version="edge-fresh-timestamp-receipts/v1",
+            schema_version=f"edge-fresh-timestamp-receipts/v{self.version}",
             case_id=case_id,
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=self.protocol_sha256,
             input_recipe_sha256=RECIPE_SHA256,
             rows=[],
             errors=[],
@@ -176,7 +196,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
         paths.update(
             {
                 key: str(directory / ("fresh-" + nonce + "-" + key))
-                for key in SIDE_FILES
+                for key in self.side_files
                 if key != "journal"
             }
         )
@@ -187,14 +207,24 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             arm=context["controller"]["case_id"],
             role="observer",
             input_recipe_sha256=RECIPE_SHA256,
-            code_sha256=accounting.sha256(helper_raw + b"\0" + recorder_raw),
+            code_sha256=accounting.sha256(
+                helper_raw
+                + b"\0"
+                + recorder_raw
+                + (
+                    b"\0"
+                    + Path(__file__).with_name("fresh_publication.py").read_bytes()
+                    if self.version == 2
+                    else b""
+                )
+            ),
             core_sha256=context["controller"]["core_image_sha256"],
             interpreter_sha256=accounting.sha256(self.g.PYTHON.resolve().read_bytes()),
         )
         config = dict(
-            schema_version="edge-fresh-source-observer-config/v1",
+            schema_version=f"edge-fresh-source-observer-config/v{self.version}",
             case_id=metadata["arm"],
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=self.protocol_sha256,
             input_recipe_sha256=RECIPE_SHA256,
             registration_sha256=context["controller"]["registration_sha256"],
             trust_sha256=context["controller"]["trust_sha256"],
@@ -211,7 +241,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             }
         )
         try:
-            observer = FreshObserverProcess(
+            observer = self.process_type(
                 self.g,
                 self.role_command,
                 config=path,
@@ -522,7 +552,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             nonlocal result
             try:
                 raw, _ = stable_read(Path(paths["input_calls"]), 4 * 1024 * 1024)
-                rows, tail = input_prefix(raw)
+                rows, tail = input_prefix(raw, version=self.version)
                 candidates = [
                     row
                     for row in rows
@@ -620,7 +650,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             }
         )
         paths = json.loads(context["files"]["observer-config.json"])["paths"]
-        for key, name in SIDE_FILES.items():
+        for key, name in self.side_files.items():
             try:
                 raw, meta = stable_read(
                     Path(paths[key]), 16384 if key == "context" else 4 * 1024 * 1024
@@ -640,7 +670,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
 
     def run_audit(self, context, stage):
         started = time.monotonic_ns()
-        status, receipt = audit_role(self.g, self.role_command)
+        status, receipt = audit_role(self.g, self.role_command, version=self.version)
         context["load"]["audits"].append(
             dict(
                 stage=stage,
@@ -676,9 +706,9 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
         receipts_raw = accounting.canonical(context["timestamps"])
         context["files"]["fresh-timestamp-receipts.json"] = receipts_raw
         result = dict(
-            schema_version="edge-fresh-input-manifest/v1",
+            schema_version=f"edge-fresh-input-manifest/v{self.version}",
             case_id=context["controller"]["case_id"],
-            protocol_sha256=PROTOCOL_SHA256,
+            protocol_sha256=self.protocol_sha256,
             input_recipe_sha256=RECIPE_SHA256,
             sha256=accounting.sha256(raw),
             bytes=len(raw),
@@ -821,7 +851,15 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
                 for key in ingress.keys() & writer.keys():
                     ingress[key] = copy.deepcopy(writer[key])
             if context.get("observer_process") and context["exported"]:
-                context["observer_process"].close()
+                try:
+                    context["observer_process"].close(
+                        original=sys.exc_info()[1] if self.version == 2 else None
+                    )
+                except BaseException as error:
+                    hook = getattr(self, "post_snapshot_error", None)
+                    if hook is not None:
+                        hook(case_id, error, stage="observer-close")
+                    raise
                 self.active_observer = None
 
     def export(self, case_id):
@@ -863,7 +901,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
         files["code-pins.json"] = accounting.canonical(
             dict(
                 source_revision=control["source_revision"],
-                protocol_sha256=PROTOCOL_SHA256,
+                protocol_sha256=self.protocol_sha256,
                 core_image_sha256=control["core_image_sha256"],
             )
         )
@@ -871,6 +909,12 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             files["witness-boundary.json"] = accounting.canonical(
                 accounting.witness_boundary(files["anchors-after.raw"])
             )
+        result = self.publish_case(case_id)
+        self.assert_case_result(case_id, result)
+
+    def publish_case(self, case_id):
+        context = self.contexts[case_id]
+        files = context["files"]
         directory = self.g.BASE / self.public_directory / case_id
         directory.mkdir(parents=True, exist_ok=False)
         assert set(files) <= self.core.FILES
@@ -884,9 +928,16 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             for name, raw in artifacts.items()
         }
         result = self.core.evaluate_fresh_source_case(artifacts, expected=pins)
-        result["observer"] = evaluate_fresh_observer_originals(artifacts, pins)
+        result["observer"] = evaluate_fresh_observer_originals(
+            artifacts, pins, version=self.version
+        )
         self.g.write(directory / "evaluation.json", accounting.canonical(result))
         self.results.append(result)
+        return result
+
+    def assert_case_result(self, case_id, result):
+        context = self.contexts[case_id]
+        control = context["controller"]
         if control["outcome"] == "failure":
             return
         assert result["finite"]["whole_input_complete"] is True, result
@@ -918,7 +969,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
         directory.mkdir(mode=0o755, exist_ok=False)
         declaration = accounting.canonical(
             dict(
-                protocol_sha256=PROTOCOL_SHA256,
+                protocol_sha256=self.protocol_sha256,
                 input_recipe_sha256=RECIPE_SHA256,
                 actual_input_hash_known=False,
             )
@@ -936,7 +987,7 @@ class FreshSourceObserveLab(old.FiniteLoadCostLab):
             g.live()
             g.stop()
             started = time.monotonic_ns()
-            _, receipt = audit_role(g, self.role_command)
+            _, receipt = audit_role(g, self.role_command, version=self.version)
             self.pre_audits.append(
                 dict(
                     stage="warmup_before",
@@ -979,10 +1030,10 @@ def finish(g):
     )
 
 
-def _fresh_phase_facts(raw, *, metadata, identity, complete):
+def _fresh_phase_facts(raw, *, metadata, identity, complete, version=1):
     rows, tail = old._rows(
         raw,
-        "edge-fresh-phase-timing-record/v1",
+        f"edge-fresh-phase-timing-record/v{version}",
         limit=4 * 1024 * 1024,
         max_rows=4096,
         allow_partial=True,
@@ -1062,14 +1113,23 @@ def _fresh_phase_facts(raw, *, metadata, identity, complete):
     )
 
 
-def evaluate_fresh_observer_originals(artifacts, expected):
+def evaluate_fresh_observer_originals(artifacts, expected, *, version=1):
     """Re-decode original pinned bytes; stored evaluation never supplies authority."""
     from dataclasses import fields
     from azazel_edge.outcome.input_control_stop import ObserverControlStop
     from signed_network_recording import decode_calls
     from signed_network_clock import qualify_clock
 
-    from azazel_edge.benchmark.fresh_source_observe import FILES as self_files
+    assert version in (1, 2)
+    profile = importlib.import_module(
+        "azazel_edge.benchmark.fresh_source_observe" + ("_v2" if version == 2 else "")
+    )
+    self_files = profile.FILES
+    side_files = (
+        dict(SIDE_FILES, publication="observer-publication.raw")
+        if version == 2
+        else SIDE_FILES
+    )
 
     result = dict(
         status="withheld",
@@ -1102,9 +1162,11 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             and type(observer) is dict
             and observer["error"] is None
         )
-        assert controller["schema_version"] == "edge-fresh-load-controller/v1"
+        assert controller["schema_version"] == f"edge-fresh-load-controller/v{version}"
         config = data("observer-config.json")
-        assert config["schema_version"] == "edge-fresh-source-observer-config/v1"
+        assert (
+            config["schema_version"] == f"edge-fresh-source-observer-config/v{version}"
+        )
         assert set(config) == {
             "schema_version",
             "case_id",
@@ -1134,7 +1196,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             config["case_id"] == arm
             and config["protocol_sha256"]
             == controller["protocol_sha256"]
-            == PROTOCOL_SHA256
+            == profile.PROTOCOL_SHA256
         )
         assert (
             config["input_recipe_sha256"]
@@ -1147,7 +1209,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
         identity, actor = observer["identity"], observer["actor"]
         assert (
             observer["bootstrap"]["schema_version"]
-            == "edge-fresh-source-observer-bootstrap/v1"
+            == f"edge-fresh-source-observer-bootstrap/v{version}"
         )
         assert observer["command_verified"] is True and observer["bootstrap"][
             "pid"
@@ -1172,7 +1234,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             == 0
         )
         assert identity["start_ticks"] == actor["start_ticks"] > 0
-        for key, filename in SIDE_FILES.items():
+        for key, filename in side_files.items():
             meta = observer["sidecars"][key]
             if artifacts[filename] is None:
                 assert expected[filename] is None and meta is None
@@ -1208,6 +1270,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             metadata=config["metadata"],
             identity=identity,
             complete=arm == "fresh-controls",
+            version=version,
         )
         if arm == "fresh-interrupted":
             assert (
@@ -1218,7 +1281,14 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             assert artifacts["observer-completion.json"] is None
             result["normal_completion"] = False
             result["fault_verified"] = False
-            _verify_fresh_fault_boundary(controller, observer, original)
+            _verify_fresh_fault_boundary(
+                controller, observer, original, version=version
+            )
+            if version == 2:
+                assert (
+                    profile.evaluate_publication(artifacts, expected=expected)["status"]
+                    == "qualified"
+                )
             result["fault_verified"] = True
             return result
         assert (
@@ -1229,7 +1299,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
         )
         completion = data("observer-completion.json")
         assert (
-            completion["schema_version"] == "edge-fresh-observer-completion/v1"
+            completion["schema_version"] == f"edge-fresh-observer-completion/v{version}"
             and completion["identity"] == identity
             and completion["metadata"] == config["metadata"]
         )
@@ -1297,15 +1367,19 @@ def evaluate_fresh_observer_originals(artifacts, expected):
         assert control["journal_policy_sha256"] == accounting.sha256(
             persistence_context(policy, "lo", 0.1).encode()
         )
-        for key in ("phase", "calls", "context", "input_calls"):
-            raw = original(SIDE_FILES[key])
+        for key in (
+            ("phase", "calls", "context", "input_calls", "publication")
+            if version == 2
+            else ("phase", "calls", "context", "input_calls")
+        ):
+            raw = original(side_files[key])
             assert completion["sidecars"][key] == dict(
                 bytes=len(raw), sha256=accounting.sha256(raw)
             )
         calls = decode_calls(original("observer-calls.raw"))
         contexts = old._rows(
             original("observer-context.raw"),
-            "edge-fresh-clock-context/v1",
+            f"edge-fresh-clock-context/v{version}",
             limit=16384,
             max_rows=2,
         )
@@ -1337,6 +1411,38 @@ def evaluate_fresh_observer_originals(artifacts, expected):
             controller_end=anchors["after"],
             recorded=calls,
         )
+        if version == 2:
+            closed = completion["publication"]
+            assert set(closed) == {
+                "joined",
+                "complete",
+                "incomplete",
+                "error",
+                "owner_close",
+            }
+            assert all(
+                closed[k] == v
+                for k, v in dict(
+                    joined=True, complete=True, incomplete=False, error=None
+                ).items()
+            )
+            owner = closed["owner_close"]
+            assert set(owner) == {
+                "start_ns",
+                "end_ns",
+                "process_cpu_start_ns",
+                "process_cpu_end_ns",
+                "thread_cpu_start_ns",
+                "thread_cpu_end_ns",
+            }
+            assert (
+                0 <= owner["start_ns"] <= owner["end_ns"]
+                and owner["end_ns"] - owner["start_ns"] <= 5_000_000_000
+            )
+            assert (
+                profile.evaluate_publication(artifacts, expected=expected)["status"]
+                == "qualified"
+            )
         if result["clock"]["status"] == "qualified":
             result["status"] = "qualified"
     except (
@@ -1353,7 +1459,7 @@ def evaluate_fresh_observer_originals(artifacts, expected):
     return result
 
 
-def _verify_fresh_fault_boundary(controller, observer, original):
+def _verify_fresh_fault_boundary(controller, observer, original, *, version=1):
     from azazel_edge.outcome.input_auth import SourceVerifier, TrustPolicy
     from azazel_edge.benchmark.source_witness import _source_tips, _verify_anchors
 
@@ -1452,7 +1558,7 @@ def _verify_fresh_fault_boundary(controller, observer, original):
         len(prefix) == checkpoint["size"]
         and accounting.sha256(prefix) == checkpoint["sha256"]
     )
-    rows, tail = input_prefix(prefix)
+    rows, tail = input_prefix(prefix, version=version)
     assert not tail
     handler = next(
         r["data"]
@@ -1479,3 +1585,393 @@ def _verify_fresh_fault_boundary(controller, observer, original):
         accounting.sha256(accounting.canonical(event_call["data"]["event"]))
         == callback["event_sha256"]
     )
+
+
+PROTOCOL_V2_SHA256 = "107595f5c7d85d410d65517a7f50bdb6e3dd3b31bdb4cffcd3936be98b65ea59"
+
+
+def exclusive_public(path, raw):
+    """One immutable Root artifact; no replace or post-seal update."""
+    with path.open("xb") as target:
+        target.write(raw)
+        target.flush()
+        os.fsync(target.fileno())
+
+
+def publication_commits(context, needs):
+    """Root read-only checks of pinned helper fsynced prefix reports."""
+    paths = json.loads(context["files"]["observer-config.json"])["paths"]
+    publication, _ = stable_read(Path(paths["publication"]), 1024 * 1024)
+    rows, tail = old._rows(
+        publication,
+        "edge-observer-publication/v1",
+        limit=1024 * 1024,
+        max_rows=4096,
+        allow_partial=True,
+    )
+    config = json.loads(context["files"]["observer-config.json"])
+    assert (
+        rows[0]["kind"] == "header"
+        and rows[0]["data"]["metadata"] == config["metadata"]
+        and rows[0]["data"]["identity"] == context["load"]["observer"]["identity"]
+    )
+    selected = {}
+    for stream, seq in needs.items():
+        raw, meta = stable_read(Path(paths[stream]), 4 * 1024 * 1024)
+        commits = [
+            row
+            for row in rows
+            if row["kind"] == "commit"
+            and row["data"]["stream"] == stream
+            and row["data"]["last_seq"] >= seq
+        ]
+        if not commits:
+            return None
+        commit = commits[-1]["data"]
+        assert (
+            commit["bytes"] <= len(raw)
+            and accounting.sha256(raw[: commit["bytes"]]) == commit["sha256"]
+        )
+        obj = meta["object"]
+        assert commit["object"] == dict(
+            device=obj["device"],
+            inode=obj["inode"],
+            owner_uid=obj["owner_uid"],
+            mode=obj["mode"],
+            link_count=obj["nlink"],
+        )
+        assert obj["owner_uid"] == 61002 and obj["nlink"] == 1
+        assert (
+            commit["write"]["start_ns"]
+            <= commit["write"]["end_ns"]
+            <= commit["fsync"]["start_ns"]
+            <= commit["fsync"]["end_ns"]
+            <= time.monotonic_ns()
+        )
+        assert (
+            type(commit["worker_native_tid"]) is int and commit["worker_native_tid"] > 0
+        )
+        selected[stream] = dict(size=commit["bytes"], sha256=commit["sha256"])
+    prefix = publication[: publication.rfind(b"\n") + 1]
+    return selected, dict(size=len(prefix), sha256=accounting.sha256(prefix))
+
+
+class FreshSourceObserveV2Lab(FreshSourceObserveLab):
+    version = 2
+    protocol_name = "fresh-source-observe-protocol-v2.json"
+    protocol_digest = PROTOCOL_V2_SHA256
+    public_name = "fresh-source-observe-v2-public"
+    core_module = "azazel_edge.benchmark.fresh_source_observe_v2"
+    process_type = FreshObserverProcessV2
+    side_files = FreshObserverProcessV2.side_files
+
+    def __init__(self, g, role_command):
+        super().__init__(g, role_command)
+        self.run_ref = secrets.token_hex(16)
+        self.run_started_ns = time.monotonic_ns()
+        self.source_revision = (g.SRC / "SOURCE_REVISION").read_text().strip()
+        self.outer_errors = []
+        self.case_dispositions = {
+            case: dict(
+                case_id=case,
+                state="not_run",
+                snapshot_manifest_sha256=None,
+                evaluation_sha256=None,
+                error=None,
+                cleanup_errors=[],
+            )
+            for case in CASES
+        }
+
+    def ready(self, context, paths):
+        super().ready(context, paths)
+
+        def committed():
+            try:
+                result = publication_commits(
+                    context,
+                    {"calls": context["fresh"]["readiness"]["first_sample_seq"]},
+                )
+                if result is None:
+                    return False
+                streams, checkpoint = result
+                context["fresh"]["readiness"].update(
+                    clock_calls_checkpoint=streams["calls"],
+                    publication_checkpoint=checkpoint,
+                    observed_ns=time.monotonic_ns(),
+                )
+                return True
+            except (OSError, ValueError, KeyError, AssertionError):
+                return False
+
+        self.g.wait_for(committed)
+
+    def interrupted_barrier(self, context, observation):
+        super().interrupted_barrier(context, observation)
+        paths = json.loads(context["files"]["observer-config.json"])["paths"]
+        selected = context["fresh"]["interrupt_boundary"]
+
+        def committed():
+            try:
+                raw, _ = stable_read(Path(paths["input_calls"]), 4 * 1024 * 1024)
+                rows, _ = input_prefix(raw, version=2)
+                ret = next(
+                    row
+                    for row in rows
+                    if row["kind"] == "input_return"
+                    and row["data"]["input_id"] == selected["handler_id"]
+                )
+                result = publication_commits(
+                    context,
+                    {"calls": selected["event_call_id"], "input_calls": ret["seq"]},
+                )
+                if result is None:
+                    return False
+                streams, checkpoint = result
+                now = time.monotonic_ns()
+                selected.update(
+                    input_calls_checkpoint=streams["input_calls"],
+                    publication_checkpoint=checkpoint,
+                    observed_ns=now,
+                )
+                context["load"]["observer"]["fault_boundary"]["observed_ns"] = now
+                return True
+            except (OSError, ValueError, KeyError, AssertionError, StopIteration):
+                return False
+
+        self.g.wait_for(committed)
+
+    def collect_observer(self, context):
+        observer = context.get("observer_process")
+        if observer is None:
+            return
+        observer.retain_drains()
+        context["files"].update(
+            {
+                "observer-stdout.raw": observer.stdout,
+                "observer-stderr.raw": observer.stderr,
+            }
+        )
+        paths = json.loads(context["files"]["observer-config.json"])["paths"]
+        for key, name in self.side_files.items():
+            try:
+                raw, meta = stable_read(Path(paths[key]), self.core.file_limit(name))
+                context["files"][name] = raw
+                observer.receipt["sidecars"][key] = dict(
+                    before=meta["object"],
+                    after=meta["object"],
+                    sha256=meta["sha256"],
+                    size=len(raw),
+                )
+            except FileNotFoundError:
+                pass
+        context["load"]["resources"]["observer_after"] = old.resource(
+            observer.receipt["actor"]
+        )
+
+    def publish_case(self, case_id):
+        context = self.contexts[case_id]
+        files = context["files"]
+        directory = self.g.BASE / self.public_directory / case_id
+        directory.mkdir(parents=True, exist_ok=False)
+        assert set(files) <= self.core.FILES
+        for name, raw in files.items():
+            if raw is not None:
+                exclusive_public(directory / name, raw)
+        context["exported"] = True
+        artifacts = {name: files.get(name) for name in self.core.FILES}
+        pins = {
+            name: accounting.sha256(raw) if raw is not None else None
+            for name, raw in artifacts.items()
+        }
+        try:
+            result = self.core.evaluate_fresh_source_case(artifacts, expected=pins)
+            result["observer"] = evaluate_fresh_observer_originals(
+                artifacts, pins, version=2
+            )
+            evaluation = accounting.canonical(result)
+            exclusive_public(directory / "evaluation.json", evaluation)
+            files["evaluation.json"] = evaluation
+            pins["evaluation.json"] = accounting.sha256(evaluation)
+            snapshot = dict(
+                schema_version="edge-fresh-snapshot/v1",
+                case_id=case_id,
+                run_ref=self.run_ref,
+                protocol_sha256=self.protocol_sha256,
+                source_revision=self.source_revision,
+                files=pins,
+            )
+            snapshot_raw = accounting.canonical(snapshot)
+            exclusive_public(
+                directory.parent / (case_id + "-snapshot.json"), snapshot_raw
+            )
+            context.update(
+                snapshot_published=True, snapshot=snapshot, snapshot_raw=snapshot_raw
+            )
+            self.case_dispositions[case_id].update(
+                snapshot_manifest_sha256=accounting.sha256(snapshot_raw),
+                evaluation_sha256=pins["evaluation.json"],
+            )
+            self.results.append(result)
+            return result
+        except BaseException as error:
+            self.post_snapshot_error(case_id, error, stage="snapshot-publication")
+            raise
+
+    def assert_case_result(self, case_id, result):
+        try:
+            super().assert_case_result(case_id, result)
+            state = (
+                "accepted"
+                if self.contexts[case_id]["controller"]["outcome"] == "collected"
+                else "collection_failed"
+            )
+            self.case_dispositions[case_id]["state"] = state
+            if state == "collection_failed":
+                actual = self.contexts[case_id]["controller"].get("error")
+                if actual is not None:
+                    self.case_dispositions[case_id]["error"] = {
+                        "type": actual["type"],
+                        "message": actual["message"][:4096],
+                    }
+        except BaseException as error:
+            self.post_snapshot_error(case_id, error, stage="qualification")
+            raise
+
+    def post_snapshot_error(self, case_id, error, *, stage, cleanup_errors=None):
+        entry = self.case_dispositions[case_id]
+        context = self.contexts.get(case_id, {})
+        if not context.get("snapshot_published"):
+            entry["state"] = "collection_failed"
+        elif stage in ("qualification", "post-export"):
+            if entry["state"] not in (
+                "rejected",
+                "cleanup_failed",
+                "collection_failed",
+            ):
+                entry["state"] = "rejected"
+        elif entry["state"] not in ("rejected", "collection_failed"):
+            entry["state"] = "cleanup_failed"
+        entry["error"] = entry["error"] or old.error_value(error)
+        if stage not in ("qualification", "post-export"):
+            records = [dict(stage=stage, **old.error_value(error))] + [
+                dict(stage=stage, **item) for item in (cleanup_errors or [])
+            ]
+            for item in records:
+                if item not in entry["cleanup_errors"]:
+                    entry["cleanup_errors"].append(item)
+
+    def release_case_reference(self, case_id, *, original=None):
+        try:
+            super().release_case_reference(case_id, original=original)
+        except BaseException as error:
+            self.post_snapshot_error(
+                case_id,
+                error,
+                stage="manager-reference",
+                cleanup_errors=getattr(error, "manager_cleanup_errors", []),
+            )
+            raise
+
+    def write_disposition(self):
+        value = dict(
+            schema_version="edge-fresh-run-disposition/v1",
+            protocol_sha256=self.protocol_sha256,
+            source_revision=self.source_revision,
+            run_ref=self.run_ref,
+            started_ns=self.run_started_ns,
+            finished_ns=time.monotonic_ns(),
+            cases=[self.case_dispositions[case] for case in CASES],
+            errors=self.outer_errors,
+        )
+        raw = accounting.canonical(value)
+        return raw
+
+    def replay_run(self, disposition):
+        cases, snapshots, casepins, snapshotpins = {}, {}, {}, {}
+        for case_id in CASES:
+            context = self.contexts.get(case_id)
+            snap = context.get("snapshot") if context else None
+            directory = self.g.BASE / self.public_directory / case_id
+            slots = {}
+            for name in self.core.FILES:
+                try:
+                    slots[name] = stable_read(
+                        directory / name, self.core.file_limit(name)
+                    )[0]
+                except FileNotFoundError:
+                    slots[name] = None
+            cases[case_id] = slots
+            try:
+                snapshots[case_id] = stable_read(
+                    directory.parent / (case_id + "-snapshot.json"), 131072
+                )[0]
+            except FileNotFoundError:
+                snapshots[case_id] = None
+            casepins[case_id] = (
+                snap["files"] if snap else dict.fromkeys(self.core.FILES)
+            )
+            original_snapshot = context.get("snapshot_raw") if context else None
+            snapshotpins[case_id] = (
+                accounting.sha256(original_snapshot)
+                if original_snapshot is not None
+                else None
+            )
+        return self.core.evaluate_fresh_run_evidence(
+            cases,
+            snapshots,
+            disposition,
+            expected=dict(
+                cases=casepins,
+                snapshots=snapshotpins,
+                disposition=accounting.sha256(disposition),
+            ),
+        )
+
+    def exercise(self):
+        failure = None
+        try:
+            super().exercise()
+        except BaseException as error:
+            failure = error
+            self.outer_errors.append(dict(stage="run", **old.error_value(error)))
+            raise
+        finally:
+            try:
+                disposition = self.write_disposition()
+                replay = self.replay_run(disposition)
+                if replay["status"] != "qualified" and failure is None:
+                    self.outer_errors.append(
+                        dict(
+                            stage="final-replay",
+                            type="AssertionError",
+                            message=str(replay["reasons"])[:4096],
+                        )
+                    )
+                    disposition = self.write_disposition()
+                    replay = self.replay_run(disposition)
+                exclusive_public(
+                    self.g.BASE / self.public_directory / "disposition.json",
+                    disposition,
+                )
+                actual_disposition = stable_read(
+                    self.g.BASE / self.public_directory / "disposition.json", 131072
+                )[0]
+                assert actual_disposition == disposition, (
+                    "published disposition changed"
+                )
+                self.g.record(
+                    "fresh-v2-final-replay",
+                    status=replay["status"],
+                    reasons=replay["reasons"],
+                )
+                if failure is None:
+                    assert replay["status"] == "qualified", replay
+            except BaseException as error:
+                if failure is None:
+                    raise
+                self.g.record(
+                    "fresh-v2-disposition-failure",
+                    error=old.error_value(error),
+                    primary_error_preserved=True,
+                )

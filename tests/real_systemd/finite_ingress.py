@@ -334,7 +334,15 @@ class FiniteIngressLab(CloseReceiptLab):
                 )
         if failure is not None:
             context = self.contexts.get(case_id)
-            if (
+            hook = getattr(self, "post_snapshot_error", None)
+            if hook is not None and context is not None and context["exported"]:
+                hook(
+                    case_id,
+                    failure,
+                    stage="manager-reference",
+                    cleanup_errors=cleanup_errors,
+                )
+            if hook is None and (
                 context is not None
                 and context["exported"]
                 and "failure.json" not in context["files"]

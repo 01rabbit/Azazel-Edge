@@ -150,6 +150,7 @@ def main():
             "readonly-source",
             "finite-load",
             "fresh-source",
+            "fresh-source-v2",
         ],
     )
     parser.add_argument("--create", action="store_true")
@@ -161,10 +162,16 @@ def main():
     args = parser.parse_args()
     if args.mode == "observer":
         observer(args.create)
-    elif args.mode == "fresh-source":
+    elif args.mode in ("fresh-source", "fresh-source-v2"):
         from fresh_source_observer import main as fresh_source_main
 
-        fresh_source_main(args.challenge, args.config, args.config_sha256, args.create)
+        fresh_source_main(
+            args.challenge,
+            args.config,
+            args.config_sha256,
+            args.create,
+            version=2 if args.mode == "fresh-source-v2" else 1,
+        )
     elif args.mode == "finite-load":
         from finite_load_observer import main as finite_load_main
 
