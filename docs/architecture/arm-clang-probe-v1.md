@@ -47,3 +47,32 @@ must drive actual fixture creation, probe publication, and public-index teardown
 BTF/compiler execution and the unprivileged readback subprocess may be mocked.
 Compiler selections, inputs, deadlines, native assertions and nine actual cases
 remain unchanged.
+
+## Exact optional diagnostic readback contract
+
+Prospective correction after v3 source acquisition succeeded and ARM job137673131882
+passed all nine cases but failed public-reader teardown: the original reader's
+closed root allowlist omitted the new diagnostic. Keep both failed trials and
+this teardown failure unchanged. Add ONLY optional `toolchain-probe.json` to that
+allowlist. Root retains its SHA256 from the exact bytes exclusively written and
+fsynced by approved_clang in fixture-local state; pass that retained pin as the
+reader's third argument, or literal `-` if publication never completed. `-`
+requires the slot absent; a digest requires the slot present with exactly matching
+bytes. Do not derive a replacement pin from reader-time bytes or silently accept
+an unpinned diagnostic. Probe publication sets mode0444 before recording its pin.
+The fixture's two-value root/inventory iteration remains unchanged.
+
+The diagnostic reader uses the existing O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK
+regular-file, mode0444, single-link and1MiB bound; no file write or overwrite.
+Require canonical JSON+LF and exact edge-arm-clang-probe/v1 fields as above;
+selected_path is /usr/bin/clang, optional paths/digest/machine and stage objects
+remain nullable for actual early failures. Paths are strings<=4096, hashes64lower
+hex, machine null or integer0..65535. Command stages have exact keys, string argv,
+nonnegative ordered monotonic bounds, timeout_seconds10, nullable integer return,
+strict booleans, bounded base64 prefixes<=64KiB and matching total/truncation facts,
+nullable typed bounded errors. Macro stage additionally pins exact stdin SHA.
+No advisory/kernel authority follows from this diagnostic. Unknown root slots,
+changed pins, symlinks, malformed schema or absent required pin fail strictly.
+Synthetic composed tests execute the REAL PUBLIC_READER body with only the local
+UID assertion stubbed when needed, rather than mocking every readback success;
+cover fixture/probe/index teardown, pre-probe absence and strict negative cases.
