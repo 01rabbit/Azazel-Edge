@@ -78,6 +78,14 @@ def _records(stream, raw):
 
 
 def _root_object(meta):
+    _need(
+        type(meta) is dict
+        and all(
+            _uint(meta[k], 2**64)
+            for k in ("device", "inode", "owner_uid", "mode", "nlink")
+        ),
+        "typed_Root_stream_object",
+    )
     return dict(
         device=meta["device"],
         inode=meta["inode"],
@@ -122,6 +130,12 @@ def evaluate_publication(artifacts, *, expected):
             and all(v["case_id"] == control["case_id"] for v in (config, load)),
             "explicit_v2_publication_context",
         )
+        observer = load["observer"]
+        _need(
+            all(_uint(observer[k], 2**64) for k in ("started_ns", "finished_ns"))
+            and observer["started_ns"] <= observer["finished_ns"],
+            "actual_observer_lifetime",
+        )
         b = raw("observer-publication.raw")
         rows, tail, issue = legacy._records(
             b, schema="edge-observer-publication/v1", convention="full", maximum=4096
@@ -145,6 +159,7 @@ def evaluate_publication(artifacts, *, expected):
         result["reasons"].append("publication_prefix:" + issue)
     commits, footer, worker_tid, previous_end = [], None, None, 0
     failed = False
+    life = load["observer"]
     offset = len(wire(rows[0]))
     for row in rows[1:]:
         offset += len(wire(row))
@@ -194,6 +209,11 @@ def evaluate_publication(artifacts, *, expected):
                     <= d["fsync"]["end_ns"],
                     "write_then_fsync",
                 )
+                _need(
+                    life["started_ns"] <= d["write"]["start_ns"]
+                    and d["fsync"]["end_ns"] <= life["finished_ns"],
+                    "publication_inside_actual_observer_lifetime",
+                )
                 prior = result["streams"][stream]
                 first = (
                     (prior["last_seq"] + 1)
@@ -220,6 +240,30 @@ def evaluate_publication(artifacts, *, expected):
                     and decoded[-1]["seq"] == d["last_seq"]
                     and (prior is None or d["bytes"] > prior["bytes"]),
                     "exact_committed_stream_prefix",
+                )
+                known_returns = []
+                for original in decoded:
+                    body = original["data"]
+                    if stream == "calls" and original["kind"] in (
+                        "sample",
+                        "event",
+                        "finalize",
+                    ):
+                        stamp = body["clock_after"]["monotonic_after_ns"]
+                    elif stream == "input_calls" and original["kind"] in (
+                        "input_return",
+                        "input_raise",
+                    ):
+                        stamp = body["end_ns"]
+                    elif stream == "input_calls" and original["kind"] == "input_intent":
+                        stamp = body["start_ns"]
+                    else:
+                        continue
+                    _need(_uint(stamp, 2**64), "original_queued_row_time")
+                    known_returns.append(stamp)
+                _need(
+                    not known_returns or max(known_returns) <= d["write"]["start_ns"],
+                    "publication_after_original_row_creation",
                 )
                 _fields(d["object"], OBJECT)
                 obj = d["object"]
@@ -261,7 +305,9 @@ def evaluate_publication(artifacts, *, expected):
 
     def barrier(value, *, before_ns, need_input):
         _need(
-            _uint(value["observed_ns"], 2**64) and _uint(before_ns, 2**64),
+            _uint(value["observed_ns"], 2**64)
+            and _uint(before_ns, 2**64)
+            and life["started_ns"] <= value["observed_ns"] <= life["finished_ns"],
             "actual_barrier_observation_time",
         )
         checkpoint = value["publication_checkpoint"]
@@ -326,11 +372,15 @@ def evaluate_publication(artifacts, *, expected):
                 value["handler_id"] * 2 + 1,
             )
             returned = next(
-                r
-                for r in rr
-                if r["kind"] == "input_return"
-                and r["data"]["input_id"] == value["handler_id"]
+                (
+                    r
+                    for r in rr
+                    if r["kind"] == "input_return"
+                    and r["data"]["input_id"] == value["handler_id"]
+                ),
+                None,
             )
+            _need(returned is not None, "barrier_exact_handler_return")
             _need(
                 any(
                     c["call_seq"] == value["event_call_id"]
@@ -422,6 +472,11 @@ def evaluate_publication(artifacts, *, expected):
             "genuine_main_join_result",
         )
         _clock(owner["owner_close"])
+        _need(
+            life["started_ns"] <= owner["owner_close"]["start_ns"]
+            and owner["owner_close"]["end_ns"] <= life["finished_ns"],
+            "whole_close_inside_observer_lifetime",
+        )
         _need(
             owner["owner_close"]["end_ns"] - owner["owner_close"]["start_ns"]
             <= 5000000000
@@ -557,8 +612,13 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
             type(d["errors"]) is list and len(d["errors"]) <= 32, "bounded_run_errors"
         )
         for error in d["errors"]:
-            _typed_error(error)
-            _need(error is not None, "actual_run_error")
+            _fields(error, {"stage", "type", "message"})
+            _need(
+                type(error["stage"]) is str
+                and error["stage"] in ("run", "final-replay"),
+                "actual_outer_error_stage",
+            )
+            _typed_error({k: error[k] for k in ("type", "message")})
         result["disposition"] = d
         _need(
             type(d["cases"]) is list and len(d["cases"]) == len(CASES),
@@ -663,8 +723,27 @@ def evaluate_fresh_run_evidence(cases, snapshots, disposition, *, expected):
                         "sealed_original_changed:" + name,
                     )
             _need(
-                item["evaluation_sha256"] == pins["evaluation.json"],
-                "external_evaluation_pin",
+                type(a["evaluation.json"]) is bytes
+                and _hash(pins["evaluation.json"])
+                and item["evaluation_sha256"] == pins["evaluation.json"],
+                "external_positive_evaluation_pin",
+            )
+            original_evaluation = legacy._parse(a["evaluation.json"])
+            _need(
+                original_evaluation["schema_version"] == "edge-fresh-source-analysis/v2"
+                and original_evaluation["case_id"] == case,
+                "sealed_evaluation_identity",
+            )
+            case_control = legacy._parse(a["close-controller.json"])
+            _need(
+                all(
+                    _uint(case_control[k], 2**64) for k in ("started_ns", "finished_ns")
+                )
+                and d["started_ns"]
+                <= case_control["started_ns"]
+                <= case_control["finished_ns"]
+                <= d["finished_ns"],
+                "case_inside_actual_run_interval",
             )
             code = legacy._parse(a["code-pins.json"])
             _need(

@@ -59,8 +59,6 @@ def test_missing_run_disposition_withholds_but_preserves_unknown_leaves():
     assert not any(r["authority_flags"].values())
 
 
-
-
 @pytest.fixture(scope="module")
 def controls():
     from fresh_source_data_v2 import make_fresh_case
@@ -230,7 +228,14 @@ def test_outer_failure_preserves_identical_verified_leaf_facts(sealed_run, state
 
 @pytest.mark.parametrize(
     "mutation",
-    ["null_slot", "snapshot_hash", "source_revision", "case_order", "false_accepted"],
+    [
+        "null_slot",
+        "snapshot_hash",
+        "source_revision",
+        "case_order",
+        "false_accepted",
+        "run_interval",
+    ],
 )
 def test_bad_immutable_envelope_never_accepts(sealed_run, mutation):
     run = deepcopy(sealed_run)
@@ -245,6 +250,8 @@ def test_bad_immutable_envelope_never_accepts(sealed_run, mutation):
             d["source_revision"] = "f" * 40
         elif mutation == "case_order":
             d["cases"].reverse()
+        elif mutation == "run_interval":
+            d["finished_ns"] = d["started_ns"]
         else:
             d["cases"][0]["error"] = dict(type="OSError", message="failed")
         run["disposition"] = fresh.wire(d)
@@ -267,3 +274,117 @@ def test_not_run_assignment_is_unknown_and_prevents_whole_acceptance(sealed_run)
     run["expected"]["disposition"] = old._sha(run["disposition"])
     r = fresh.evaluate_fresh_run_evidence(**run)
     assert r["status"] == "withheld" and r["cases"][case]["callback_facts"] is None
+
+
+def test_sealed_evaluation_cannot_be_absent_even_with_matching_null_pins(sealed_run):
+    run = deepcopy(sealed_run)
+    d = json.loads(run["disposition"])
+    for i, case in enumerate(fresh.CASES):
+        run["cases"][case]["evaluation.json"] = None
+        run["expected"]["cases"][case]["evaluation.json"] = None
+        snap = json.loads(run["snapshots"][case])
+        snap["files"]["evaluation.json"] = None
+        run["snapshots"][case] = fresh.wire(snap)
+        pin = old._sha(run["snapshots"][case])
+        run["expected"]["snapshots"][case] = pin
+        d["cases"][i].update(snapshot_manifest_sha256=pin, evaluation_sha256=None)
+    run["disposition"] = fresh.wire(d)
+    run["expected"]["disposition"] = old._sha(run["disposition"])
+    r = fresh.evaluate_fresh_run_evidence(**run)
+    assert r["status"] == "withheld" and any(
+        "positive_evaluation" in x for x in r["reasons"]
+    )
+
+
+def test_boolean_root_descriptor_nlink_is_not_integer_one(controls):
+    a = dict(controls)
+    load = json.loads(a["load-controller.json"])
+    for when in ("before", "after"):
+        load["observer"]["sidecars"]["calls"][when]["nlink"] = True
+    a["load-controller.json"] = fresh.wire(load)
+    r = analyze(a)
+    assert r["status"] == "withheld" and len(r["callback_facts"]) == 5
+
+
+@pytest.mark.parametrize("start", [0, 300000000])
+def test_commit_cannot_precede_actor_or_contained_original_callback(controls, start):
+    def mutate(rows):
+        c = next(r["data"] for r in rows if r["kind"] == "commit")
+        c["write"].update(start_ns=start, end_ns=start + 1)
+        c["fsync"].update(start_ns=start + 2, end_ns=start + 3)
+
+    r = analyze(mutate_publication(controls, mutate))
+    assert r["status"] == "withheld"
+
+
+def test_missing_exact_return_identity_withholds_without_stop_iteration():
+    from fresh_source_data_v2 import make_fresh_case
+
+    a = make_fresh_case("fresh-interrupted")
+    rows = [json.loads(line) for line in a["observer-input-calls.raw"].splitlines()]
+    next(r for r in rows if r["kind"] == "input_return")["data"]["input_id"] = 2
+    lines = []
+    previous = "0" * 64
+    for row in rows:
+        row["prev"] = previous
+        line = fresh.wire(row)
+        lines.append(line)
+        previous = old._sha(line)
+    raw = b"".join(lines)
+    a["observer-input-calls.raw"] = raw
+    c = json.loads(a["fresh-controller.json"])
+    c["input_calls_sha256"] = old._sha(raw)
+    c["interrupt_boundary"]["input_calls_checkpoint"] = dict(
+        size=len(raw), sha256=old._sha(raw)
+    )
+    a["fresh-controller.json"] = fresh.wire(c)
+    load = json.loads(a["load-controller.json"])
+    meta = load["observer"]["sidecars"]["input_calls"]
+    meta.update(size=len(raw), sha256=old._sha(raw))
+    for when in ("before", "after"):
+        meta[when]["size"] = len(raw)
+    a["load-controller.json"] = fresh.wire(load)
+
+    def mutate(rows):
+        for row in rows:
+            if row["kind"] == "commit" and row["data"]["stream"] == "input_calls":
+                row["data"].update(bytes=len(raw), sha256=old._sha(raw))
+
+    a = mutate_publication(a, mutate)
+    r = fresh.evaluate_publication(
+        a, expected={n: old._sha(v) if v is not None else None for n, v in a.items()}
+    )
+    assert r["status"] == "withheld" and r["interrupt_verified"] is False
+    assert any("exact_handler_return" in x for x in r["reasons"])
+
+
+@pytest.mark.parametrize("stage", ["run", "final-replay"])
+def test_staged_outer_failure_validates_failed_envelope_without_erasing_leaves(
+    sealed_run, stage
+):
+    run = deepcopy(sealed_run)
+    d = json.loads(run["disposition"])
+    d["errors"] = [dict(stage=stage, type="OSError", message="actual run-stage error")]
+    run["disposition"] = fresh.wire(d)
+    run["expected"]["disposition"] = old._sha(run["disposition"])
+    r = fresh.evaluate_fresh_run_evidence(**run)
+    assert r["status"] == "withheld" and r["disposition"] == d
+    assert all(v["status"].startswith("bound_") for v in r["cases"].values())
+
+
+@pytest.mark.parametrize("field", ["started_ns", "finished_ns", "stop_requested_ns"])
+def test_boolean_observer_lifetime_or_signal_bound_is_rejected(controls, field):
+    a = dict(controls)
+    load = json.loads(a["load-controller.json"])
+    load["observer"][field] = True
+    a["load-controller.json"] = fresh.wire(load)
+    # stop_requested_ns is used only by interrupted profiles; controlnormalclose
+    # still has independent exact clock/fault validation outside this leaf.
+    if field == "stop_requested_ns":
+        from fresh_source_data_v2 import make_fresh_case
+
+        a = make_fresh_case("fresh-interrupted")
+        load = json.loads(a["load-controller.json"])
+        load["observer"][field] = True
+        a["load-controller.json"] = fresh.wire(load)
+    assert analyze(a)["status"] == "withheld"
