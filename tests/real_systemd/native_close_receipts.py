@@ -800,6 +800,11 @@ class CloseReceiptLab:
     def retain_failures(self, error):
         for case_id, context in self.contexts.items():
             if context["exported"]:
+                hook = getattr(self, "post_snapshot_error", None)
+                if hook is not None:
+                    if not context.get("analysis_accepted"):
+                        hook(case_id, error, stage="post-export")
+                    continue
                 if (
                     not context.get("analysis_accepted")
                     and "failure.json" not in context["files"]

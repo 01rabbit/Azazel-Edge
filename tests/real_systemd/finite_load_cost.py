@@ -50,10 +50,11 @@ def error_value(error):
     return dict(type=type(error).__name__, message=str(error)[:4096])
 
 
-def stage_observer_config(g, nonce, raw):
+def stage_observer_config(g, nonce, raw, *, prefix="load"):
     """Root-only runtime ancestors, exclusive immutable config, existing read grant."""
     from azazel_edge.outcome.input_auth import open_parent, read_regular
 
+    assert prefix in ("load", "fresh")
     assert re.fullmatch("[0-9a-f]{32}", nonce) and len(raw) <= 65536
     directory = g.PYTHON.parent.parent / "finite-load-configs"
     directory.mkdir(mode=0o555, exist_ok=True)
@@ -63,7 +64,7 @@ def stage_observer_config(g, nonce, raw):
         and info.st_uid == 0
         and stat.S_IMODE(info.st_mode) == 0o555
     )
-    path = directory / ("load-" + nonce + "-config.json")
+    path = directory / (prefix + "-" + nonce + "-config.json")
     parent, name = open_parent(path, trusted_owner=0)
     fd = None
     try:
@@ -231,6 +232,11 @@ class BoundedDrain:
 
 
 class ObserverProcess:
+    role_mode = "finite-load"
+    bootstrap_schema = "edge-finite-load-observer-bootstrap/v1"
+    go_schema = "edge-finite-load-observer-go/v1"
+    side_files = SIDE_FILES
+
     def __init__(
         self, g, role_command, *, config=None, config_sha256=None, create=False
     ):
@@ -258,7 +264,7 @@ class ObserverProcess:
             stderr_bytes=None,
             stdout_truncated=None,
             stderr_truncated=None,
-            sidecars=dict.fromkeys(SIDE_FILES),
+            sidecars=dict.fromkeys(self.side_files),
             stdout_eof=None,
             stderr_eof=None,
             drain_errors=[],
@@ -272,12 +278,12 @@ class ObserverProcess:
             args += ["--config", str(config), "--config-sha256", config_sha256]
         if create:
             args += ["--create"]
-        command = role_command("observer", "finite-load", *args, unit=unit)
+        command = role_command("observer", self.role_mode, *args, unit=unit)
         expected = [
             str(g.PYTHON.with_name("edge-observe")),
             "-I",
             str(g.SRC / "tests/real_systemd/role_probe.py"),
-            "finite-load",
+            self.role_mode,
             *args,
         ]
         self.expected_argv = [v.encode() for v in expected]
@@ -315,7 +321,7 @@ class ObserverProcess:
                 "clock_resolutions",
             }
             assert (
-                boot["schema_version"] == "edge-finite-load-observer-bootstrap/v1"
+                boot["schema_version"] == self.bootstrap_schema
                 and boot["challenge"] == challenge
             )
             props = self.properties("MainPID", "InvocationID")
@@ -354,7 +360,7 @@ class ObserverProcess:
             self.process.stdin.write(
                 accounting.canonical(
                     dict(
-                        schema_version="edge-finite-load-observer-go/v1",
+                        schema_version=self.go_schema,
                         challenge=challenge,
                         identity=identity,
                     )

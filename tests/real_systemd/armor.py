@@ -144,6 +144,8 @@ def install_policy():
 NATIVE = False
 FINITE_INGRESS = None
 FINITE_LOAD_COST = False
+FRESH_SOURCE_OBSERVE = False
+FRESH_SOURCE_VERSION = 1
 
 
 def configure():
@@ -151,10 +153,10 @@ def configure():
         # Enrolled bytes pin this optional protocol only in the native flavor.
         g.ENV["AZAZEL_LIVE_ORIGIN_ACCOUNTING"] = "v1"
         g.ENV["AZAZEL_LIVE_ORIGIN_CLOSE_RECEIPTS"] = "v1"
-    if FINITE_INGRESS or FINITE_LOAD_COST:
+    if FINITE_INGRESS or FINITE_LOAD_COST or FRESH_SOURCE_OBSERVE:
         g.ENV["AZAZEL_LIVE_ORIGIN_INGRESS_ACCOUNTING"] = "v1"
         g.ENV["AZAZEL_FORWARD_LOG"] = "1" if FINITE_INGRESS == "fault" else "0"
-    if FINITE_LOAD_COST:
+    if FINITE_LOAD_COST or FRESH_SOURCE_OBSERVE:
         g.ENV["AZAZEL_LIVE_ORIGIN_LOAD_COST"] = "v1"
     original = g.write
 
@@ -196,7 +198,18 @@ def configure():
         capture_apparmor_profile="edge400-capture",
         **({"native_apparmor_profile": "edge400-native"} if NATIVE else {}),
     )
-    if FINITE_LOAD_COST:
+    if FRESH_SOURCE_OBSERVE:
+        from fresh_source_observe import audit_role as fresh_audit_role
+
+        def fresh_audit(create=False):
+            status, receipt = fresh_audit_role(
+                g, role_command, create, version=FRESH_SOURCE_VERSION
+            )
+            g.record("fresh-source-independent-audit", receipt=receipt)
+            return status
+
+        g.observer = fresh_audit
+    elif FINITE_LOAD_COST:
         from finite_load_cost import audit_role
 
         def load_audit(create=False):
@@ -477,6 +490,9 @@ def main():
     parser.add_argument("--receipt-fault", choices=["receiver-kill"])
     parser.add_argument("--finite-ingress", choices=["main", "fault"])
     parser.add_argument("--finite-load-cost", action="store_true")
+    parser.add_argument("--fresh-source-observe", action="store_true")
+    parser.add_argument("--fresh-source-observe-v2", action="store_true")
+    parser.add_argument("--fresh-source-observe-v3", action="store_true")
     args = parser.parse_args()
     if args.receipt_fault and not args.native_core:
         parser.error("receipt fault requires the existing native-core profile")
@@ -488,10 +504,44 @@ def main():
         not args.native_core or args.receipt_fault or args.finite_ingress
     ):
         parser.error("finite load requires its separate native-core variant")
-    global NATIVE, FINITE_INGRESS, FINITE_LOAD_COST
+    if (
+        args.fresh_source_observe
+        or args.fresh_source_observe_v2
+        or args.fresh_source_observe_v3
+    ) and (
+        not args.native_core
+        or args.finite_load_cost
+        or args.finite_ingress
+        or args.receipt_fault
+        or sum(
+            (
+                args.fresh_source_observe,
+                args.fresh_source_observe_v2,
+                args.fresh_source_observe_v3,
+            )
+        )
+        > 1
+    ):
+        parser.error("fresh source requires its separate native-core variant")
+    global \
+        NATIVE, \
+        FINITE_INGRESS, \
+        FINITE_LOAD_COST, \
+        FRESH_SOURCE_OBSERVE, \
+        FRESH_SOURCE_VERSION
     NATIVE = args.native_core
     FINITE_INGRESS = args.finite_ingress
     FINITE_LOAD_COST = args.finite_load_cost
+    FRESH_SOURCE_OBSERVE = (
+        args.fresh_source_observe
+        or args.fresh_source_observe_v2
+        or args.fresh_source_observe_v3
+    )
+    FRESH_SOURCE_VERSION = (
+        3
+        if args.fresh_source_observe_v3
+        else (2 if args.fresh_source_observe_v2 else 1)
+    )
     g.guard()
     configure()
     if args.phase == "prepare":
@@ -514,7 +564,20 @@ def main():
             root_native_apparmor=NATIVE,
         )
     elif args.phase == "exercise":
-        if FINITE_LOAD_COST:
+        if FRESH_SOURCE_OBSERVE:
+            from fresh_source_observe import (
+                FreshSourceObserveLab,
+                FreshSourceObserveV2Lab,
+                FreshSourceObserveV3Lab,
+            )
+
+            lab_type = {
+                1: FreshSourceObserveLab,
+                2: FreshSourceObserveV2Lab,
+                3: FreshSourceObserveV3Lab,
+            }[FRESH_SOURCE_VERSION]
+            lab_type(g, role_command).exercise()
+        elif FINITE_LOAD_COST:
             from finite_load_cost import FiniteLoadCostLab
 
             FiniteLoadCostLab(g, role_command).exercise()
@@ -536,7 +599,11 @@ def main():
                 else:
                     native_accounting.exercise(g, role_command, close_lab=close_lab)
     elif args.phase == "smoke-finish" and NATIVE:
-        if FINITE_LOAD_COST:
+        if FRESH_SOURCE_OBSERVE:
+            from fresh_source_observe import finish
+
+            finish(g)
+        elif FINITE_LOAD_COST:
             from finite_load_cost import finish
 
             finish(g)

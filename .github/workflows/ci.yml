@@ -595,6 +595,7 @@ jobs:
         with:
           name: advisory-exec-public
           path: |
+            advisory-exec-public/toolchain-probe.json
             advisory-exec-public/ordinary_advice/plan.json
             advisory-exec-public/ordinary_advice/probe.json
             advisory-exec-public/ordinary_advice/governance.raw
@@ -910,7 +911,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [baseline, apparmor, native-apparmor, native-close-fault, finite-ingress, finite-ingress-fault, finite-load-cost, provider-apparmor, legacy-tc-apparmor]
+        flavor: [baseline, apparmor, native-apparmor, native-close-fault, finite-ingress, finite-ingress-fault, finite-load-cost, fresh-source-observe-v3, provider-apparmor, legacy-tc-apparmor]
     steps:
       - uses: actions/checkout@v4
       - name: Build the exact core
@@ -962,11 +963,22 @@ jobs:
           if [ '${{ matrix.flavor }}' = finite-ingress ]; then native_args='--native-core --finite-ingress main'; fi
           if [ '${{ matrix.flavor }}' = finite-ingress-fault ]; then native_args='--native-core --finite-ingress fault'; fi
           if [ '${{ matrix.flavor }}' = finite-load-cost ]; then native_args='--native-core --finite-load-cost'; fi
+          if [ '${{ matrix.flavor }}' = fresh-source-observe-v3 ]; then native_args='--native-core --fresh-source-observe-v3'; fi
           for phase in prepare exercise smoke-finish; do
             sudo systemd-run --wait --pipe --property=PrivateNetwork=yes \
               /opt/edge400-runtime/bin/python -I "/opt/edge400-src/tests/real_systemd/$driver" \
               "$phase" --allow-disposable-vm $native_args
           done
+      - name: Collect all fresh Source original evidence
+        if: always() && matrix.flavor == 'fresh-source-observe-v3'
+        run: sudo /usr/bin/python3 -I .github/scripts/collect_fresh_source_observe.py --v3
+      - name: Retain fresh Source observation originals
+        if: always() && matrix.flavor == 'fresh-source-observe-v3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-source-observe-v3-originals
+          path: fresh-source-observe-v3-public
+          if-no-files-found: error
       - name: Collect all finite load cost originals
         if: always() && matrix.flavor == 'finite-load-cost'
         run: sudo /usr/bin/python3 -I .github/scripts/collect_finite_load_cost.py
