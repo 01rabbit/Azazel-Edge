@@ -39,7 +39,7 @@ def _prelude(tmp: Path, log: Path) -> str:
 set -eu
 umask 022
 mv() {{ if [[ "$1" == -f ]]; then shift; fi; if [[ "$1" == -- ]]; then shift; fi
-  printf 'src=%s mode=%s dstold=%s\\n' "$1" "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" "$(cat "$2" 2>/dev/null)" >> "{log}"
+  printf 'src=%s mode=%s dstold=%s\\n' "$1" "$(stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1")" "$(cat "$2" 2>/dev/null)" >> "{log}"
   command mv -f "$1" "$2"; }}
 {_helpers()}
 CRED_ENV="{tmp}/cred.env"; WEB_ENV="{tmp}/web.env"
