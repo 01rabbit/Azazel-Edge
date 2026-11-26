@@ -31,3 +31,26 @@ def test_bad_json_does_not_crash(tmp_path):
     (tmp_path / "audit.jsonl").write_text("broken\n")
     assert monitor.status(tmp_path)["available"] is False
     assert monitor.status(tmp_path)["audit_tail"] == []
+
+def test_incident_console_is_read_only_and_keeps_raw_evidence():
+    html = monitor.HTML
+    assert "Security Operations Overview" in html
+    assert "Incident Queue" in html
+    assert "Incident Investigation" in html
+    assert "Decision Alternatives" in html
+    assert "Audit Evidence" in html
+    assert "Evidence Timeline" in html
+    assert "Raw evidence (JSONL / troubleshooting)" in html
+    assert "SYNTHETIC REPLAY" in html
+    assert "NO ENFORCEMENT" in html
+    assert "replaceChildren()" in html
+    assert "textContent" in html
+    assert "fetch('/api/status'" in html
+    assert "fetch('/api/execute'" not in html
+
+def test_gate_failure_is_not_reported_as_a_verified_chain(tmp_path):
+    (tmp_path / "gate.json").write_text(json.dumps({
+        "ok": False,
+        "chain_verification": {"ok": False, "entries": 0, "error": "mismatch"}
+    }))
+    assert monitor.status(tmp_path)["gate"]["chain_verification"]["ok"] is False
