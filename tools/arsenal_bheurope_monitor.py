@@ -71,7 +71,7 @@ summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;o
 <div class="detailrow"><span>Config hash</span><b id="config">—</b></div>
 </div>
 <div class="panel full"><h2>Decision Alternatives</h2><table class="table"><thead><tr><th>Candidate action</th><th>Disposition</th><th>Recorded reason</th></tr></thead><tbody id="alternatives"><tr><td colspan="3" class="muted">No decision yet</td></tr></tbody></table></div>
-<div class="panel"><h2>Audit Evidence</h2><div class="detailrow"><span>Chain verification</span><b id="auditstatus">—</b></div><div class="detailrow"><span>Retained entries verified</span><b id="auditentries">—</b></div><div class="detailrow"><span>Failure reason</span><b id="auditerror">—</b></div><p class="foot">Verification of retained records is not an external signature or a guarantee against whole-chain replacement.</p></div>
+<div class="panel"><h2>Audit Evidence</h2><div class="detailrow"><span>Chain verification</span><b id="auditstatus">—</b></div><div class="detailrow"><span>Retained entries verified</span><b id="auditentries">—</b></div><div class="detailrow"><span>Failure reason</span><b id="auditerror">—</b></div><h3 style="margin-top:18px">Tamper-detection demonstration</h3><div class="detailrow"><span>Original retained log</span><b class="green" id="original-check">NOT CHECKED</b></div><div class="detailrow"><span>Modified COPY only</span><b id="copy-check">NOT CHECKED</b></div><div class="detailrow"><span>Modified-copy verifier result</span><b id="copy-error">—</b></div><p class="foot" id="audit-provenance">These comparison results are shown only when a matching verified capture-report.json exists.</p><p class="foot">Verification of retained records is not an external signature or a guarantee against whole-chain replacement.</p></div>
 <div class="panel"><h2>Evidence Timeline</h2><ol class="trail" id="timeline"><li>Awaiting replay evidence</li></ol><p class="foot">Timeline contains recorded audit entry types only; no invented timestamps.</p></div>
 </div></div>
 <details><summary>Raw evidence (JSONL / troubleshooting)</summary><h3 style="margin-top:15px">Explanation record</h3><pre id="rawExplanation">—</pre><h3>Audit tail</h3><pre id="rawAudit">—</pre><h3>Optional resource verification</h3><pre id="resources">—</pre></details>
@@ -83,7 +83,7 @@ const show=(id,value)=>$(id).textContent=String(value??'—');
 const pretty=value=>String(value??'—').replace(/_/g,' ');
 function detailReason(e){return e.reason||e.why_chosen?.reason||'No plain-language reason recorded';}
 function render(data){
- const g=data.gate||{},e=data.explanation||{},audit=Array.isArray(data.audit_tail)?data.audit_tail:[],v=g.chain_verification||{};
+ const g=data.gate||{},e=data.explanation||{},audit=Array.isArray(data.audit_tail)?data.audit_tail:[],v=g.chain_verification||{},comparison=data.audit_comparison||{};
  const available=data.available&&Object.keys(e).length>0;
  show('gate',g.ok===true?'PASS':g.ok===false?'FAIL':'NOT RUN');
  $('gate').className='number '+(g.ok===true?'green':g.ok===false?'red':'amber');
@@ -121,6 +121,13 @@ function render(data){
  }
  show('auditstatus',v.ok===true&&v.entries>0?'VERIFIED':v.ok===false?'FAILED':'NOT VERIFIED');
  show('auditentries',v.entries??'—');show('auditerror',v.error||'None reported');
+ const original=comparison.original||{},copy=comparison.modified_copy||{};
+ show('original-check',original.ok===true&&original.entries>0?'VERIFIED ('+original.entries+')':'NOT CHECKED');
+ $('original-check').className=original.ok===true&&original.entries>0?'green':'amber';
+ show('copy-check',copy.ok===false&&copy.error?'MISMATCH DETECTED':'NOT CHECKED');
+ $('copy-check').className=copy.ok===false&&copy.error?'red':'amber';
+ show('copy-error',copy.ok===false&&copy.error?copy.error:'—');
+ show('audit-provenance',comparison.available===true?'Source: capture-report.json, validated against the replay gate, trace and clean-chain result. Altered file is an isolated copy.':'No validated tamper comparison available. Run the Mac capture workflow first.');
  const trail=$('timeline');trail.replaceChildren();
  if(!audit.length){const li=document.createElement('li');li.textContent='No audit entries available';trail.append(li);}
  else audit.forEach((item,i)=>{const li=document.createElement('li');li.textContent=String(i+1)+'. '+pretty(item.kind||'record')+(item.trace_id?' · '+item.trace_id:'');trail.append(li);});
@@ -152,7 +159,30 @@ def status(directory: Path) -> dict:
     gate = _read_json(directory / "gate.json")
     explanations = _tail_jsonl(directory / "explanations.jsonl", 1)
     resources = _read_json(directory / "resource-status.json")
-    return {"resources": resources or {}, "available": isinstance(gate, dict),
+    capture = _read_json(directory / "capture-report.json")
+    explanation = explanations[-1] if explanations else {}
+    audit_comparison = {}
+    if isinstance(gate, dict) and isinstance(capture, dict) and isinstance(explanation, dict):
+        original = capture.get("audit_clean")
+        modified = capture.get("audit_modified_copy")
+        chain = gate.get("chain_verification")
+        # Report only verified evidence from the SAME capture and trace.
+        if (gate.get("ok") is True
+                and capture.get("recording_ready_replay") is True
+                and gate.get("action") == capture.get("selected_action") == explanation.get("selected_action")
+                and gate.get("trace_id") == capture.get("trace_id") == explanation.get("trace_id")
+                and isinstance(original, dict) and isinstance(modified, dict)
+                and isinstance(chain, dict) and original == chain
+                and original.get("ok") is True and original.get("entries", 0) > 0
+                and modified.get("ok") is False and bool(modified.get("error"))
+                and (directory / "audit-tampered-COPY.jsonl").is_file()):
+            audit_comparison = {
+                "available": True,
+                "original": {"ok": True, "entries": original["entries"]},
+                "modified_copy": {"ok": False, "error": modified["error"]},
+            }
+    return {"resources": resources or {}, "audit_comparison": audit_comparison,
+            "available": isinstance(gate, dict),
             "gate": gate or {},
             "explanation": explanations[-1] if explanations else {},
             "audit_tail": _tail_jsonl(directory / "audit.jsonl"),
