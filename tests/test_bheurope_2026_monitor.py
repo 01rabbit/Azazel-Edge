@@ -54,3 +54,35 @@ def test_gate_failure_is_not_reported_as_a_verified_chain(tmp_path):
         "chain_verification": {"ok": False, "entries": 0, "error": "mismatch"}
     }))
     assert monitor.status(tmp_path)["gate"]["chain_verification"]["ok"] is False
+
+def test_valid_tamper_comparison_only_for_matching_capture(tmp_path):
+    gate = {"ok": True, "action": "throttle", "trace_id": "demo:case",
+            "chain_verification": {"ok": True, "entries": 3, "error": ""}}
+    explanation = {"selected_action": "throttle", "trace_id": "demo:case"}
+    report = {"recording_ready_replay": True, "selected_action": "throttle",
+              "trace_id": "demo:case", "audit_clean": gate["chain_verification"],
+              "audit_modified_copy": {"ok": False, "entries": 0,
+                                      "error": "chain_hash_mismatch_at:1"}}
+    (tmp_path / "gate.json").write_text(json.dumps(gate))
+    (tmp_path / "explanations.jsonl").write_text(json.dumps(explanation) + "\n")
+    (tmp_path / "capture-report.json").write_text(json.dumps(report))
+    (tmp_path / "audit-tampered-COPY.jsonl").write_text("{}\n")
+    result = monitor.status(tmp_path)
+    assert result["audit_comparison"]["available"] is True
+    assert result["audit_comparison"]["original"]["entries"] == 3
+    assert result["audit_comparison"]["modified_copy"]["error"] == "chain_hash_mismatch_at:1"
+    report["trace_id"] = "different-trace"
+    (tmp_path / "capture-report.json").write_text(json.dumps(report))
+    assert monitor.status(tmp_path)["audit_comparison"] == {}
+    report["trace_id"] = "demo:case"
+    (tmp_path / "capture-report.json").write_text(json.dumps(report))
+    (tmp_path / "audit-tampered-COPY.jsonl").unlink()
+    assert monitor.status(tmp_path)["audit_comparison"] == {}
+
+
+def test_no_false_tamper_claim_on_missing_or_bad_capture(tmp_path):
+    assert monitor.status(tmp_path)["audit_comparison"] == {}
+    (tmp_path / "capture-report.json").write_text("{broken")
+    assert monitor.status(tmp_path)["audit_comparison"] == {}
+    assert "Modified COPY only" in monitor.HTML
+    assert "No validated tamper comparison available" in monitor.HTML
