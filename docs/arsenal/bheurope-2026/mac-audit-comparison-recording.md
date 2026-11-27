@@ -20,12 +20,19 @@ If pytest is not installed, install it in the isolated replay venv (`.venv/bin/p
   --artifacts artifacts/bheurope-2026/mac-capture-20261126T100955Z
 ```
 
-Open `http://127.0.0.1:8765` in the browser. Hard refresh if old HTML remains cached. Scroll to Audit Evidence. Expect:
+Open `http://127.0.0.1:8765` in the browser. Hard refresh if old HTML remains cached. The updated console presents Audit Evidence near the top, immediately below the KPI strip. Expect:
 - Original retained log: `VERIFIED (3)`
 - Modified COPY only: `MISMATCH DETECTED`
 - Modified-copy verifier result: `chain_hash_mismatch_at:1`
 
 **These are expected values from the operator's previously shared successful Mac command output.** They are not evidence that the updated monitor itself was tested in this development environment. If `capture-report.json` or the altered-copy file is absent, the comparison intentionally shows **NOT CHECKED**, not a fabricated pass.
+
+## 2a. UI verification for the redesigned console
+
+- Check that the two large audit comparison panels appear side by side on a desktop monitor, with legible `VERIFIED` and `MISMATCH` labels. Smaller displays may stack them.
+- Confirm they are sourced from matching `capture-report.json` and `gate.json`, not hard-coded example data. A missing report must display `NOT CHECKED`.
+- Confirm that the yellow `SYNTHETIC REPLAY · NO ENFORCEMENT` indicator remains visible and that the original decision, alternatives, trace and JSONL drill-down still render.
+- Restart the monitor after pulling source changes; a browser refresh alone does not reload Python's embedded HTML.
 
 ## 3. Record authentic monitor footage
 
