@@ -226,8 +226,12 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
         server = subprocess.Popen(monitor, cwd=ROOT, stdout=logfile, stderr=subprocess.STDOUT)
         try:
             # Health check only; scene 1 initially contains no evidence.
+            # Refuse a stale server on the same port instead of recording its state.
+            time.sleep(0.25)
             deadline = time.monotonic() + 10
             while True:
+                if server.poll() is not None:
+                    raise recorder.CaptureError("Recording monitor exited; port may already be occupied. See monitor.log")
                 try:
                     with urlopen(f"http://127.0.0.1:{port}/api/status", timeout=1) as r:
                         payload = json.loads(r.read())
