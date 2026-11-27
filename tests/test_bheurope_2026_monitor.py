@@ -86,3 +86,21 @@ def test_no_false_tamper_claim_on_missing_or_bad_capture(tmp_path):
     assert monitor.status(tmp_path)["audit_comparison"] == {}
     assert "Modified COPY only" in monitor.HTML
     assert "No validated tamper comparison available" in monitor.HTML
+
+def test_prominent_audit_comparison_layout_and_provenance():
+    html = monitor.HTML
+    assert 'class="audit-stage"' in html
+    assert 'class="audit-comparison"' in html
+    assert 'class="audit-result original"' in html
+    assert 'class="audit-result modified"' in html
+    assert 'id="original-check"' in html
+    assert 'id="original-detail"' in html
+    assert 'id="copy-check"' in html
+    assert 'id="copy-error"' in html
+    assert 'id="audit-provenance"' in html
+    assert 'Synthetic offline replay' in html
+    assert 'id="audit-trace"' in html
+    assert 'id="audit-selected"' in html
+    assert html.count('id="original-check"') == 1
+    assert html.count('id="copy-check"') == 1
+    assert "Raw evidence (JSONL / troubleshooting)" in html
