@@ -125,6 +125,27 @@ def focus_browser(browser: str) -> None:
     subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True)
 
 
+def prepare_fullscreen_browser(browser: str) -> None:
+    """Try to enter fullscreen only when the browser window is not already fullscreen."""
+    if browser not in BROWSERS:
+        raise recorder.CaptureError("Unsupported browser")
+    script = (
+        'tell application "System Events"\n'
+        '  tell process "' + browser + '"\n'
+        '    if (value of attribute "AXFullScreen" of front window) is false then\n'
+        '      keystroke "f" using {control down, command down}\n'
+        '    end if\n'
+        '  end tell\n'
+        'end tell'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], check=True,
+                       capture_output=True, text=True, timeout=8)
+        time.sleep(1.7)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("WARNING: could not enter fullscreen automatically; browser is still usable")
+
+
 def show_actual_terminal_log(logpath: Path) -> None:
     """Display only stdout/stderr actually captured from the replay subprocess."""
     if not logpath.is_file():
@@ -220,6 +241,8 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
             subprocess.run(["open", "-a", args.browser, f"http://127.0.0.1:{port}"], check=True)
             time.sleep(1)
             focus_browser(args.browser)
+            if not args.no_fullscreen:
+                prepare_fullscreen_browser(args.browser)
             print(f"SCENE {number}: {title}. Recording after {args.delay}s countdown.")
             time.sleep(args.delay)
             cmd = recorder.ffmpeg_command(args.device, duration, video)
@@ -295,6 +318,7 @@ def main() -> int:
     ap.add_argument("--duration", type=int, help="Single-scene duration override")
     ap.add_argument("--evidence", type=Path, default=recorder.DEFAULT_EVIDENCE)
     ap.add_argument("--dry-run", action="store_true", help="Validate plan without recording or UI actions")
+    ap.add_argument("--no-fullscreen", action="store_true", help="Do not attempt fullscreen browser presentation")
     args = ap.parse_args()
     try:
         if sys.platform != "darwin":
