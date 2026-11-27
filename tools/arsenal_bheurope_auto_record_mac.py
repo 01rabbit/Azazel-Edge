@@ -16,6 +16,7 @@ import hashlib
 import json
 from pathlib import Path
 import platform
+import shlex
 import signal
 import subprocess
 import sys
@@ -45,7 +46,7 @@ class Event:
 def scene_plan(number: int) -> tuple[Event, ...]:
     # Timings in seconds, all values under the corresponding scene duration.
     if number == 1:
-        return (Event(6, "replay"), Event(30, "focus"), Event(37, "scroll", 520),
+        return (Event(6, "replay"), Event(17, "terminal"), Event(30, "focus"), Event(37, "scroll", 520),
                 Event(68, "scroll", 590), Event(92, "scroll", -1110))
     if number == 2:
         return (Event(8, "scroll", 1000), Event(30, "pointer", 62),
@@ -121,6 +122,17 @@ def focus_browser(browser: str) -> None:
     if browser not in BROWSERS:
         raise recorder.CaptureError("Unsupported browser: " + browser)
     script = f'tell application "{browser}" to activate'
+    subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True)
+
+
+def show_actual_terminal_log(logpath: Path) -> None:
+    """Display only stdout/stderr actually captured from the replay subprocess."""
+    if not logpath.is_file():
+        raise recorder.CaptureError("No genuine replay log to show in Terminal")
+    command = "cat " + shlex.quote(str(logpath))
+    # One actual command in a new Terminal session, not a synthetic status graphic.
+    applescript_command = command.replace("\\", "\\\\").replace('"', '\\"')
+    script = 'tell application "Terminal" to do script "' + applescript_command + '"'
     subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True)
 
 
@@ -226,6 +238,9 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                         if event.kind == "replay":
                             result = generate_real_replay(evidence_dir, python)
                             events_done.append({"second": event.second, "action": "real synthetic replay", "result": result})
+                        elif event.kind == "terminal":
+                            show_actual_terminal_log(evidence_dir / "replay-process.log")
+                            events_done.append({"second": event.second, "action": "show genuine terminal replay output"})
                         elif event.kind == "focus":
                             focus_browser(args.browser)
                             events_done.append({"second": event.second, "action": "focus browser"})
