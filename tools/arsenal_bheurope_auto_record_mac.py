@@ -43,8 +43,14 @@ class Event:
     value: int = 0
 
 
-def scene_plan(number: int) -> tuple[Event, ...]:
+def scene_plan(number: int, preview: bool = False) -> tuple[Event, ...]:
     # Timings in seconds, all values under the corresponding scene duration.
+    if preview:
+        if number != 1:
+            raise ValueError("Preview supports only Scene 1")
+        return (Event(4, "replay"), Event(12, "terminal"),
+                Event(20, "focus"), Event(28, "scroll", 570),
+                Event(36, "scroll", -570))
     if number == 1:
         return (Event(6, "replay"), Event(17, "terminal"), Event(30, "focus"), Event(37, "scroll", 520),
                 Event(68, "scroll", 590), Event(92, "scroll", -1110))
@@ -204,8 +210,8 @@ def generate_real_replay(folder: Path, python: Path) -> dict:
 
 def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
     title, default_duration = SCENES[number]
-    duration = args.duration if args.duration and len(args.scenes) == 1 else default_duration
-    events = scene_plan(number)
+    duration = 45 if args.preview else args.duration if args.duration and len(args.scenes) == 1 else default_duration
+    events = scene_plan(number, args.preview)
     if duration < max(e.second for e in events) + 5:
         raise recorder.CaptureError("Duration is shorter than the scripted events")
     scene_dir = run_root / f"{number:02d}-{title}"
@@ -322,6 +328,7 @@ def main() -> int:
     ap.add_argument("--duration", type=int, help="Single-scene duration override")
     ap.add_argument("--evidence", type=Path, default=recorder.DEFAULT_EVIDENCE)
     ap.add_argument("--dry-run", action="store_true", help="Validate plan without recording or UI actions")
+    ap.add_argument("--preview", action="store_true", help="45-second scene 1 automatic capture test")
     ap.add_argument("--no-fullscreen", action="store_true", help="Do not attempt fullscreen browser presentation")
     args = ap.parse_args()
     try:
@@ -332,11 +339,13 @@ def main() -> int:
         recorder.require_program("ffprobe")
         validated = recorder.verify_evidence(args.evidence.resolve())
         args.scenes = list(SCENES) if args.scene == "all" else [int(args.scene)]
+        if args.preview and args.scenes != [1]:
+            raise recorder.CaptureError("--preview supports only --scene 1")
         if not args.device.isdigit() or args.delay < 0 or args.delay > 60:
             raise recorder.CaptureError("Invalid screen index or countdown delay")
         for n in args.scenes:
-            duration = args.duration if args.duration and len(args.scenes)==1 else SCENES[n][1]
-            if not 30 <= duration <= 1200 or duration < max(e.second for e in scene_plan(n))+5:
+            duration = 45 if args.preview else args.duration if args.duration and len(args.scenes)==1 else SCENES[n][1]
+            if not 30 <= duration <= 1200 or duration < max(e.second for e in scene_plan(n, args.preview))+5:
                 raise recorder.CaptureError("Recording duration does not fit the scene timeline")
         print("Verified source evidence:", validated)
         print("Scene plan:", [(n, SCENES[n][0]) for n in args.scenes])
