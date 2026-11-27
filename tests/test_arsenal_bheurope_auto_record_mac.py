@@ -56,7 +56,7 @@ def test_browser_allowlist():
 
 
 def test_all_scripted_actions_supported():
-    allowed = {"replay", "focus", "pointer", "scroll"}
+    allowed = {"replay", "terminal", "focus", "pointer", "scroll"}
     for n in director.SCENES:
         assert all(event.kind in allowed for event in director.scene_plan(n))
 
@@ -70,3 +70,12 @@ def test_real_replay_function_requires_validated_report(tmp_path, monkeypatch):
     monkeypatch.setattr(director.subprocess, "run", lambda *a, **kw: FakeCompleted())
     with pytest.raises(director.recorder.CaptureError, match="Genuine replay failed"):
         director.generate_real_replay(tmp_path / "fresh", Path("/usr/bin/python3"))
+
+def test_scene_one_displays_real_replay_output_before_returning_to_console():
+    timeline = director.scene_plan(1)
+    kinds = [event.kind for event in timeline]
+    assert kinds.index("replay") < kinds.index("terminal") < kinds.index("focus")
+    import inspect
+    source = inspect.getsource(director.show_actual_terminal_log)
+    assert 'replay log' in source
+    assert 'cat ' in source
