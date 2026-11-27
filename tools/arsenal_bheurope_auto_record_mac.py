@@ -222,7 +222,7 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                         while time.monotonic() < until:
                             if proc.poll() is not None:
                                 raise recorder.CaptureError("Recorder exited early; inspect ffmpeg.log")
-                            time.sleep(min(.2, until-time.monotonic()))
+                            time.sleep(max(0.0, min(.2, until-time.monotonic())))
                         if event.kind == "replay":
                             result = generate_real_replay(evidence_dir, python)
                             events_done.append({"second": event.second, "action": "real synthetic replay", "result": result})
