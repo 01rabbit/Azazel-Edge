@@ -34,6 +34,15 @@ git pull --ff-only origin arsenal/bheurope-2026
 
 If pytest is unavailable, install it in `.venv` with `.venv/bin/python -m pip install 'pytest>=9,<10'` and retry. The `--dry-run` validates evidence and the timeline without moving the mouse or recording.
 
+## First: short fully automatic 45-second preview
+
+```bash
+.venv/bin/python tools/arsenal_bheurope_auto_record_mac.py \
+  --scene 1 --device 3 --preview --delay 8
+```
+
+The recorder starts an empty read-only Incident Console, triggers the genuine synthetic replay after ~4 seconds, opens Terminal to show the real replay process output at ~12 seconds, returns to the browser at ~20 seconds, and moves/scrolls automatically. No talking or mouse clicking is needed after starting the command. This should be reviewed before running all four full scenes.
+
 ## Automated 2-minute Scene 1
 
 ```bash
@@ -72,7 +81,7 @@ Videos are saved under `artifacts/bheurope-2026/auto-recordings/<UTC timestamp>/
 - The system captures pixels, not a semantic screen recording; if a popover steals focus or the display moves, the resulting clip may need a retake.
 - An apparent `THROTTLE` status is a **selected action** in synthetic replay, not proof of active network throttling.
 - A verified retained audit chain does not guarantee resistance to coherent whole-log replacement.
-- Run the automated scene **1** first, inspect its resulting MP4 and manifest, then proceed to `--scene all` when the result is readable.
+- Run the automated 45-second **preview** first, inspect its resulting MP4 and manifest, then proceed to `--scene all` when the result is readable.
 - Any actual automation failure is fatal for that scene and must not be represented as a completed recording.
 
 ## Where to share
