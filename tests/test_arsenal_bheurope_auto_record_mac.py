@@ -79,3 +79,11 @@ def test_scene_one_displays_real_replay_output_before_returning_to_console():
     source = inspect.getsource(director.show_actual_terminal_log)
     assert 'replay log' in source
     assert 'cat ' in source
+
+def test_preview_timeline_includes_real_replay_and_ui_control():
+    events = director.scene_plan(1, preview=True)
+    assert [e.kind for e in events][:3] == ["replay", "terminal", "focus"]
+    assert events[-1].second < 45
+    assert any(e.kind == "scroll" for e in events)
+    with pytest.raises(ValueError):
+        director.scene_plan(2, preview=True)
