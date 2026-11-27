@@ -69,19 +69,19 @@ h3{font-size:14px}
 .audit-stage{padding:26px;margin-bottom:20px;border:1px solid #446173;background:linear-gradient(145deg,#172638 0%,#111d2a 100%);border-radius:12px}
 .audit-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}
 .audit-heading h2{font-size:27px;margin:0 0 7px}
-.audit-heading p{font-size:15px;color:#b3c7d8;margin:0}
-.audit-caption{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#9eb7c8;font-weight:750}
+.audit-heading p{font-size:18px;color:#b3c7d8;margin:0}
+.audit-caption{font-size:15px;letter-spacing:.1em;text-transform:uppercase;color:#9eb7c8;font-weight:750}
 .audit-comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.audit-result{position:relative;border:1px solid #3f5a66;background:#0d1a24;border-radius:10px;padding:25px 24px;min-height:188px}
+.audit-result{position:relative;border:1px solid #3f5a66;background:#0d1a24;border-radius:10px;padding:27px 28px;min-height:232px}
 .audit-result.original{border-color:#458d77;background:linear-gradient(130deg,#112c2c,#111d28)}
 .audit-result.modified{border-color:#8c4b57;background:linear-gradient(130deg,#30202c,#171e2b)}
-.audit-result .result-heading{font-size:15px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;color:#c7d8e4}
-.audit-result .result-main{font-size:clamp(30px,3.4vw,49px);font-weight:850;letter-spacing:-.03em;margin:21px 0 10px;overflow-wrap:anywhere}
+ .audit-result .result-heading{font-size:19px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;color:#c7d8e4}
+.audit-result .result-main{font-size:clamp(43px,4.5vw,68px);font-weight:850;letter-spacing:-.03em;margin:21px 0 10px;overflow-wrap:anywhere}
 .audit-result.original .result-main{color:var(--good)}
 .audit-result.modified .result-main{color:var(--bad)}
-.audit-result .result-detail{font-size:16px;color:#c5d5df;line-height:1.45;overflow-wrap:anywhere}
-.audit-smallprint{margin:17px 0 0;font-size:13px;line-height:1.55;color:#a5baca}
-.audit-tech{display:flex;flex-wrap:wrap;gap:14px;margin-top:18px;color:#b9d0dc;font-size:14px}
+.audit-result .result-detail{font-size:19px;color:#c5d5df;line-height:1.45;overflow-wrap:anywhere}
+.audit-smallprint{margin:17px 0 0;font-size:15px;line-height:1.55;color:#a5baca}
+.audit-tech{display:flex;flex-wrap:wrap;gap:14px;margin-top:18px;color:#b9d0dc;font-size:17px}
 .audit-tech span{background:#0b1723;border:1px solid #334b5e;border-radius:6px;padding:8px 10px}
 .audit-tech strong{color:#f4f8fb}
 .layout{grid-template-columns:minmax(290px,.8fr) minmax(0,2.2fr)}
@@ -90,7 +90,7 @@ h3{font-size:14px}
 button{font-size:15px}
 #copy-error{overflow-wrap:anywhere}
 @media(max-width:950px){.audit-comparison{grid-template-columns:1fr}.audit-heading{display:block}.audit-heading .audit-caption{margin-top:12px}.audit-stage{padding:18px}.audit-result{min-height:150px}.kpi .number{font-size:26px}}
-@media(max-width:540px){main{padding:16px}.audit-result .result-main{font-size:31px}.audit-result{padding:18px}.top{flex-wrap:wrap}.mode{font-size:11px}}
+@media(max-width:540px){main{padding:16px}.audit-result .result-main{font-size:clamp(38px,7vw,52px)}.audit-result{padding:18px}.top{flex-wrap:wrap}.mode{font-size:11px}}
 details{margin-top:16px;border:1px solid #2e4354;border-radius:8px;padding:13px 16px;background:#111d2b}
 summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:#c3d6e2}
 #trace{font-size:14px}.update{font-size:11px;color:#98afc0}
@@ -186,9 +186,9 @@ function render(data){
  show('original-detail',original.ok===true&&original.entries>0?String(original.entries)+' retained records verified':'No validated original comparison loaded');
  show('audit-selected',e.selected_action||g.action||'—');
  show('audit-trace',e.trace_id||g.trace_id||'—');
- $('original-check').className=original.ok===true&&original.entries>0?'green':'amber';
+ $('original-check').className='result-main '+(original.ok===true&&original.entries>0?'green':'amber');
  show('copy-check',copy.ok===false&&copy.error?'MISMATCH':'NOT CHECKED');
- $('copy-check').className=copy.ok===false&&copy.error?'red':'amber';
+ $('copy-check').className='result-main '+(copy.ok===false&&copy.error?'red':'amber');
  show('copy-error',copy.ok===false&&copy.error?'Detected: '+copy.error:'No validated modified-copy comparison loaded');
  show('audit-provenance',comparison.available===true?'Source: capture-report.json; gate, trace and clean-chain report match. The modified file is an isolated COPY, not the operational audit.':'No validated tamper comparison available. Run the Mac capture workflow first.');
  const trail=$('timeline');trail.replaceChildren();
