@@ -44,7 +44,53 @@ h1{margin:0 0 5px;font-size:26px;letter-spacing:-.03em}h2{font-size:16px;margin:
 .table tr:last-child td{border-bottom:0}.pill{display:inline-block;border-radius:4px;padding:4px 7px;background:#263e4f;color:#c9dfec;font-size:11px;font-weight:700}
 .pill.on{background:#19483f;color:#95e5cb}
 .trail{margin:0;padding-left:21px;font-size:12px;color:#cbd9e4}.trail li{padding:6px 0}.trail li::marker{color:#5dc9ca}
-.foot{margin-top:16px;color:#93aabb;font-size:11px;line-height:1.6}
+.foot{margin-top:16px;color:#adbed0;font-size:13px;line-height:1.6}
+:root{--canvas:#0c121b;--surface:#132031;--stroke:#33485a;--white:#f1f6fb;--aqua:#78e2e0;--good:#79e4b5;--bad:#ff949d}
+main{max-width:1512px;padding:30px 36px 44px}
+h1{font-size:32px;letter-spacing:-.035em}
+h2{font-size:21px;letter-spacing:-.01em}
+h3{font-size:14px}
+.desc{font-size:16px;line-height:1.45}
+.panel,.kpi{background:var(--surface);border-color:var(--stroke);border-radius:10px}
+.kpi{min-height:122px;padding:20px 22px}
+.kpi .label{font-size:13px}
+.kpi .number{font-size:32px;line-height:1.2;margin-top:13px}
+#trace{font-size:19px!important;overflow-wrap:anywhere}
+.summary{font-size:17px}
+.detailrow{font-size:15px}
+.table{font-size:15px}
+.table th{font-size:13px}
+.table td{padding:12px 9px}
+.trail{font-size:14px}
+.top{padding:20px 32px}
+.brand{font-size:22px}
+.sub{font-size:12px}
+.mode{font-size:12px}
+.audit-stage{padding:26px;margin-bottom:20px;border:1px solid #446173;background:linear-gradient(145deg,#172638 0%,#111d2a 100%);border-radius:12px}
+.audit-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}
+.audit-heading h2{font-size:27px;margin:0 0 7px}
+.audit-heading p{font-size:15px;color:#b3c7d8;margin:0}
+.audit-caption{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#9eb7c8;font-weight:750}
+.audit-comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.audit-result{position:relative;border:1px solid #3f5a66;background:#0d1a24;border-radius:10px;padding:25px 24px;min-height:188px}
+.audit-result.original{border-color:#458d77;background:linear-gradient(130deg,#112c2c,#111d28)}
+.audit-result.modified{border-color:#8c4b57;background:linear-gradient(130deg,#30202c,#171e2b)}
+.audit-result .result-heading{font-size:15px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;color:#c7d8e4}
+.audit-result .result-main{font-size:clamp(30px,3.4vw,49px);font-weight:850;letter-spacing:-.03em;margin:21px 0 10px;overflow-wrap:anywhere}
+.audit-result.original .result-main{color:var(--good)}
+.audit-result.modified .result-main{color:var(--bad)}
+.audit-result .result-detail{font-size:16px;color:#c5d5df;line-height:1.45;overflow-wrap:anywhere}
+.audit-smallprint{margin:17px 0 0;font-size:13px;line-height:1.55;color:#a5baca}
+.audit-tech{display:flex;flex-wrap:wrap;gap:14px;margin-top:18px;color:#b9d0dc;font-size:14px}
+.audit-tech span{background:#0b1723;border:1px solid #334b5e;border-radius:6px;padding:8px 10px}
+.audit-tech strong{color:#f4f8fb}
+.layout{grid-template-columns:minmax(290px,.8fr) minmax(0,2.2fr)}
+.case strong{font-size:19px}
+.case .chip{font-size:13px}
+button{font-size:15px}
+#copy-error{overflow-wrap:anywhere}
+@media(max-width:950px){.audit-comparison{grid-template-columns:1fr}.audit-heading{display:block}.audit-heading .audit-caption{margin-top:12px}.audit-stage{padding:18px}.audit-result{min-height:150px}.kpi .number{font-size:26px}}
+@media(max-width:540px){main{padding:16px}.audit-result .result-main{font-size:31px}.audit-result{padding:18px}.top{flex-wrap:wrap}.mode{font-size:11px}}
 details{margin-top:16px;border:1px solid #2e4354;border-radius:8px;padding:13px 16px;background:#111d2b}
 summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:#c3d6e2}
 #trace{font-size:14px}.update{font-size:11px;color:#98afc0}
@@ -60,6 +106,20 @@ summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;o
 <div class="kpi"><div class="label">Retained audit chain</div><div class="number" id="chain">NOT VERIFIED</div></div>
 <div class="kpi"><div class="label">Decision trace</div><div class="number" id="trace">—</div></div>
 </div>
+<section class="audit-stage" aria-labelledby="audit-title">
+<div class="audit-heading"><div><h2 id="audit-title">Audit Evidence</h2><p>Compare the original retained chain with an independently modified copy.</p></div><span class="audit-caption">Read-only · Recorded verification</span></div>
+<div class="audit-comparison">
+<article class="audit-result original" aria-label="Original retained audit log">
+<div class="result-heading">Original Audit Log</div><div class="result-main" id="original-check" role="status">NOT CHECKED</div><div class="result-detail" id="original-detail">No validated original comparison loaded</div>
+</article>
+<article class="audit-result modified" aria-label="Modified copy of audit log">
+<div class="result-heading">Modified COPY only</div><div class="result-main" id="copy-check" role="status">NOT CHECKED</div><div class="result-detail" id="copy-error">No validated modified-copy comparison loaded</div>
+</article>
+</div>
+<div class="audit-tech"><span>Selected response: <strong id="audit-selected">—</strong></span><span>Trace: <strong id="audit-trace">—</strong></span></div>
+<p class="audit-smallprint" id="audit-provenance">No validated tamper comparison available. Run the Mac capture workflow first.</p>
+<p class="audit-smallprint">Synthetic offline replay. The selected action is not network enforcement. These checks verify retained records, not whole-log authenticity.</p>
+</section>
 <div class="grid layout">
 <div class="panel"><h2>Incident Queue</h2><h3>Local replay decision</h3><div id="case" class="blank">No replay artifacts loaded</div><p class="foot">Only the latest replay explanation is shown. This is not a live multi-incident queue or a SIEM event count.</p></div>
 <div class="grid details">
@@ -71,7 +131,7 @@ summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;o
 <div class="detailrow"><span>Config hash</span><b id="config">—</b></div>
 </div>
 <div class="panel full"><h2>Decision Alternatives</h2><table class="table"><thead><tr><th>Candidate action</th><th>Disposition</th><th>Recorded reason</th></tr></thead><tbody id="alternatives"><tr><td colspan="3" class="muted">No decision yet</td></tr></tbody></table></div>
-<div class="panel"><h2>Audit Evidence</h2><div class="detailrow"><span>Chain verification</span><b id="auditstatus">—</b></div><div class="detailrow"><span>Retained entries verified</span><b id="auditentries">—</b></div><div class="detailrow"><span>Failure reason</span><b id="auditerror">—</b></div><h3 style="margin-top:18px">Tamper-detection demonstration</h3><div class="detailrow"><span>Original retained log</span><b class="green" id="original-check">NOT CHECKED</b></div><div class="detailrow"><span>Modified COPY only</span><b id="copy-check">NOT CHECKED</b></div><div class="detailrow"><span>Modified-copy verifier result</span><b id="copy-error">—</b></div><p class="foot" id="audit-provenance">These comparison results are shown only when a matching verified capture-report.json exists.</p><p class="foot">Verification of retained records is not an external signature or a guarantee against whole-chain replacement.</p></div>
+<div class="panel"><h2>Audit Verification Details</h2><div class="detailrow"><span>Chain verification</span><b id="auditstatus">—</b></div><div class="detailrow"><span>Retained entries verified</span><b id="auditentries">—</b></div><div class="detailrow"><span>Failure reason</span><b id="auditerror">—</b></div><p class="foot">Retained-chain consistency does not prove external anchoring or resistance to whole-chain replacement.</p></div>
 <div class="panel"><h2>Evidence Timeline</h2><ol class="trail" id="timeline"><li>Awaiting replay evidence</li></ol><p class="foot">Timeline contains recorded audit entry types only; no invented timestamps.</p></div>
 </div></div>
 <details><summary>Raw evidence (JSONL / troubleshooting)</summary><h3 style="margin-top:15px">Explanation record</h3><pre id="rawExplanation">—</pre><h3>Audit tail</h3><pre id="rawAudit">—</pre><h3>Optional resource verification</h3><pre id="resources">—</pre></details>
@@ -122,12 +182,15 @@ function render(data){
  show('auditstatus',v.ok===true&&v.entries>0?'VERIFIED':v.ok===false?'FAILED':'NOT VERIFIED');
  show('auditentries',v.entries??'—');show('auditerror',v.error||'None reported');
  const original=comparison.original||{},copy=comparison.modified_copy||{};
- show('original-check',original.ok===true&&original.entries>0?'VERIFIED ('+original.entries+')':'NOT CHECKED');
+ show('original-check',original.ok===true&&original.entries>0?'VERIFIED':'NOT CHECKED');
+ show('original-detail',original.ok===true&&original.entries>0?String(original.entries)+' retained records verified':'No validated original comparison loaded');
+ show('audit-selected',e.selected_action||g.action||'—');
+ show('audit-trace',e.trace_id||g.trace_id||'—');
  $('original-check').className=original.ok===true&&original.entries>0?'green':'amber';
- show('copy-check',copy.ok===false&&copy.error?'MISMATCH DETECTED':'NOT CHECKED');
+ show('copy-check',copy.ok===false&&copy.error?'MISMATCH':'NOT CHECKED');
  $('copy-check').className=copy.ok===false&&copy.error?'red':'amber';
- show('copy-error',copy.ok===false&&copy.error?copy.error:'—');
- show('audit-provenance',comparison.available===true?'Source: capture-report.json, validated against the replay gate, trace and clean-chain result. Altered file is an isolated copy.':'No validated tamper comparison available. Run the Mac capture workflow first.');
+ show('copy-error',copy.ok===false&&copy.error?'Detected: '+copy.error:'No validated modified-copy comparison loaded');
+ show('audit-provenance',comparison.available===true?'Source: capture-report.json; gate, trace and clean-chain report match. The modified file is an isolated COPY, not the operational audit.':'No validated tamper comparison available. Run the Mac capture workflow first.');
  const trail=$('timeline');trail.replaceChildren();
  if(!audit.length){const li=document.createElement('li');li.textContent='No audit entries available';trail.append(li);}
  else audit.forEach((item,i)=>{const li=document.createElement('li');li.textContent=String(i+1)+'. '+pretty(item.kind||'record')+(item.trace_id?' · '+item.trace_id:'');trail.append(li);});
