@@ -104,3 +104,12 @@ def test_prominent_audit_comparison_layout_and_provenance():
     assert html.count('id="original-check"') == 1
     assert html.count('id="copy-check"') == 1
     assert "Raw evidence (JSONL / troubleshooting)" in html
+
+def test_audit_result_size_class_is_preserved_during_refresh():
+    html = monitor.HTML
+    assert "class=\"result-main\" id=\"original-check\"" in html
+    assert "class=\"result-main\" id=\"copy-check\"" in html
+    assert "className='result-main '+(original.ok" in html
+    assert "className='result-main '+(copy.ok" in html
+    assert "font-size:clamp(43px,4.5vw,68px)" in html
+    assert "font-size:19px;color:#c5d5df" in html
