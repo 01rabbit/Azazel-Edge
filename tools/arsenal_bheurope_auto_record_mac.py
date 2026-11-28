@@ -48,12 +48,12 @@ def scene_plan(number: int, preview: bool = False) -> tuple[Event, ...]:
     if preview:
         if number != 1:
             raise ValueError("Preview supports only Scene 1")
-        return (Event(4, "replay"), Event(12, "terminal"),
-                Event(20, "focus"), Event(28, "scroll", 570),
-                Event(36, "scroll", -570))
+        return (Event(4, "replay"), Event(13, "scroll", 260),
+                Event(23, "scroll", 380), Event(32, "scroll", -640),
+                Event(38, "pointer", 68))
     if number == 1:
-        return (Event(6, "replay"), Event(17, "terminal"), Event(30, "focus"), Event(37, "scroll", 520),
-                Event(68, "scroll", 590), Event(92, "scroll", -1110))
+        return (Event(6, "replay"), Event(17, "scroll", 260), Event(37, "scroll", 370),
+                Event(68, "scroll", 520), Event(92, "scroll", -1150))
     if number == 2:
         return (Event(8, "scroll", 1000), Event(30, "pointer", 62),
                 Event(53, "scroll", 420), Event(83, "scroll", -440),
