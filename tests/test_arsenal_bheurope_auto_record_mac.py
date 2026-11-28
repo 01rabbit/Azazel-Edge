@@ -73,16 +73,14 @@ def test_real_replay_function_requires_validated_report(tmp_path, monkeypatch):
     with pytest.raises(director.recorder.CaptureError, match="Genuine replay failed"):
         director.generate_real_replay(tmp_path / "fresh", Path("/usr/bin/python3"))
 
-def test_scene_one_displays_real_replay_output_before_returning_to_console():
+def test_scene_one_preserves_single_screen_review():
     timeline = director.scene_plan(1)
     kinds = [event.kind for event in timeline]
     assert kinds[0] == "replay"
     assert "scroll" in kinds
     assert "terminal" not in kinds
-    import inspect
-    source = inspect.getsource(director.show_actual_terminal_log)
-    assert 'replay log' in source
-    assert 'cat ' in source
+    assert "focus" not in kinds
+    assert all(event.kind in {"replay", "scroll", "pointer"} for event in timeline)
 
 def test_preview_timeline_includes_real_replay_and_ui_control():
     events = director.scene_plan(1, preview=True)
