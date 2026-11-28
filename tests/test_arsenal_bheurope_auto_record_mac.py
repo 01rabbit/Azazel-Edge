@@ -96,11 +96,47 @@ def test_capture_window_target_is_maximized_but_not_native_fullscreen():
     assert not director.geometry_within((120, 120, 800, 500), (2, 30, 1436, 867))
 
 
+def test_browser_window_geometry_uses_document_bounds_not_accessibility_popup(monkeypatch):
+    calls = []
+    def fake_script(script):
+        calls.append(script)
+        return "2, 30, 1918, 1077|http://127.0.0.1:8776/"
+    monkeypatch.setattr(director, "apple_script", fake_script)
+    url, bounds = director.browser_window_state("Brave Browser")
+    assert url == "http://127.0.0.1:8776/"
+    assert bounds == (2, 30, 1916, 1047)
+    assert "bounds of front window" in calls[0]
+    assert "System Events" not in calls[0]
+
+
 def test_browser_and_terminal_focus_are_fatal_if_unverified(monkeypatch):
     monkeypatch.setattr(director, "focus_browser", lambda name: None)
     monkeypatch.setattr(director, "apple_script", lambda script: "")
     monkeypatch.setattr(director.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(director, "window_geometry",
-                        lambda browser: (False, (2, 30, 1436, 867)))
-    with pytest.raises(director.recorder.CaptureError, match="not frontmost"):
-        director.position_and_verify_browser("Brave Browser", (0, 0, 1440, 900))
+    monkeypatch.setattr(director, "browser_window_state",
+                        lambda browser: ("http://127.0.0.1:8776", (2, 30, 1916, 1047)))
+    monkeypatch.setattr(director, "browser_is_frontmost", lambda browser: False)
+    with pytest.raises(director.recorder.CaptureError, match="failed verification"):
+        director.position_and_verify_browser(
+            "Brave Browser", (0, 0, 1920, 1080), "http://127.0.0.1:8776"
+        )
+
+
+def test_browser_rejects_wrong_url_or_tiny_window(monkeypatch):
+    monkeypatch.setattr(director, "focus_browser", lambda name: None)
+    monkeypatch.setattr(director, "apple_script", lambda script: "")
+    monkeypatch.setattr(director.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(director, "browser_is_frontmost", lambda browser: True)
+    monkeypatch.setattr(director, "browser_window_state",
+                        lambda browser: ("http://example.test", (2, 30, 282, 47)))
+    with pytest.raises(director.recorder.CaptureError, match="failed verification"):
+        director.position_and_verify_browser(
+            "Brave Browser", (0, 0, 1920, 1080), "http://127.0.0.1:8776"
+        )
+
+
+def test_only_local_console_can_be_opened():
+    with pytest.raises(director.recorder.CaptureError, match="Only local"):
+        director.open_dedicated_browser_window(
+            "Brave Browser", "https://example.com"
+        )
