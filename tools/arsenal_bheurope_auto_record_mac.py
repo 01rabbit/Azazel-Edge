@@ -152,29 +152,67 @@ def apple_script(script: str) -> str:
     return result.stdout.strip()
 
 
-def window_geometry(browser: str) -> tuple[bool, tuple[int, int, int, int]]:
+def apple_string(value: str) -> str:
+    """Escape an AppleScript string literal; never interpolate shell syntax."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def browser_window_state(browser: str) -> tuple[str, tuple[int, int, int, int]]:
+    """Query an actual browser document window, not a small AX popup."""
     if browser not in BROWSERS:
         raise recorder.CaptureError("Unsupported browser")
+    tab_expr = ("URL of current tab of front window" if browser == "Safari"
+                else "URL of active tab of front window")
     script = (
-        'tell application "System Events"\n'
-        f'  tell process "{browser}"\n'
-        '    set isFront to frontmost\n'
-        '    set winPos to position of front window\n'
-        '    set winSize to size of front window\n'
-        '    return (isFront as text) & "|" & (item 1 of winPos) & "," & '
-        '(item 2 of winPos) & "," & (item 1 of winSize) & "," & (item 2 of winSize)\n'
-        '  end tell\n'
+        f'tell application "{browser}"\n'
+        '  set bb to bounds of front window\n'
+        f'  set uu to {tab_expr}\n'
+        '  return (bb as text) & "|" & uu\n'
         'end tell'
     )
     output = apple_script(script)
     try:
-        state, geometry = output.split("|", 1)
-        pos = tuple(int(round(float(v.strip()))) for v in geometry.split(","))
-        if len(pos) != 4:
-            raise ValueError("wrong window dimensions")
-        return state.lower() == "true", pos
+        corners, page = output.split("|", 1)
+        coords = [int(round(float(x.strip()))) for x in corners.split(",")]
+        if len(coords) != 4:
+            raise ValueError("wrong number of corners")
+        left, top, right, bottom = coords
+        return page.strip(), (left, top, right - left, bottom - top)
     except (ValueError, TypeError) as exc:
-        raise recorder.CaptureError(f"Unable to inspect browser window: {output!r}") from exc
+        raise recorder.CaptureError(
+            f"Unable to inspect dedicated browser document window: {output!r}"
+        ) from exc
+
+
+def browser_is_frontmost(browser: str) -> bool:
+    output = apple_script(
+        'tell application "System Events" to return frontmost of process '
+        + apple_string(browser)
+    )
+    return output.strip().lower() == "true"
+
+
+def open_dedicated_browser_window(browser: str, url: str) -> None:
+    """Create a dedicated capture window; do not resize a browser popup."""
+    if browser not in BROWSERS:
+        raise recorder.CaptureError("Unsupported browser")
+    if not url.startswith("http://127.0.0.1:"):
+        raise recorder.CaptureError("Only local replay consoles may be opened")
+    if browser == "Safari":
+        script = ('tell application "Safari"\n'
+                  '  activate\n'
+                  '  make new document with properties {URL:' + apple_string(url) + '}\n'
+                  'end tell')
+    else:
+        script = (
+            'tell application ' + apple_string(browser) + '\n'
+            '  activate\n'
+            '  make new window\n'
+            '  set URL of active tab of front window to ' + apple_string(url) + '\n'
+            'end tell'
+        )
+    apple_script(script)
+    time.sleep(0.6)
 
 
 def expected_window(bounds: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -201,25 +239,32 @@ def focus_browser(browser: str) -> None:
     apple_script(f'tell application "{browser}" to activate')
 
 
-def position_and_verify_browser(browser: str, bounds: tuple[int, int, int, int]) -> None:
-    """Move the front browser window to the capture display and fail closed."""
+def position_and_verify_browser(
+    browser: str, bounds: tuple[int, int, int, int], url: str | None = None
+) -> None:
+    """Position the real browser document window and verify URL + geometry.
+
+    Browser-native AppleScript window bounds avoid System Events mistakenly
+    selecting small browser popups/toolbars as the front window.
+    """
     focus_browser(browser)
     x, y, w, h = expected_window(bounds)
     script = (
-        'tell application "System Events"\n'
-        f'  tell process "{browser}"\n'
-        '    set frontmost to true\n'
-        f'    set position of front window to {{{x}, {y}}}\n'
-        f'    set size of front window to {{{w}, {h}}}\n'
-        '  end tell\n'
+        'tell application ' + apple_string(browser) + '\n'
+        '  activate\n'
+        f'  set bounds of front window to {{{x}, {y}, {x+w}, {y+h}}}\n'
         'end tell'
     )
     apple_script(script)
     time.sleep(0.7)
-    is_front, geometry = window_geometry(browser)
-    if not is_front or not geometry_within(geometry, (x, y, w, h)):
+    page, geometry = browser_window_state(browser)
+    is_front = browser_is_frontmost(browser)
+    if (not is_front or not geometry_within(geometry, (x, y, w, h))
+            or (url is not None and page.rstrip("/") != url.rstrip("/"))):
         raise recorder.CaptureError(
-            f"Browser is not frontmost or not on capture display: actual={geometry}, expected={(x, y, w, h)}"
+            "Browser document window failed verification: "
+            f"frontmost={is_front}, page={page!r}, "
+            f"actual={geometry}, expected={(x, y, w, h)}"
         )
 
 
@@ -341,9 +386,9 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                 if time.monotonic() >= deadline:
                     raise recorder.CaptureError("Local monitor did not start with expected state")
                 time.sleep(.25)
-            subprocess.run(["open", "-a", args.browser, f"http://127.0.0.1:{port}"], check=True)
-            time.sleep(1)
-            position_and_verify_browser(args.browser, bounds)
+            capture_url = f"http://127.0.0.1:{port}"
+            open_dedicated_browser_window(args.browser, capture_url)
+            position_and_verify_browser(args.browser, bounds, capture_url)
             print(f"Verified browser geometry on display {args.display_index}: {bounds}")
             print(f"SCENE {number}: {title}. Recording after {args.delay}s countdown.")
             time.sleep(args.delay)
@@ -367,7 +412,7 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                             show_actual_terminal_log(evidence_dir / "replay-process.log", bounds)
                             events_done.append({"second": event.second, "action": "show genuine terminal replay output"})
                         elif event.kind == "focus":
-                            position_and_verify_browser(args.browser, bounds)
+                            position_and_verify_browser(args.browser, bounds, capture_url)
                             events_done.append({"second": event.second, "action": "verified browser focus and placement"})
                         else:
                             mouse_and_scroll(lib, event.kind, event.value)
