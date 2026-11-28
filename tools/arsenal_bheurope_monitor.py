@@ -66,6 +66,10 @@ h3{font-size:14px}
 .brand{font-size:22px}
 .sub{font-size:12px}
 .mode{font-size:12px}
+ .replay-evidence{margin:0 0 19px;padding:21px 25px;border:1px solid #375569;border-radius:10px;background:#102235}
+.replay-evidence h2{margin-bottom:6px}
+.replay-evidence p{margin:0 0 12px;color:#b9c8d8;font-size:15px}
+.replay-evidence pre{font-size:16px;max-height:170px;line-height:1.6;margin:0;color:#b9f1e7}
 .audit-stage{padding:26px;margin-bottom:20px;border:1px solid #446173;background:linear-gradient(145deg,#172638 0%,#111d2a 100%);border-radius:12px}
 .audit-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}
 .audit-heading h2{font-size:27px;margin:0 0 7px}
@@ -106,6 +110,11 @@ summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;o
 <div class="kpi"><div class="label">Retained audit chain</div><div class="number" id="chain">NOT VERIFIED</div></div>
 <div class="kpi"><div class="label">Decision trace</div><div class="number" id="trace">—</div></div>
 </div>
+<section class="replay-evidence" aria-labelledby="replay-execution-title">
+<h2 id="replay-execution-title">Replay Execution · Actual Process Output</h2>
+<p>This section displays the unmodified stdout/stderr from the local synthetic replay command, when available.</p>
+<pre id="replay-output">Replay has not been executed in this capture.</pre>
+</section>
 <section class="audit-stage" aria-labelledby="audit-title">
 <div class="audit-heading"><div><h2 id="audit-title">Audit Evidence</h2><p>Compare the original retained chain with an independently modified copy.</p></div><span class="audit-caption">Read-only · Recorded verification</span></div>
 <div class="audit-comparison">
@@ -194,6 +203,7 @@ function render(data){
  const trail=$('timeline');trail.replaceChildren();
  if(!audit.length){const li=document.createElement('li');li.textContent='No audit entries available';trail.append(li);}
  else audit.forEach((item,i)=>{const li=document.createElement('li');li.textContent=String(i+1)+'. '+pretty(item.kind||'record')+(item.trace_id?' · '+item.trace_id:'');trail.append(li);});
+ show('replay-output',data.replay_process_output||'No replay process output recorded in this capture.');
  show('rawExplanation',JSON.stringify(e,null,2));show('rawAudit',JSON.stringify(audit,null,2));show('resources',JSON.stringify(data.resources||{},null,2));
  show('updated',(data.updated_at||'')+' | '+(available?'Replay evidence loaded':'Awaiting valid evidence'));
 }
@@ -217,6 +227,16 @@ def _tail_jsonl(path: Path, limit: int = 8):
         return [json.loads(x) for x in lines[-limit:] if x.strip()]
     except (OSError, ValueError, json.JSONDecodeError):
         return []
+
+def _read_replay_process_output(path: Path) -> str:
+    """Read only a bounded local replay process log. No fabricated output."""
+    try:
+        if not path.is_file() or path.stat().st_size > 200_000:
+            return ""
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+
 
 def status(directory: Path) -> dict:
     gate = _read_json(directory / "gate.json")
@@ -245,6 +265,7 @@ def status(directory: Path) -> dict:
                 "modified_copy": {"ok": False, "error": modified["error"]},
             }
     return {"resources": resources or {}, "audit_comparison": audit_comparison,
+            "replay_process_output": _read_replay_process_output(directory / "replay-process.log"),
             "available": isinstance(gate, dict),
             "gate": gate or {},
             "explanation": explanations[-1] if explanations else {},
