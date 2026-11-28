@@ -46,7 +46,8 @@ def test_no_network_enforcement_or_silent_result_replacement():
     assert "maybe_enforce(" not in source
     assert "AZAZEL_DEFENSE_ENFORCE=1" not in source
     assert "socket.send" not in source
-    assert "ffmpeg_command(args.device, duration, video)" in source
+    assert "ffmpeg_command(capture_device, duration, video)" in source
+    assert "verified_screen_device(" in source
     assert "scene_dir / \"fresh-replay\"" in source
 
 
@@ -143,3 +144,14 @@ def test_only_local_console_can_be_opened():
         director.open_dedicated_browser_window(
             "Brave Browser", "https://example.com"
         )
+
+
+def test_auto_recorder_uses_current_avfoundation_screen(monkeypatch):
+    monkeypatch.setattr(director.recorder, "avfoundation_video_devices",
+                        lambda: {0: "MacBook Pro camera",
+                                 1: "Capture screen 0",
+                                 2: "Capture screen 1"})
+    assert director.recorder.verified_screen_device("auto", 0) == "1"
+    assert director.recorder.verified_screen_device("auto", 1) == "2"
+    with pytest.raises(director.recorder.CaptureError, match="not 'Capture screen 0'"):
+        director.recorder.verified_screen_device("0", 0)
