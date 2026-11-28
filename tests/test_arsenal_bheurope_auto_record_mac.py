@@ -31,6 +31,8 @@ def test_scene_timelines_fit_recording_window():
 def test_scene_one_is_real_replay_not_fake_ui():
     first = director.scene_plan(1)
     assert first[0].kind == "replay"
+    assert all(e.kind != "terminal" for e in first)
+    assert any(e.kind == "scroll" for e in first)
     source = (ROOT / "tools/arsenal_bheurope_auto_record_mac.py").read_text()
     assert "tools/arsenal_bheurope_2026.py" in source
     assert "P0AuditLogger.verify_chain" in source
@@ -74,7 +76,9 @@ def test_real_replay_function_requires_validated_report(tmp_path, monkeypatch):
 def test_scene_one_displays_real_replay_output_before_returning_to_console():
     timeline = director.scene_plan(1)
     kinds = [event.kind for event in timeline]
-    assert kinds.index("replay") < kinds.index("terminal") < kinds.index("focus")
+    assert kinds[0] == "replay"
+    assert "scroll" in kinds
+    assert "terminal" not in kinds
     import inspect
     source = inspect.getsource(director.show_actual_terminal_log)
     assert 'replay log' in source
@@ -82,7 +86,8 @@ def test_scene_one_displays_real_replay_output_before_returning_to_console():
 
 def test_preview_timeline_includes_real_replay_and_ui_control():
     events = director.scene_plan(1, preview=True)
-    assert [e.kind for e in events][:3] == ["replay", "terminal", "focus"]
+    assert [e.kind for e in events][:2] == ["replay", "scroll"]
+    assert all(e.kind != "terminal" for e in events)
     assert events[-1].second < 45
     assert any(e.kind == "scroll" for e in events)
     with pytest.raises(ValueError):
