@@ -100,3 +100,28 @@ Re-run the 45-second preview using the currently listed capture-screen index (th
 ```
 
 Do not proceed to all four scenes until the video itself confirms readable content and an honest before/after transition. The original UI screenshots and evidence remain unchanged.
+
+## Window capture alignment — revised after Scene 1 visual review
+
+The initial automated preview produced a valid MP4 but recorded the browser in only part of the screen and did not show Terminal. The director now:
+- Finds the logical bounds of an active Quartz display (`--display-index 0` means the first active display).
+- Resizes and moves the **front browser window** to cover that display (maximized standard window, not a native macOS fullscreen Space).
+- Reads back actual window geometry and browser frontmost state using System Events; **fails** rather than silently accepting a small or offscreen window.
+- For Scene 1, switches to Terminal to show the genuine replay-process log, brings Terminal onto the target display, confirms Terminal is frontmost, then restores and verifies the browser window.
+- Runs the pointer/scroll events only after the window has been verified.
+
+Important: `--device` is the **FFmpeg AVFoundation video device number** (which changes when other cameras are present); `--display-index` selects an active **Quartz display** for positioning. They are different numbering systems. At present, the operator should use `--device 2 --display-index 0` only if the device list still reports `[2] Capture screen 0`. Recheck the devices if the Mac display configuration changes.
+
+The display/viewport check validates geometry and app focus, but a real video inspection is still required to confirm AVFoundation captured the intended monitor. There is deliberately no fabricated screenshot validation.
+
+### Verify with a new 45-second preview
+
+```bash
+git pull --ff-only origin arsenal/bheurope-2026
+.venv/bin/python -m pytest -q tests/test_arsenal_bheurope_auto_record_mac.py
+.venv/bin/python tools/arsenal_bheurope_record_mac.py list-devices
+.venv/bin/python tools/arsenal_bheurope_auto_record_mac.py \
+  --scene 1 --device 2 --display-index 0 --preview --delay 8
+```
+
+Do not launch `--scene all` until the preview shows a large browser and the genuine Terminal-to-browser transition. If the new geometry check fails, share the exact error rather than bypassing it.
