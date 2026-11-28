@@ -31,7 +31,7 @@ def test_scene_timelines_fit_recording_window():
 def test_scene_one_is_real_replay_not_fake_ui():
     first = director.scene_plan(1)
     assert first[0].kind == "replay"
-    assert all(e.kind != "terminal" for e in first)
+    assert any(e.kind == "terminal" for e in first)
     assert any(e.kind == "scroll" for e in first)
     source = (ROOT / "tools/arsenal_bheurope_auto_record_mac.py").read_text()
     assert "tools/arsenal_bheurope_2026.py" in source
@@ -78,15 +78,29 @@ def test_scene_one_preserves_single_screen_review():
     kinds = [event.kind for event in timeline]
     assert kinds[0] == "replay"
     assert "scroll" in kinds
-    assert "terminal" not in kinds
-    assert "focus" not in kinds
-    assert all(event.kind in {"replay", "scroll", "pointer"} for event in timeline)
+    assert kinds.index("replay") < kinds.index("terminal") < kinds.index("focus")
+    assert all(event.kind in {"replay", "terminal", "focus", "scroll", "pointer"} for event in timeline)
 
 def test_preview_timeline_includes_real_replay_and_ui_control():
     events = director.scene_plan(1, preview=True)
-    assert [e.kind for e in events][:2] == ["replay", "scroll"]
-    assert all(e.kind != "terminal" for e in events)
+    assert [e.kind for e in events][:3] == ["replay", "terminal", "focus"]
     assert events[-1].second < 45
     assert any(e.kind == "scroll" for e in events)
     with pytest.raises(ValueError):
         director.scene_plan(2, preview=True)
+
+def test_capture_window_target_is_maximized_but_not_native_fullscreen():
+    assert director.expected_window((0, 0, 1440, 900)) == (2, 30, 1436, 867)
+    assert director.expected_window((1440, 0, 1200, 800)) == (1442, 2, 1196, 795)
+    assert director.geometry_within((3, 31, 1430, 865), (2, 30, 1436, 867))
+    assert not director.geometry_within((120, 120, 800, 500), (2, 30, 1436, 867))
+
+
+def test_browser_and_terminal_focus_are_fatal_if_unverified(monkeypatch):
+    monkeypatch.setattr(director, "focus_browser", lambda name: None)
+    monkeypatch.setattr(director, "apple_script", lambda script: "")
+    monkeypatch.setattr(director.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(director, "window_geometry",
+                        lambda browser: (False, (2, 30, 1436, 867)))
+    with pytest.raises(director.recorder.CaptureError, match="not frontmost"):
+        director.position_and_verify_browser("Brave Browser", (0, 0, 1440, 900))
