@@ -106,6 +106,9 @@ def test_browser_window_geometry_uses_document_bounds_not_accessibility_popup(mo
     assert url == "http://127.0.0.1:8776/"
     assert bounds == (2, 30, 1916, 1047)
     assert "bounds of front window" in calls[0]
+    assert "set csvBounds to" in calls[0]
+    assert '((item 1 of bb) as text) & "," &' in calls[0]
+    assert '((item 4 of bb) as text)' in calls[0]
     assert "System Events" not in calls[0]
 
 
