@@ -110,7 +110,7 @@ summary{cursor:pointer;font-weight:700;font-size:13px}pre{white-space:pre-wrap;o
 <div class="kpi"><div class="label">Retained audit chain</div><div class="number" id="chain">NOT VERIFIED</div></div>
 <div class="kpi"><div class="label">Decision trace</div><div class="number" id="trace">—</div></div>
 </div>
-<section class="replay-evidence" aria-labelledby="replay-execution-title">
+<section class="replay-evidence" id="replay-section" style="display:none" aria-labelledby="replay-execution-title">
 <h2 id="replay-execution-title">Replay Execution · Actual Process Output</h2>
 <p>This section displays the unmodified stdout/stderr from the local synthetic replay command, when available.</p>
 <pre id="replay-output">Replay has not been executed in this capture.</pre>
@@ -203,6 +203,7 @@ function render(data){
  const trail=$('timeline');trail.replaceChildren();
  if(!audit.length){const li=document.createElement('li');li.textContent='No audit entries available';trail.append(li);}
  else audit.forEach((item,i)=>{const li=document.createElement('li');li.textContent=String(i+1)+'. '+pretty(item.kind||'record')+(item.trace_id?' · '+item.trace_id:'');trail.append(li);});
+ $('replay-section').style.display=data.replay_process_output?'block':'none';
  show('replay-output',data.replay_process_output||'No replay process output recorded in this capture.');
  show('rawExplanation',JSON.stringify(e,null,2));show('rawAudit',JSON.stringify(audit,null,2));show('resources',JSON.stringify(data.resources||{},null,2));
  show('updated',(data.updated_at||'')+' | '+(available?'Replay evidence loaded':'Awaiting valid evidence'));
