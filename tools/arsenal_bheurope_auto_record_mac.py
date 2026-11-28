@@ -167,7 +167,10 @@ def browser_window_state(browser: str) -> tuple[str, tuple[int, int, int, int]]:
         f'tell application "{browser}"\n'
         '  set bb to bounds of front window\n'
         f'  set uu to {tab_expr}\n'
-        '  return (bb as text) & "|" & uu\n'
+        '  set csvBounds to ((item 1 of bb) as text) & "," & '
+        '((item 2 of bb) as text) & "," & ((item 3 of bb) as text) & "," & '
+        '((item 4 of bb) as text)\n'
+        '  return csvBounds & "|" & uu\n'
         'end tell'
     )
     output = apple_script(script)
