@@ -113,3 +113,14 @@ def test_audit_result_size_class_is_preserved_during_refresh():
     assert "className='result-main '+(copy.ok" in html
     assert "font-size:clamp(43px,4.5vw,68px)" in html
     assert "font-size:19px;color:#c5d5df" in html
+
+def test_genuine_replay_process_log_is_displayed_only_when_present(tmp_path):
+    assert monitor.status(tmp_path)["replay_process_output"] == ""
+    payload = '{"ok": true, "result": {"execution": {"mode": "deterministic_replay"}}}' + "\n"
+    (tmp_path / "replay-process.log").write_text(payload)
+    assert monitor.status(tmp_path)["replay_process_output"] == payload
+    assert 'id="replay-section"' in monitor.HTML
+    assert "Actual Process Output" in monitor.HTML
+    assert "data.replay_process_output?'block':'none'" in monitor.HTML
+    (tmp_path / "replay-process.log").write_bytes(b"x" * 200_001)
+    assert monitor.status(tmp_path)["replay_process_output"] == ""
