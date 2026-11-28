@@ -8,7 +8,7 @@ The automated director:
 3. Opens the local page in Brave, Chrome or Safari and attempts fullscreen.
 4. Starts FFmpeg screen capture with **no audio**.
 5. Drives the mouse cursor, scroll position, and window focus via macOS Quartz/AppleScript.
-6. In Scene 1 only, invokes the **real** offline synthetic replay in a separate empty evidence folder. It briefly displays the actual replay output in Terminal, then returns to the console. The dashboard changes from **NOT RUN** to real gate/decision evidence; it is not a fake transition.
+6. In Scene 1 only, invokes the **real** offline synthetic replay in a separate empty evidence folder. It displays the genuine replay stdout/stderr directly in the read-only console, avoiding unreliable inter-display Terminal switching. The dashboard changes from **NOT RUN** to real gate/decision evidence; it is not a fake transition.
 7. Creates an MP4 and a capture manifest containing the scene timeline, source trace ID, video dimensions, SHA-256 and actual logged operations.
 
 ## Before starting
@@ -41,7 +41,7 @@ If pytest is unavailable, install it in `.venv` with `.venv/bin/python -m pip in
   --scene 1 --device 3 --preview --delay 8
 ```
 
-The recorder starts an empty read-only Incident Console, triggers the genuine synthetic replay after ~4 seconds, opens Terminal to show the real replay process output at ~12 seconds, returns to the browser at ~20 seconds, and moves/scrolls automatically. No talking or mouse clicking is needed after starting the command. This should be reviewed before running all four full scenes.
+The recorder starts an empty read-only Incident Console, triggers the genuine synthetic replay after ~4 seconds, reveals the genuine replay process output within the console at ~13 seconds, then scrolls to the audit comparison and back. It does not switch to Terminal. No talking or mouse clicking is needed after starting the command. This should be reviewed before running all four full scenes.
 
 ## Automated 2-minute Scene 1
 
@@ -52,7 +52,7 @@ The recorder starts an empty read-only Incident Console, triggers the genuine sy
 
 On the Mac previously tested, screen capture device **3** was `Capture screen 0`. If the content is on another monitor, rerun `tools/arsenal_bheurope_record_mac.py list-devices` and select the correct screen. Do not assume that AVFoundation numbering is permanent.
 
-The script opens the browser and tries to enter fullscreen, records the empty incident console, invokes genuine replay at ~6 seconds, opens Terminal with actual stdout around ~17 seconds, returns to the console at ~30 seconds, then moves/scrolls to show decision and audit evidence. It stores the new replay evidence separately from the November 26 source capture. The actual replay may complete quickly; no fake incident timer is shown.
+The script opens the browser and tries to enter fullscreen, records the empty incident console, invokes genuine replay at ~6 seconds, displays the actual replay stdout in the console and scrolls through decision and audit evidence. No Terminal switching. It stores the new replay evidence separately from the November 26 source capture. The actual replay may complete quickly; no fake incident timer is shown.
 
 ## Four scenes automatically (10 minutes raw)
 
@@ -63,7 +63,7 @@ The script opens the browser and tries to enter fullscreen, records the empty in
 
 | Scene | Duration | Automated staging |
 |---|---:|---|
-| 1 | 120 s | Empty console → genuine replay → Terminal output → console |
+| 1 | 120 s | Empty console → genuine replay → on-page authentic process output |
 | 2 | 180 s | Decision detail, alternatives and release condition via slow scrolling |
 | 3 | 180 s | Original VERIFIED vs modified COPY MISMATCH, audit details |
 | 4 | 120 s | Trace, policy, explanation and audit review |
@@ -87,3 +87,16 @@ Videos are saved under `artifacts/bheurope-2026/auto-recordings/<UTC timestamp>/
 ## Where to share
 
 Upload `01-incident-decision/incident-decision.mp4` from the scene output for visual quality review. The final submission must still be assembled with the official slide deck and English narration and stay within the 10–20-minute organiser requirement.
+
+## Scene 1 single-screen capture correction (2026-11-28)
+
+The first automated preview showed the correct screen and a genuine **NOT RUN → PASS** transition, but the Terminal handoff was not visible on the captured display. Therefore Scene 1 no longer switches applications. The monitor now reads the actual `replay-process.log` (maximum 200 KB, local-only) and displays it as a labelled **Replay Execution · Actual Process Output** section only if that file exists. The automated camera scrolls through this section, the audit comparison and the decision explanation on the same browser display.
+
+Re-run the 45-second preview using the currently listed capture-screen index (the most recent list mapped `Capture screen 0` to `--device 2`; recheck device numbering if it changes):
+
+```bash
+.venv/bin/python -m pytest -q tests/test_bheurope_2026_monitor.py tests/test_arsenal_bheurope_auto_record_mac.py
+.venv/bin/python tools/arsenal_bheurope_auto_record_mac.py --scene 1 --device 2 --preview --delay 8
+```
+
+Do not proceed to all four scenes until the video itself confirms readable content and an honest before/after transition. The original UI screenshots and evidence remain unchanged.
