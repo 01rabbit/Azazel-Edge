@@ -142,3 +142,25 @@ git pull --ff-only origin arsenal/bheurope-2026
 ```
 
 If macOS requests permission for iTerm/Terminal to control Brave, allow it. If you get an AppleScript error or a window-verification error, **copy the exact message** instead of overriding the check. Current video-device numbers must still be confirmed with `list-devices` before use. Actual footage requires visual review even after the geometry check passes.
+
+## Device index safety after Scene 4 camera capture (2026-11-28)
+
+Scene 4's prior MP4 recorded a camera even though the command specified the index that had previously selected `Capture screen 0`. FFmpeg AVFoundation indexes can change when cameras appear/disappear. The director now calls `verified_screen_device()` immediately before starting FFmpeg and refuses any device that is not currently named `Capture screen <display-index>`.
+
+**Recommended command (no numeric video device index):**
+
+```bash
+git pull --ff-only origin arsenal/bheurope-2026
+.venv/bin/python -m pytest -q \
+  tests/test_arsenal_bheurope_record_mac.py \
+  tests/test_arsenal_bheurope_auto_record_mac.py
+
+.venv/bin/python tools/arsenal_bheurope_auto_record_mac.py \
+  --scene 4 --device auto --display-index 0 --delay 8
+```
+
+The command may also omit `--device`, because `auto` is now the default. An explicit number is still supported, but is rejected if it currently points to a camera or a different screen.
+
+`list-devices` prints an FFmpeg `Input/output error` after displaying the device list because it attempts to open an intentionally empty input. That message is not evidence that the selected screen is invalid. A `CAPTURE PASS` confirms encoding succeeded, **not** that the intended screen is visible; inspect the MP4 before including it in the edit.
+
+**Status:** code and tests committed to the dedicated branch. Mac execution of the updated device gate must still be confirmed by the operator.
