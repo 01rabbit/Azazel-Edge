@@ -125,3 +125,20 @@ git pull --ff-only origin arsenal/bheurope-2026
 ```
 
 Do not launch `--scene all` until the preview shows a large browser and the genuine Terminal-to-browser transition. If the new geometry check fails, share the exact error rather than bypassing it.
+
+## Browser pop-up mistaken for the recording window — fix after 282×47 failure
+
+A Mac preflight reported `actual=(2,30,282,47)`, while the intended capture viewport was `(2,30,1916,1047)`. This likely came from `System Events` selecting a transient browser UI window rather than the document window.
+
+The capture director now creates a **dedicated browser document window**, sets its localhost page URL and bounds through the browser's own AppleScript interface, then verifies its URL, size, position and process foreground. It refuses a tiny window or unrelated page. This replaces geometry reads via `front window` of `System Events`.
+
+To retest:
+
+```bash
+git pull --ff-only origin arsenal/bheurope-2026
+.venv/bin/python -m pytest -q tests/test_arsenal_bheurope_auto_record_mac.py
+.venv/bin/python tools/arsenal_bheurope_auto_record_mac.py \
+  --scene 1 --device 2 --display-index 0 --preview --delay 8
+```
+
+If macOS requests permission for iTerm/Terminal to control Brave, allow it. If you get an AppleScript error or a window-verification error, **copy the exact message** instead of overriding the check. Current video-device numbers must still be confirmed with `list-devices` before use. Actual footage requires visual review even after the geometry check passes.
