@@ -88,12 +88,12 @@ def test_avfoundation_parses_screen_devices_even_when_list_exits_nonzero(monkeyp
         returncode = 1
         stdout = ""
         stderr = (
-            "[AVFoundation indev @ 0x123] AVFoundation video devices:\\n"
-            "[AVFoundation indev @ 0x123] [0] MacBook Pro camera [uid:a]\\n"
-            "[AVFoundation indev @ 0x123] [1] Capture screen 0\\n"
-            "[AVFoundation indev @ 0x123] [2] Capture screen 1\\n"
-            "[AVFoundation indev @ 0x123] AVFoundation audio devices:\\n"
-            "Error opening input file .\\n"
+            "[AVFoundation indev @ 0x123] AVFoundation video devices:\n"
+            "[AVFoundation indev @ 0x123] [0] MacBook Pro camera [uid:a]\n"
+            "[AVFoundation indev @ 0x123] [1] Capture screen 0\n"
+            "[AVFoundation indev @ 0x123] [2] Capture screen 1\n"
+            "[AVFoundation indev @ 0x123] AVFoundation audio devices:\n"
+            "Error opening input file .\n"
         )
     monkeypatch.setattr(recorder.subprocess, "run", lambda *a, **kw: FakeResult())
     devices = recorder.avfoundation_video_devices()
@@ -108,7 +108,7 @@ def test_avfoundation_rejects_listing_without_screen(monkeypatch):
     class FakeResult:
         returncode = 1
         stdout = ""
-        stderr = "AVFoundation video devices:\\n[0] Camera\\nAVFoundation audio devices:\\n"
+        stderr = "AVFoundation video devices:\n[0] Camera\nAVFoundation audio devices:\n"
     monkeypatch.setattr(recorder.subprocess, "run", lambda *a, **kw: FakeResult())
     with pytest.raises(recorder.CaptureError, match="No unique"):
         recorder.verified_screen_device("auto", 0)
