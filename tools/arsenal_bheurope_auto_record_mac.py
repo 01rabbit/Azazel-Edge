@@ -395,7 +395,13 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
             print(f"Verified browser geometry on display {args.display_index}: {bounds}")
             print(f"SCENE {number}: {title}. Recording after {args.delay}s countdown.")
             time.sleep(args.delay)
-            cmd = recorder.ffmpeg_command(args.device, duration, video)
+            # Late binding: AVFoundation indices may change whenever cameras
+            # are connected. Reject a camera BEFORE launching screen recording.
+            capture_device = recorder.verified_screen_device(
+                args.device, args.display_index
+            )
+            print(f"Verified recording input: AVFoundation [{capture_device}] Capture screen {args.display_index}")
+            cmd = recorder.ffmpeg_command(capture_device, duration, video)
             events_done = []
             with (scene_dir / "ffmpeg.log").open("w") as log:
                 proc = subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL,
@@ -441,7 +447,7 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                         "branch": recorder.BRANCH,
                         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"],
                                                           cwd=ROOT, text=True).strip(),
-                        "screen_device": args.device,
+                        "screen_device": capture_device,
                         "actual_evidence": verified, "event_log": events_done,
                         "file": str(video), "sha256": recorder.sha256(video),
                         "video": properties,
@@ -461,7 +467,8 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", default="1", choices=["1", "2", "3", "4", "all"])
-    ap.add_argument("--device", required=True, help="Current FFmpeg AVFoundation screen index")
+    ap.add_argument("--device", default="auto",
+                    help="Auto-detect current Capture screen index (recommended), or verify a number")
     ap.add_argument("--display-index", type=int, default=0,
                     help="Quartz active display list index (default 0, usually main display)")
     ap.add_argument("--browser", default="Brave Browser", choices=sorted(BROWSERS))
@@ -483,7 +490,7 @@ def main() -> int:
         args.scenes = list(SCENES) if args.scene == "all" else [int(args.scene)]
         if args.preview and args.scenes != [1]:
             raise recorder.CaptureError("--preview supports only --scene 1")
-        if not args.device.isdigit() or args.delay < 0 or args.delay > 60 or not 0 <= args.display_index <= 15:
+        if not (args.device == "auto" or args.device.isdigit()) or args.delay < 0 or args.delay > 60 or not 0 <= args.display_index <= 15:
             raise recorder.CaptureError("Invalid screen index or countdown delay")
         for n in args.scenes:
             duration = 45 if args.preview else args.duration if args.duration and len(args.scenes)==1 else SCENES[n][1]
