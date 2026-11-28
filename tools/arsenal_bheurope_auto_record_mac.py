@@ -48,12 +48,13 @@ def scene_plan(number: int, preview: bool = False) -> tuple[Event, ...]:
     if preview:
         if number != 1:
             raise ValueError("Preview supports only Scene 1")
-        return (Event(4, "replay"), Event(13, "scroll", 260),
-                Event(23, "scroll", 380), Event(32, "scroll", -640),
+        return (Event(4, "replay"), Event(12, "terminal"),
+                Event(22, "focus"), Event(29, "scroll", 430),
                 Event(38, "pointer", 68))
     if number == 1:
-        return (Event(6, "replay"), Event(17, "scroll", 260), Event(37, "scroll", 370),
-                Event(68, "scroll", 520), Event(92, "scroll", -1150))
+        return (Event(6, "replay"), Event(18, "terminal"), Event(31, "focus"),
+                Event(43, "scroll", 350), Event(68, "scroll", 520),
+                Event(92, "scroll", -1150))
     if number == 2:
         return (Event(8, "scroll", 1000), Event(30, "pointer", 62),
                 Event(53, "scroll", 420), Event(83, "scroll", -440),
@@ -124,44 +125,135 @@ def mouse_and_scroll(lib, kind: str, value: int = 0) -> None:
             time.sleep(0.075)
 
 
-def focus_browser(browser: str) -> None:
-    if browser not in BROWSERS:
-        raise recorder.CaptureError("Unsupported browser: " + browser)
-    script = f'tell application "{browser}" to activate'
-    subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True)
+def display_bounds(lib, display_index: int) -> tuple[int, int, int, int]:
+    """Quartz display bounds in logical screen coordinates, not Retina pixels."""
+    if not 0 <= display_index <= 15:
+        raise recorder.CaptureError("Invalid display index")
+    count = ctypes.c_uint32()
+    displays = (ctypes.c_uint32 * 16)()
+    lib.CGGetActiveDisplayList.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32)
+    ]
+    lib.CGGetActiveDisplayList.restype = ctypes.c_int
+    status = lib.CGGetActiveDisplayList(16, displays, ctypes.byref(count))
+    if status != 0 or display_index >= count.value:
+        raise recorder.CaptureError("Requested display index is not active")
+    lib.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    lib.CGDisplayBounds.restype = CGRect
+    r = lib.CGDisplayBounds(displays[display_index])
+    return (round(r.origin.x), round(r.origin.y),
+            round(r.size.width), round(r.size.height))
 
 
-def prepare_fullscreen_browser(browser: str) -> None:
-    """Try to enter fullscreen only when the browser window is not already fullscreen."""
+def apple_script(script: str) -> str:
+    result = subprocess.run(["osascript", "-e", script], check=True,
+                            capture_output=True, text=True, timeout=12)
+    return result.stdout.strip()
+
+
+def window_geometry(browser: str) -> tuple[bool, tuple[int, int, int, int]]:
     if browser not in BROWSERS:
         raise recorder.CaptureError("Unsupported browser")
     script = (
         'tell application "System Events"\n'
-        '  tell process "' + browser + '"\n'
-        '    if (value of attribute "AXFullScreen" of front window) is false then\n'
-        '      keystroke "f" using {control down, command down}\n'
-        '    end if\n'
+        f'  tell process "{browser}"\n'
+        '    set isFront to frontmost\n'
+        '    set winPos to position of front window\n'
+        '    set winSize to size of front window\n'
+        '    return (isFront as text) & "|" & (item 1 of winPos) & "," & '
+        '(item 2 of winPos) & "," & (item 1 of winSize) & "," & (item 2 of winSize)\n'
         '  end tell\n'
         'end tell'
     )
+    output = apple_script(script)
     try:
-        subprocess.run(["osascript", "-e", script], check=True,
-                       capture_output=True, text=True, timeout=8)
-        time.sleep(1.7)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        print("WARNING: could not enter fullscreen automatically; browser is still usable")
+        state, geometry = output.split("|", 1)
+        pos = tuple(int(round(float(v.strip()))) for v in geometry.split(","))
+        if len(pos) != 4:
+            raise ValueError("wrong window dimensions")
+        return state.lower() == "true", pos
+    except (ValueError, TypeError) as exc:
+        raise recorder.CaptureError(f"Unable to inspect browser window: {output!r}") from exc
 
 
-def show_actual_terminal_log(logpath: Path) -> None:
-    """Display only stdout/stderr actually captured from the replay subprocess."""
+def expected_window(bounds: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    x, y, w, h = bounds
+    if w < 680 or h < 420:
+        raise recorder.CaptureError("Target display too small for an Arsenal capture")
+    # Use a maximized standard window rather than macOS fullscreen Spaces.
+    # The menu bar occupies roughly 28 points on the primary display.
+    inset_top = 28 if x == 0 and y == 0 else 0
+    return (x + 2, y + inset_top + 2, w - 4, h - inset_top - 5)
+
+
+def geometry_within(actual: tuple[int, int, int, int],
+                    expected: tuple[int, int, int, int], tolerance: int = 42) -> bool:
+    ax, ay, aw, ah = actual
+    ex, ey, ew, eh = expected
+    return (abs(ax - ex) <= tolerance and abs(ay - ey) <= tolerance
+            and abs(aw - ew) <= tolerance and abs(ah - eh) <= tolerance)
+
+
+def focus_browser(browser: str) -> None:
+    if browser not in BROWSERS:
+        raise recorder.CaptureError("Unsupported browser: " + browser)
+    apple_script(f'tell application "{browser}" to activate')
+
+
+def position_and_verify_browser(browser: str, bounds: tuple[int, int, int, int]) -> None:
+    """Move the front browser window to the capture display and fail closed."""
+    focus_browser(browser)
+    x, y, w, h = expected_window(bounds)
+    script = (
+        'tell application "System Events"\n'
+        f'  tell process "{browser}"\n'
+        '    set frontmost to true\n'
+        f'    set position of front window to {{{x}, {y}}}\n'
+        f'    set size of front window to {{{w}, {h}}}\n'
+        '  end tell\n'
+        'end tell'
+    )
+    apple_script(script)
+    time.sleep(0.7)
+    is_front, geometry = window_geometry(browser)
+    if not is_front or not geometry_within(geometry, (x, y, w, h)):
+        raise recorder.CaptureError(
+            f"Browser is not frontmost or not on capture display: actual={geometry}, expected={(x, y, w, h)}"
+        )
+
+
+def show_actual_terminal_log(logpath: Path,
+                             bounds: tuple[int, int, int, int]) -> None:
+    """Open real replay log in Terminal and confirm the Terminal window is frontmost."""
     if not logpath.is_file():
         raise recorder.CaptureError("No genuine replay log to show in Terminal")
-    command = "cat " + shlex.quote(str(logpath))
-    # One actual command in a new Terminal session, not a synthetic status graphic.
+    # Read actual file contents; no fabricated decision summary is inserted.
+    command = "clear; cat " + shlex.quote(str(logpath))
     applescript_command = command.replace("\\", "\\\\").replace('"', '\\"')
     script = 'tell application "Terminal" to do script "' + applescript_command + '"'
-    subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True)
-
+    apple_script(script)
+    apple_script('tell application "Terminal" to activate')
+    # Keep Terminal on the same logical display as the capture.
+    x, y, w, h = expected_window(bounds)
+    t_x, t_y = x + round(w * .06), y + round(h * .10)
+    t_w, t_h = round(w * .88), round(h * .78)
+    script = (
+        'tell application "System Events"\n'
+        '  tell process "Terminal"\n'
+        '    set frontmost to true\n'
+        f'    set position of front window to {{{t_x}, {t_y}}}\n'
+        f'    set size of front window to {{{t_w}, {t_h}}}\n'
+        '  end tell\n'
+        'end tell'
+    )
+    apple_script(script)
+    time.sleep(.5)
+    check = apple_script(
+        'tell application "System Events" to return frontmost of process "Terminal"'
+    )
+    if check.lower() != "true":
+        raise recorder.CaptureError("Terminal did not become the frontmost application")
 
 def generate_real_replay(folder: Path, python: Path) -> dict:
     """Run genuine replay and independently validate its saved chain and altered COPY."""
@@ -219,6 +311,7 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
     evidence_dir = scene_dir / "fresh-replay" if number == 1 else args.evidence.resolve()
     # Scene 1 MUST start empty; no pre-generated decision displayed before replay.
     port = args.port
+    bounds = display_bounds(lib, args.display_index)
     python = ROOT / ".venv/bin/python"
     if not python.exists():
         raise recorder.CaptureError("Missing .venv/bin/python")
@@ -250,9 +343,8 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                 time.sleep(.25)
             subprocess.run(["open", "-a", args.browser, f"http://127.0.0.1:{port}"], check=True)
             time.sleep(1)
-            focus_browser(args.browser)
-            if not args.no_fullscreen:
-                prepare_fullscreen_browser(args.browser)
+            position_and_verify_browser(args.browser, bounds)
+            print(f"Verified browser geometry on display {args.display_index}: {bounds}")
             print(f"SCENE {number}: {title}. Recording after {args.delay}s countdown.")
             time.sleep(args.delay)
             cmd = recorder.ffmpeg_command(args.device, duration, video)
@@ -272,11 +364,11 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
                             result = generate_real_replay(evidence_dir, python)
                             events_done.append({"second": event.second, "action": "real synthetic replay", "result": result})
                         elif event.kind == "terminal":
-                            show_actual_terminal_log(evidence_dir / "replay-process.log")
+                            show_actual_terminal_log(evidence_dir / "replay-process.log", bounds)
                             events_done.append({"second": event.second, "action": "show genuine terminal replay output"})
                         elif event.kind == "focus":
-                            focus_browser(args.browser)
-                            events_done.append({"second": event.second, "action": "focus browser"})
+                            position_and_verify_browser(args.browser, bounds)
+                            events_done.append({"second": event.second, "action": "verified browser focus and placement"})
                         else:
                             mouse_and_scroll(lib, event.kind, event.value)
                             events_done.append({"second": event.second, "action": event.kind, "value": event.value})
@@ -321,7 +413,9 @@ def run_scene(number: int, args, lib, existing: dict, run_root: Path) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scene", default="1", choices=["1", "2", "3", "4", "all"])
-    ap.add_argument("--device", required=True, help="AVFoundation screen index, e.g. 3")
+    ap.add_argument("--device", required=True, help="Current FFmpeg AVFoundation screen index")
+    ap.add_argument("--display-index", type=int, default=0,
+                    help="Quartz active display list index (default 0, usually main display)")
     ap.add_argument("--browser", default="Brave Browser", choices=sorted(BROWSERS))
     ap.add_argument("--delay", type=int, default=8)
     ap.add_argument("--port", type=int, default=8776)
@@ -329,7 +423,7 @@ def main() -> int:
     ap.add_argument("--evidence", type=Path, default=recorder.DEFAULT_EVIDENCE)
     ap.add_argument("--dry-run", action="store_true", help="Validate plan without recording or UI actions")
     ap.add_argument("--preview", action="store_true", help="45-second scene 1 automatic capture test")
-    ap.add_argument("--no-fullscreen", action="store_true", help="Do not attempt fullscreen browser presentation")
+    # No native fullscreen Space: a verified maximized browser window is more reliable.
     args = ap.parse_args()
     try:
         if sys.platform != "darwin":
@@ -341,7 +435,7 @@ def main() -> int:
         args.scenes = list(SCENES) if args.scene == "all" else [int(args.scene)]
         if args.preview and args.scenes != [1]:
             raise recorder.CaptureError("--preview supports only --scene 1")
-        if not args.device.isdigit() or args.delay < 0 or args.delay > 60:
+        if not args.device.isdigit() or args.delay < 0 or args.delay > 60 or not 0 <= args.display_index <= 15:
             raise recorder.CaptureError("Invalid screen index or countdown delay")
         for n in args.scenes:
             duration = 45 if args.preview else args.duration if args.duration and len(args.scenes)==1 else SCENES[n][1]
