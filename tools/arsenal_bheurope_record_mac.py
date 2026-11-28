@@ -93,6 +93,61 @@ def require_program(name: str) -> None:
         raise CaptureError(f"{name} is missing. Install FFmpeg (e.g. brew install ffmpeg).")
 
 
+
+def avfoundation_video_devices() -> dict[int, str]:
+    """Enumerate CURRENT FFmpeg AVFoundation video devices.
+
+    ffmpeg -list_devices normally exits nonzero after listing because the
+    intentionally empty input cannot be opened. That exit is not fatal, but
+    a missing/incomplete video-device section is.
+    """
+    import re
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-f", "avfoundation",
+         "-list_devices", "true", "-i", ""],
+        capture_output=True, text=True, timeout=15
+    )
+    output = result.stdout + "\n" + result.stderr
+    match = re.search(
+        r"AVFoundation video devices:\s*(.*?)AVFoundation audio devices:",
+        output, re.DOTALL
+    )
+    if not match:
+        raise CaptureError("AVFoundation video-device listing unavailable")
+    devices: dict[int, str] = {}
+    for line in match.group(1).splitlines():
+        item = re.search(r"\[(\d+)\]\s+(.+?)(?:\s+\[uid:.*)?$", line)
+        if item:
+            devices[int(item.group(1))] = item.group(2).strip()
+    if not devices:
+        raise CaptureError("No AVFoundation video devices detected")
+    return devices
+
+
+def verified_screen_device(requested: str, display_index: int = 0) -> str:
+    """Select or verify the active screen; never permit a camera as input."""
+    import re
+    devices = avfoundation_video_devices()
+    expected_name = f"Capture screen {display_index}"
+    candidates = [n for n, name in devices.items() if name == expected_name]
+    if len(candidates) != 1:
+        raise CaptureError(
+            f"No unique {expected_name!r} in AVFoundation list: {devices}"
+        )
+    current = candidates[0]
+    if requested == "auto":
+        return str(current)
+    if not requested.isdigit():
+        raise CaptureError("Use --device auto or a numeric AVFoundation device index")
+    index = int(requested)
+    if index != current:
+        raise CaptureError(
+            f"AVFoundation index {index} points to {devices.get(index, 'no device')!r}, "
+            f"not {expected_name!r}; use --device auto or --device {current}"
+        )
+    return str(current)
+
+
 def ffmpeg_command(device: str, duration: int, path: Path) -> list[str]:
     """Record video only; English narration is added in post-production."""
     if not device.isdigit():
